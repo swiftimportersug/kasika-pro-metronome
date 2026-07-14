@@ -229,7 +229,7 @@ tailwind.config = {
             </select>
             <div class="flex items-center gap-2 ml-1">
                 <i class="fas fa-volume-low text-zinc-600 text-xs"></i>
-                <input type="range" id="volumeSlider" class="vol-slider w-20" min="0" max="100" value="70" aria-label="Volume">
+                <input type="range" id="volumeSlider" class="vol-slider w-20" min="0" max="100" value="80" aria-label="Volume">
                 <i class="fas fa-volume-high text-zinc-600 text-xs"></i>
             </div>
         </div>
@@ -288,8 +288,8 @@ tailwind.config = {
             </div>
 
             <div class="px-4 py-2 border-b border-brd/30 flex items-center justify-between" id="editBar">
-                <button id="editToggleBtn" class="flex items-center gap-2 text-xs font-medium tracking-wide transition-colors" aria-label="Toggle edit mode">
-                    <i class="fas fa-pen-to-square" id="editToggleIcon"></i>
+                <button id="editToggleBtn" class="flex items-center gap-2 text-sm font-semibold tracking-wide transition-all px-3.5 py-2 rounded-lg border" aria-label="Toggle edit mode">
+                    <i class="fas fa-pen-to-square text-sm" id="editToggleIcon"></i>
                     <span id="editToggleLabel">EDIT MODE</span>
                 </button>
                 <span id="editSongCount" class="text-[11px] text-zinc-600"></span>
@@ -444,7 +444,7 @@ tailwind.config = {
 <script>
 const state = {
     bpm: 120, timeSig: '4/4', subdivision: 'quarter',
-    isPlaying: false, visualClick: -1, volume: 0.7,
+    isPlaying: false, visualClick: -1, volume: 0.8,
     timerRunning: false, timerSeconds: 0, timerInterval: null,
     setlists: [], activeSetlistId: null, activeSongId: null,
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
@@ -514,9 +514,9 @@ function ensureAudio() {
 function playBeep(c, t, type, v) {
     const o = c.createOscillator(), g = c.createGain();
     o.connect(g); g.connect(c.destination);
-    if (type === 'accent') { o.frequency.value = 1200; g.gain.setValueAtTime(0.7 * v, t); }
-    else if (type === 'sub') { o.frequency.value = 680; g.gain.setValueAtTime(0.18 * v, t); }
-    else { o.frequency.value = 880; g.gain.setValueAtTime(0.42 * v, t); }
+    if (type === 'accent') { o.frequency.value = 1200; g.gain.setValueAtTime(0.95 * v, t); }
+    else if (type === 'sub') { o.frequency.value = 680; g.gain.setValueAtTime(0.3 * v, t); }
+    else { o.frequency.value = 880; g.gain.setValueAtTime(0.62 * v, t); }
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
     o.start(t); o.stop(t + 0.07);
     o.onended = () => { o.disconnect(); g.disconnect(); };
@@ -530,7 +530,7 @@ function playWoodblock(c, t, type, v) {
     o.frequency.setValueAtTime(baseFreq * 1.35, t);
     o.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, t + 0.02);
     o.connect(f); f.connect(g); g.connect(c.destination);
-    const peak = (type === 'accent' ? 0.9 : type === 'sub' ? 0.22 : 0.55) * v;
+    const peak = (type === 'accent' ? 1.0 : type === 'sub' ? 0.36 : 0.78) * v;
     g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
     o.start(t); o.stop(t + 0.05);
@@ -545,7 +545,7 @@ function playCowbell(c, t, type, v) {
     f.type = 'bandpass'; f.frequency.value = 2640; f.Q.value = 1.1;
     o1.connect(f); o2.connect(f); f.connect(g); g.connect(c.destination);
     const dur = type === 'sub' ? 0.09 : 0.2;
-    const peak = (type === 'accent' ? 0.55 : type === 'sub' ? 0.11 : 0.32) * v;
+    const peak = (type === 'accent' ? 0.78 : type === 'sub' ? 0.2 : 0.5) * v;
     g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o1.start(t); o2.start(t); o1.stop(t + dur + 0.02); o2.stop(t + dur + 0.02);
@@ -575,7 +575,7 @@ function speakBeat(n) {
     const u = new SpeechSynthesisUtterance(String(n));
     const v = pickFemaleVoice();
     if (v) u.voice = v;
-    u.rate = 1.15; u.pitch = 1.05; u.volume = Math.max(0.15, state.volume);
+    u.rate = 1.15; u.pitch = 1.05; u.volume = Math.max(0.4, state.volume);
     window.speechSynthesis.speak(u);
 }
 
@@ -584,7 +584,7 @@ function playClick(type, time, beatNum) {
     if (kit === 'voice') {
         if (type === 'sub') {
             const c = state.audioCtx, t = Math.max(time, c.currentTime);
-            playBeep(c, t, 'sub', state.volume * 0.45);
+            playBeep(c, t, 'sub', state.volume * 0.6);
         } else {
             const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
             setTimeout(() => speakBeat(beatNum), delay);
@@ -1020,6 +1020,9 @@ function renderSearchResults(query) {
                     <div class="text-[11px] text-zinc-600 truncate">from "${escHtml(setlistName)}" · ${song.bpm} BPM · ${song.timeSig}</div>
                 </div>
                 <div class="flex items-center gap-2">
+                    <button class="play-existing-btn w-8 h-8 flex-shrink-0 rounded-lg bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 transition-colors flex items-center justify-center" title="Play now">
+                        <i class="fas fa-play text-[11px] ml-0.5"></i>
+                    </button>
                     <select class="edit-select add-target-select flex-1" style="width:auto;">${opts}</select>
                     <button class="add-target-btn text-xs px-3 py-1.5 rounded-lg bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 transition-colors flex-shrink-0">
                         <i class="fas fa-plus mr-1"></i>Add
@@ -1148,10 +1151,12 @@ function updateEditBarUI() {
     const label = document.getElementById('editToggleLabel'), bar = document.getElementById('editBar');
     const addArea = document.getElementById('addSongArea');
     if (state.editMode) {
-        icon.className = 'fas fa-check'; label.textContent = 'DONE'; btn.style.color = '#D4A853';
+        icon.className = 'fas fa-check text-sm'; label.textContent = 'DONE';
+        btn.style.color = '#082825'; btn.style.background = '#2dd4bf'; btn.style.borderColor = '#2dd4bf';
         bar.classList.add('edit-mode-bar'); addArea.classList.remove('hidden'); addArea.classList.add('flex');
     } else {
-        icon.className = 'fas fa-pen-to-square'; label.textContent = 'EDIT MODE'; btn.style.color = '#71717a';
+        icon.className = 'fas fa-pen-to-square text-sm'; label.textContent = 'EDIT MODE';
+        btn.style.color = '#2dd4bf'; btn.style.background = 'rgba(45,212,191,0.08)'; btn.style.borderColor = 'rgba(45,212,191,0.35)';
         bar.classList.remove('edit-mode-bar'); addArea.classList.add('hidden'); addArea.classList.remove('flex');
     }
 }
@@ -1438,6 +1443,17 @@ function setupEvents() {
         if (gotoEl) {
             state.activeSetlistId = gotoEl.dataset.gotoSetlist; state.activeSongId = null;
             saveData(); renderSetlistSelect(); renderSongs(); hideModal('searchModal');
+            return;
+        }
+        const playBtn = e.target.closest('.play-existing-btn');
+        if (playBtn) {
+            const row = playBtn.closest('.search-song-row');
+            const songId = row.dataset.songId, sourceId = row.dataset.sourceSetlist;
+            const sourceSl = state.setlists.find(s => s.id === sourceId);
+            const song = sourceSl?.songs.find(s => s.id === songId);
+            if (!song) return;
+            hideModal('searchModal');
+            loadAndPlaySong(song);
             return;
         }
         const btn = e.target.closest('.add-target-btn');
