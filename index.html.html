@@ -1,0 +1,1495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kasika Pro Metronome</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<script>
+tailwind.config = {
+    theme: {
+        extend: {
+            colors: {
+                gold: '#D4A853',
+                'gold-dim': '#9E7A3A',
+                'gold-bright': '#F0C96E',
+                surface: '#0e0e10',
+                's2': '#17171b',
+                's3': '#222226',
+                's4': '#2c2c31',
+                brd: '#2a2a30',
+            },
+            fontFamily: {
+                display: ['"Space Grotesk"', 'sans-serif'],
+                mono: ['"JetBrains Mono"', 'monospace'],
+            }
+        }
+    }
+}
+</script>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: 'Space Grotesk', sans-serif;
+        background: #09090b;
+        color: #fafafa;
+        min-height: 100vh;
+        overflow-x: hidden;
+    }
+    body::before {
+        content: '';
+        position: fixed; inset: 0;
+        background-image: radial-gradient(circle, rgba(212,168,83,0.015) 1px, transparent 1px);
+        background-size: 28px 28px;
+        pointer-events: none; z-index: 0;
+    }
+    body::after {
+        content: '';
+        position: fixed; top: -30%; left: -10%; width: 60%; height: 60%;
+        background: radial-gradient(ellipse, rgba(212,168,83,0.04) 0%, transparent 70%);
+        pointer-events: none; z-index: 0;
+    }
+    main, header { position: relative; z-index: 1; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #555; }
+    .vol-slider { -webkit-appearance: none; appearance: none; height: 4px; background: #27272a; border-radius: 2px; outline: none; cursor: pointer; }
+    .vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #D4A853; cursor: pointer; box-shadow: 0 0 6px rgba(212,168,83,0.4); }
+    .vol-slider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #D4A853; cursor: pointer; border: none; }
+    .custom-select {
+        background: #17171b; border: 1px solid #2a2a30; color: #e4e4e7;
+        padding: 8px 32px 8px 12px; border-radius: 8px;
+        font-family: 'Space Grotesk', sans-serif; font-size: 14px;
+        outline: none; cursor: pointer; appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat; background-position: right 10px center;
+        transition: border-color 0.2s;
+    }
+    .custom-select:hover { border-color: #D4A853; }
+    .custom-select:focus { border-color: #D4A853; box-shadow: 0 0 0 2px rgba(212,168,83,0.15); }
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(212,168,83,0.4); }
+        50% { box-shadow: 0 0 20px 6px rgba(212,168,83,0.15); }
+    }
+    .play-active { animation: pulse-glow 1s ease-in-out infinite; }
+    @keyframes tap-flash {
+        0% { transform: scale(0.95); background-color: rgba(212,168,83,0.2); }
+        100% { transform: scale(1); background-color: #17171b; }
+    }
+    .tap-flash { animation: tap-flash 0.15s ease-out; }
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+    .toast {
+        background: #1a1a1e; border: 1px solid #2a2a30; border-left: 3px solid #D4A853;
+        color: #e4e4e7; padding: 12px 20px; border-radius: 8px; font-size: 14px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4); animation: toast-in 0.3s ease-out; max-width: 300px;
+    }
+    .toast-exit { animation: toast-out 0.3s ease-in forwards; }
+    @keyframes toast-in { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(40px); } }
+    .modal-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+        z-index: 500; display: flex; align-items: center; justify-content: center;
+        opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .modal-overlay.active { opacity: 1; pointer-events: auto; }
+    .modal-box {
+        background: #17171b; border: 1px solid #2a2a30; border-radius: 14px;
+        padding: 28px; width: 90%; max-width: 420px;
+        transform: translateY(20px); transition: transform 0.25s ease-out;
+    }
+    .modal-overlay.active .modal-box { transform: translateY(0); }
+    .modal-input {
+        width: 100%; background: #0e0e10; border: 1px solid #2a2a30; color: #fafafa;
+        padding: 10px 14px; border-radius: 8px; font-family: 'Space Grotesk', sans-serif;
+        font-size: 14px; outline: none; transition: border-color 0.2s;
+    }
+    .modal-input:focus { border-color: #D4A853; box-shadow: 0 0 0 2px rgba(212,168,83,0.12); }
+    .modal-input::placeholder { color: #52525b; }
+    .song-play-row { transition: background 0.15s; cursor: pointer; }
+    .song-play-row:hover { background: rgba(212,168,83,0.06); }
+    .song-active { border-left: 2px solid #D4A853 !important; background: rgba(212,168,83,0.06) !important; }
+    .edit-row { transition: background 0.15s; }
+    .edit-row:hover { background: rgba(255,255,255,0.015); }
+    .edit-row.dragging-row { opacity: 0.35; }
+    .edit-input {
+        background: #0e0e10; border: 1px solid #2a2a30; color: #fafafa;
+        padding: 5px 8px; border-radius: 6px; font-family: 'Space Grotesk', sans-serif;
+        font-size: 13px; outline: none; transition: border-color 0.2s;
+    }
+    .edit-input:focus { border-color: #D4A853; }
+    .edit-input-bpm {
+        width: 56px; text-align: right; padding-right: 6px;
+        font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    }
+    .edit-select {
+        background: #0e0e10; border: 1px solid #2a2a30; color: #d4d4d8;
+        padding: 5px 20px 5px 6px; border-radius: 6px;
+        font-family: 'Space Grotesk', sans-serif; font-size: 11px;
+        outline: none; cursor: pointer; appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat; background-position: right 5px center;
+    }
+    .edit-select:focus { border-color: #D4A853; }
+    .drag-handle { cursor: grab; color: #3f3f46; transition: color 0.15s; user-select: none; -webkit-user-select: none; }
+    .drag-handle:hover { color: #71717a; }
+    .drag-handle:active { cursor: grabbing; }
+    .edit-btn {
+        width: 24px; height: 24px; border-radius: 5px; display: flex;
+        align-items: center; justify-content: center; transition: all 0.15s;
+        border: none; background: transparent; cursor: pointer; font-size: 10px;
+    }
+    .edit-btn-move { color: #52525b; }
+    .edit-btn-move:hover { color: #a1a1aa; background: #27272a; }
+    .edit-btn-move:disabled { opacity: 0.15; cursor: default; background: none; }
+    .edit-btn-del { color: #52525b; }
+    .edit-btn-del:hover { color: #f87171; background: rgba(248,113,113,0.1); }
+    .drop-line {
+        height: 2px; background: #D4A853; border-radius: 1px; margin: -1px 10px 0 10px;
+        box-shadow: 0 0 8px rgba(212,168,83,0.5); pointer-events: none;
+    }
+    .edit-mode-bar {
+        background: rgba(212,168,83,0.08); border: 1px solid rgba(212,168,83,0.15); border-radius: 8px;
+    }
+    .sub-badge {
+        font-size: 10px; padding: 1px 5px; border-radius: 4px;
+        background: rgba(212,168,83,0.1); color: #9E7A3A; font-family: 'JetBrains Mono', monospace;
+    }
+    #wheelCanvas { cursor: grab; touch-action: none; }
+    #wheelCanvas.dragging { cursor: grabbing; }
+    .practice-active { color: #D4A853 !important; border-color: rgba(212,168,83,0.5) !important; background: rgba(212,168,83,0.08) !important; }
+    @keyframes ramp-dot {
+        0%, 100% { opacity: 0.35; } 50% { opacity: 1; }
+    }
+    .ramp-dot { animation: ramp-dot 1.4s ease-in-out infinite; }
+    .search-song-row { border-bottom: 1px solid rgba(42,42,48,0.5); }
+    .search-song-row:last-child { border-bottom: none; }
+    .search-result-hit { transition: background 0.15s; cursor: pointer; }
+    .search-result-hit:hover { background: rgba(212,168,83,0.06); }
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<header class="border-b border-brd/50 px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-gold to-gold-dim flex items-center justify-center">
+            <i class="fas fa-drum text-surface text-sm"></i>
+        </div>
+        <div>
+            <h1 class="font-display font-bold text-sm tracking-wider text-zinc-100">KASIKA PRO</h1>
+            <p class="text-[10px] text-zinc-500 tracking-widest uppercase">Metronome</p>
+        </div>
+    </div>
+    <div class="flex items-center gap-2 text-[11px] text-zinc-600">
+        <span class="hidden sm:inline">Space: Play</span>
+        <span class="hidden sm:inline text-zinc-700">|</span>
+        <span class="hidden sm:inline">T: Tap</span>
+        <span class="hidden sm:inline text-zinc-700">|</span>
+        <span class="hidden sm:inline">Arrows: BPM</span>
+    </div>
+</header>
+
+<main class="flex flex-col lg:flex-row max-w-[1280px] mx-auto p-4 gap-5">
+    <section class="flex-1 flex flex-col items-center">
+        <div class="w-full flex justify-center" id="canvasContainer">
+            <canvas id="wheelCanvas"></canvas>
+        </div>
+        <div class="flex flex-wrap items-center justify-center gap-3 mt-5 w-full max-w-md">
+            <select id="timeSigSelect" class="custom-select" aria-label="Time signature">
+                <option value="2/4">2/4</option>
+                <option value="3/4">3/4</option>
+                <option value="4/4" selected>4/4</option>
+                <option value="5/4">5/4</option>
+                <option value="6/8">6/8</option>
+                <option value="7/8">7/8</option>
+                <option value="12/8">12/8</option>
+            </select>
+            <select id="subdivSelect" class="custom-select" aria-label="Subdivision">
+                <option value="quarter">Quarter</option>
+                <option value="eighth">Eighth</option>
+                <option value="eighth-triplet">Eighth Triplet</option>
+                <option value="sixteenth">Sixteenth</option>
+                <option value="quintuplet">Quintuplet</option>
+                <option value="sixteenth-triplet">16th Triplet</option>
+                <option value="septuplet">Septuplet</option>
+                <option value="thirty-second">Thirty-second</option>
+            </select>
+            <select id="soundKitSelect" class="custom-select" aria-label="Sound kit">
+                <option value="beep" selected>Beep</option>
+                <option value="woodblock">Woodblock</option>
+                <option value="cowbell">Cowbell</option>
+                <option value="voice">Voice Count</option>
+            </select>
+            <div class="flex items-center gap-2 ml-1">
+                <i class="fas fa-volume-low text-zinc-600 text-xs"></i>
+                <input type="range" id="volumeSlider" class="vol-slider w-20" min="0" max="100" value="70" aria-label="Volume">
+                <i class="fas fa-volume-high text-zinc-600 text-xs"></i>
+            </div>
+        </div>
+        <div class="flex items-center gap-4 mt-5">
+            <button id="playBtn" class="w-16 h-16 rounded-full bg-s2 border-2 border-gold/30 flex items-center justify-center text-gold text-xl hover:border-gold/60 hover:bg-gold/5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Play or stop">
+                <i class="fas fa-play ml-0.5" id="playIcon"></i>
+            </button>
+            <button id="tapBtn" class="h-16 px-8 rounded-xl bg-s2 border border-brd text-zinc-300 font-display font-semibold text-sm tracking-wider hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Tap tempo">
+                TAP
+            </button>
+            <button id="practiceBtn" class="h-16 px-5 rounded-xl bg-s2 border border-brd text-zinc-300 flex flex-col items-center justify-center gap-1 hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Practice mode tempo ramp">
+                <i class="fas fa-gauge-high text-sm" id="practiceIcon"></i>
+                <span class="text-[9px] font-display font-semibold tracking-wider">PRACTICE</span>
+            </button>
+        </div>
+        <div class="flex items-center gap-4 mt-5 bg-s2/60 border border-brd/50 rounded-xl px-5 py-3">
+            <i class="fas fa-stopwatch text-zinc-600 text-sm"></i>
+            <span id="timerDisplay" class="font-mono text-2xl font-light text-zinc-200 tracking-widest tabular-nums" style="min-width:90px; text-align:center;">00:00</span>
+            <button id="timerToggle" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Start or pause timer">
+                <i class="fas fa-play" id="timerIcon"></i>
+            </button>
+            <button id="timerReset" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs" aria-label="Reset timer">
+                <i class="fas fa-rotate-left"></i>
+            </button>
+        </div>
+        <div id="practiceStatus" class="hidden items-center gap-2.5 mt-4 bg-gold/5 border border-gold/20 rounded-xl px-4 py-2.5 text-xs font-mono text-gold tracking-wide max-w-md w-full justify-center">
+            <span class="w-1.5 h-1.5 rounded-full bg-gold ramp-dot"></span>
+            <span id="practiceStatusText"></span>
+            <button id="practiceStopBtn" class="ml-1 text-zinc-500 hover:text-red-400 transition-colors" title="Stop ramp" aria-label="Stop practice ramp">
+                <i class="fas fa-xmark"></i>
+            </button>
+        </div>
+    </section>
+
+    <aside class="w-full lg:w-[420px] lg:flex-shrink-0 flex flex-col">
+        <div class="bg-s2/60 border border-brd/50 rounded-2xl overflow-hidden flex flex-col lg:max-h-[calc(100vh-120px)]">
+            <div class="p-4 border-b border-brd/50">
+                <div class="flex items-center justify-between mb-3">
+                    <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-300 uppercase">Set-lists</h2>
+                    <div class="flex gap-1.5">
+                        <button id="searchBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Search set-lists and songs" title="Search">
+                            <i class="fas fa-magnifying-glass"></i>
+                        </button>
+                        <button id="addSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="New set-list" title="New set-list">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                        <button id="exportSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Export set-list" title="Export set-list as JSON">
+                            <i class="fas fa-download"></i>
+                        </button>
+                        <button id="deleteSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs" aria-label="Delete set-list" title="Delete set-list">
+                            <i class="fas fa-trash-can"></i>
+                        </button>
+                    </div>
+                </div>
+                <select id="setlistSelect" class="custom-select w-full" aria-label="Select set-list"></select>
+            </div>
+
+            <div class="px-4 py-2 border-b border-brd/30 flex items-center justify-between" id="editBar">
+                <button id="editToggleBtn" class="flex items-center gap-2 text-xs font-medium tracking-wide transition-colors" aria-label="Toggle edit mode">
+                    <i class="fas fa-pen-to-square" id="editToggleIcon"></i>
+                    <span id="editToggleLabel">EDIT MODE</span>
+                </button>
+                <span id="editSongCount" class="text-[11px] text-zinc-600"></span>
+            </div>
+
+            <div class="flex-1 overflow-y-auto" id="songListContainer">
+                <div id="songList"></div>
+                <div id="emptyState" class="hidden p-8 text-center">
+                    <i class="fas fa-music text-zinc-700 text-3xl mb-3"></i>
+                    <p class="text-zinc-600 text-sm">No songs yet</p>
+                    <p class="text-zinc-700 text-xs mt-1">Enable edit mode to add songs</p>
+                </div>
+            </div>
+
+            <div class="p-3 border-t border-brd/50 hidden flex-col gap-2" id="addSongArea">
+                <button id="addSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
+                    <i class="fas fa-plus mr-2 text-xs"></i>Add New Song
+                </button>
+                <button id="findExistingSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
+                    <i class="fas fa-magnifying-glass mr-2 text-xs"></i>Find Existing Song
+                </button>
+            </div>
+        </div>
+    </aside>
+</main>
+
+<div class="modal-overlay" id="songModal">
+    <div class="modal-box">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-5" id="songModalTitle">Add Song</h3>
+        <form id="songForm" class="flex flex-col gap-4">
+            <input type="hidden" id="songEditId">
+            <div>
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Song Name</label>
+                <input type="text" id="songNameInput" class="modal-input" placeholder="e.g. Midnight Blues" required>
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">BPM</label>
+                    <input type="number" id="songBpmInput" class="modal-input" min="40" max="400" placeholder="120" required>
+                </div>
+                <div class="flex-1">
+                    <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Time Sig</label>
+                    <select id="songTimeSigInput" class="custom-select w-full">
+                        <option value="2/4">2/4</option>
+                        <option value="3/4">3/4</option>
+                        <option value="4/4" selected>4/4</option>
+                        <option value="5/4">5/4</option>
+                        <option value="6/8">6/8</option>
+                        <option value="7/8">7/8</option>
+                        <option value="12/8">12/8</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Subdivision</label>
+                <select id="songSubdivInput" class="custom-select w-full">
+                    <option value="quarter">Quarter notes</option>
+                    <option value="eighth">Eighth notes</option>
+                    <option value="eighth-triplet">Eighth triplets</option>
+                    <option value="sixteenth">Sixteenth notes</option>
+                    <option value="quintuplet">Quintuplets</option>
+                    <option value="sixteenth-triplet">16th triplets</option>
+                    <option value="septuplet">Septuplets</option>
+                    <option value="thirty-second">Thirty-second notes</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Notes (optional)</label>
+                <textarea id="songNotesInput" class="modal-input resize-none" rows="2" placeholder="Set changes, cues, reminders..."></textarea>
+            </div>
+            <div class="flex gap-3 mt-2">
+                <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
+                <button type="button" onclick="hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal-overlay" id="setlistModal">
+    <div class="modal-box">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-5">New Set-list</h3>
+        <form id="setlistForm" class="flex flex-col gap-4">
+            <div>
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Set-list Name</label>
+                <input type="text" id="setlistNameInput" class="modal-input" placeholder="e.g. Friday Night Show" required>
+            </div>
+            <div class="flex gap-3 mt-2">
+                <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Create</button>
+                <button type="button" onclick="hideModal('setlistModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal-box text-center">
+        <i class="fas fa-triangle-exclamation text-red-400 text-2xl mb-3"></i>
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-2" id="deleteTitle">Delete?</h3>
+        <p class="text-zinc-500 text-sm mb-5" id="deleteMessage">This action cannot be undone.</p>
+        <div class="flex gap-3">
+            <button id="deleteConfirmBtn" class="flex-1 py-2.5 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 font-semibold text-sm hover:bg-red-500/30 transition-colors">Delete</button>
+            <button onclick="hideModal('deleteModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="practiceModal">
+    <div class="modal-box">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1.5">Practice Mode</h3>
+        <p class="text-xs text-zinc-500 mb-5">Gradually ramp the tempo up (or down) over a fixed number of bars.</p>
+        <form id="practiceForm" class="flex flex-col gap-4">
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Start BPM</label>
+                    <input type="number" id="practiceStartBpm" class="modal-input" min="40" max="400" required>
+                </div>
+                <div class="flex-1">
+                    <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Target BPM</label>
+                    <input type="number" id="practiceTargetBpm" class="modal-input" min="40" max="400" required>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">BPM per Step</label>
+                    <input type="number" id="practiceIncrement" class="modal-input" min="1" max="50" value="4" required>
+                </div>
+                <div class="flex-1">
+                    <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Bars per Step</label>
+                    <input type="number" id="practiceBars" class="modal-input" min="1" max="32" value="4" required>
+                </div>
+            </div>
+            <div class="flex gap-3 mt-2">
+                <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Start Ramp</button>
+                <button type="button" onclick="hideModal('practiceModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal-overlay" id="searchModal">
+    <div class="modal-box" style="max-width:480px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-4">Search</h3>
+        <div class="relative mb-3">
+            <i class="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600 text-xs"></i>
+            <input type="text" id="searchInput" class="modal-input" style="padding-left:34px;" placeholder="Search set-lists or songs...">
+        </div>
+        <div id="searchResults" class="max-h-[380px] overflow-y-auto -mx-1 px-1"></div>
+        <button type="button" onclick="hideModal('searchModal')" class="w-full mt-4 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Close</button>
+    </div>
+</div>
+
+<script>
+const state = {
+    bpm: 120, timeSig: '4/4', subdivision: 'quarter',
+    isPlaying: false, visualClick: -1, volume: 0.7,
+    timerRunning: false, timerSeconds: 0, timerInterval: null,
+    setlists: [], activeSetlistId: null, activeSongId: null,
+    editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
+    audioCtx: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
+    canvas: null, ctx: null, canvasSize: 0,
+    lastBeatTimestamp: 0, beatPulse: 0,
+    customDragId: null, dropLineEl: null,
+    soundKit: 'beep',
+    practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
+};
+
+const MIN_BPM = 40, MAX_BPM = 400;
+const START_DEG = 135, SWEEP_DEG = 270;
+const START_RAD = START_DEG * Math.PI / 180;
+const END_RAD = (START_DEG + SWEEP_DEG) * Math.PI / 180;
+const SWEEP_RAD = SWEEP_DEG * Math.PI / 180;
+const STORAGE_KEY = 'kasika-pro-v4';
+const SCHEDULE_AHEAD = 0.15, SCHEDULE_INTERVAL = 20;
+
+const SUBDIVISIONS = {
+    quarter:             { mult: 1, label: 'Quarter',        short: 'Qtr' },
+    eighth:              { mult: 2, label: 'Eighth',         short: '8th' },
+    'eighth-triplet':    { mult: 3, label: 'Eighth Triplet', short: '8T' },
+    sixteenth:           { mult: 4, label: 'Sixteenth',      short: '16th' },
+    quintuplet:          { mult: 5, label: 'Quintuplet',     short: '5T' },
+    'sixteenth-triplet': { mult: 6, label: '16th Triplet',   short: '16T' },
+    septuplet:           { mult: 7, label: 'Septuplet',      short: '7T' },
+    'thirty-second':     { mult: 8, label: 'Thirty-second',  short: '32nd' },
+};
+const TS_OPTIONS = ['2/4','3/4','4/4','5/4','6/8','7/8','12/8'];
+const SUBDIV_OPTIONS = Object.keys(SUBDIVISIONS);
+
+function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function getBeatsPerMeasure() { return parseInt(state.timeSig.split('/')[0], 10); }
+function getSubdivMult() { return (SUBDIVISIONS[state.subdivision] || SUBDIVISIONS.quarter).mult; }
+function getClicksPerMeasure() { return getBeatsPerMeasure() * getSubdivMult(); }
+function bpmToAngle(bpm) { return START_RAD + ((bpm - MIN_BPM) / (MAX_BPM - MIN_BPM)) * SWEEP_RAD; }
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function getTempoMarking(b) {
+    if (b < 50) return 'Grave'; if (b < 60) return 'Largo'; if (b < 66) return 'Larghetto';
+    if (b < 76) return 'Adagio'; if (b < 108) return 'Andante'; if (b < 120) return 'Moderato';
+    if (b < 140) return 'Allegro'; if (b < 156) return 'Allegro Vivace';
+    if (b < 176) return 'Vivace'; if (b < 200) return 'Presto'; return 'Prestissimo';
+}
+
+function angleToBpm(angle) {
+    let a = ((angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    let o = a - START_RAD; if (o < 0) o += 2 * Math.PI;
+    if (o > SWEEP_RAD) o = o > SWEEP_RAD + (2 * Math.PI - SWEEP_RAD) / 2 ? 0 : SWEEP_RAD;
+    return Math.round(MIN_BPM + Math.max(0, Math.min(1, o / SWEEP_RAD)) * (MAX_BPM - MIN_BPM));
+}
+
+function isAngleInArc(angle) {
+    let a = ((angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    let o = a - START_RAD; if (o < 0) o += 2 * Math.PI;
+    return o <= SWEEP_RAD;
+}
+
+// ===== AUDIO ENGINE =====
+function ensureAudio() {
+    if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+}
+
+// ---- Sound kits ----
+function playBeep(c, t, type, v) {
+    const o = c.createOscillator(), g = c.createGain();
+    o.connect(g); g.connect(c.destination);
+    if (type === 'accent') { o.frequency.value = 1200; g.gain.setValueAtTime(0.7 * v, t); }
+    else if (type === 'sub') { o.frequency.value = 680; g.gain.setValueAtTime(0.18 * v, t); }
+    else { o.frequency.value = 880; g.gain.setValueAtTime(0.42 * v, t); }
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    o.start(t); o.stop(t + 0.07);
+    o.onended = () => { o.disconnect(); g.disconnect(); };
+}
+
+function playWoodblock(c, t, type, v) {
+    const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+    const baseFreq = type === 'accent' ? 1450 : type === 'sub' ? 950 : 1150;
+    f.type = 'bandpass'; f.frequency.value = baseFreq; f.Q.value = 7;
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(baseFreq * 1.35, t);
+    o.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, t + 0.02);
+    o.connect(f); f.connect(g); g.connect(c.destination);
+    const peak = (type === 'accent' ? 0.9 : type === 'sub' ? 0.22 : 0.55) * v;
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+    o.start(t); o.stop(t + 0.05);
+    o.onended = () => { o.disconnect(); g.disconnect(); f.disconnect(); };
+}
+
+function playCowbell(c, t, type, v) {
+    const o1 = c.createOscillator(), o2 = c.createOscillator();
+    const f = c.createBiquadFilter(), g = c.createGain();
+    o1.type = 'square'; o2.type = 'square';
+    o1.frequency.value = 800; o2.frequency.value = 540;
+    f.type = 'bandpass'; f.frequency.value = 2640; f.Q.value = 1.1;
+    o1.connect(f); o2.connect(f); f.connect(g); g.connect(c.destination);
+    const dur = type === 'sub' ? 0.09 : 0.2;
+    const peak = (type === 'accent' ? 0.55 : type === 'sub' ? 0.11 : 0.32) * v;
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o1.start(t); o2.start(t); o1.stop(t + dur + 0.02); o2.stop(t + dur + 0.02);
+    o1.onended = () => { o1.disconnect(); o2.disconnect(); f.disconnect(); g.disconnect(); };
+}
+
+let cachedVoice = null;
+function pickFemaleVoice() {
+    if (!window.speechSynthesis) return null;
+    if (cachedVoice) return cachedVoice;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices.length) return null;
+    const femaleHints = ['female','samantha','victoria','karen','moira','tessa','fiona','zira','susan','allison','ava','serena','kate','amy','emma','joanna','salli','kimberly','ivy','google us english'];
+    let v = voices.find(vc => vc.lang.startsWith('en') && femaleHints.some(h => vc.name.toLowerCase().includes(h)));
+    if (!v) v = voices.find(vc => vc.lang.startsWith('en'));
+    if (!v) v = voices[0];
+    cachedVoice = v;
+    return v;
+}
+if (window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = () => { cachedVoice = null; pickFemaleVoice(); };
+}
+
+function speakBeat(n) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(String(n));
+    const v = pickFemaleVoice();
+    if (v) u.voice = v;
+    u.rate = 1.15; u.pitch = 1.05; u.volume = Math.max(0.15, state.volume);
+    window.speechSynthesis.speak(u);
+}
+
+function playClick(type, time, beatNum) {
+    const kit = state.soundKit;
+    if (kit === 'voice') {
+        if (type === 'sub') {
+            const c = state.audioCtx, t = Math.max(time, c.currentTime);
+            playBeep(c, t, 'sub', state.volume * 0.45);
+        } else {
+            const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
+            setTimeout(() => speakBeat(beatNum), delay);
+        }
+        return;
+    }
+    const c = state.audioCtx, t = Math.max(time, c.currentTime), v = state.volume;
+    if (kit === 'woodblock') { playWoodblock(c, t, type, v); return; }
+    if (kit === 'cowbell') { playCowbell(c, t, type, v); return; }
+    playBeep(c, t, type, v);
+}
+
+function startMetronome() {
+    ensureAudio(); state.isPlaying = true; state.currentClick = 0;
+    state.visualClick = -1; state.lastBeatTimestamp = performance.now();
+    state.nextNoteTime = state.audioCtx.currentTime + 0.03;
+    scheduler(); updatePlayBtn();
+}
+
+function stopMetronome() {
+    state.isPlaying = false; clearTimeout(state.schedulerTimer);
+    state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; updatePlayBtn();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+function scheduler() {
+    if (!state.isPlaying) return;
+    const ct = state.audioCtx.currentTime;
+    if (state.nextNoteTime < ct - 0.3) { state.nextNoteTime = ct + 0.02; state.currentClick = 0; }
+    while (state.nextNoteTime < ct + SCHEDULE_AHEAD) { scheduleNote(state.currentClick, state.nextNoteTime); advanceClick(); }
+    state.schedulerTimer = setTimeout(scheduler, SCHEDULE_INTERVAL);
+}
+
+function scheduleNote(ci, time) {
+    const m = getSubdivMult(), isSub = ci % m !== 0, mb = Math.floor(ci / m);
+    const isAcc = mb === 0 && !isSub;
+    playClick(isAcc ? 'accent' : (isSub ? 'sub' : 'normal'), time, mb + 1);
+    const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
+    const cap = ci;
+    setTimeout(() => { state.visualClick = cap; state.lastBeatTimestamp = performance.now(); }, delay);
+}
+
+function advanceClick() {
+    state.nextNoteTime += (60.0 / state.bpm) / getSubdivMult();
+    const total = getClicksPerMeasure();
+    state.currentClick = (state.currentClick + 1) % total;
+    if (state.currentClick === 0) onMeasureComplete();
+}
+
+// ===== PRACTICE MODE (tempo ramp) =====
+function openPracticeModal() {
+    document.getElementById('practiceStartBpm').value = state.practice.startBpm || state.bpm;
+    document.getElementById('practiceTargetBpm').value = state.practice.targetBpm || Math.min(MAX_BPM, state.bpm + 20);
+    document.getElementById('practiceIncrement').value = state.practice.increment || 4;
+    document.getElementById('practiceBars').value = state.practice.barsPerStep || 4;
+    showModal('practiceModal');
+}
+
+function startPractice(cfg) {
+    state.practice.active = true;
+    state.practice.startBpm = cfg.startBpm;
+    state.practice.targetBpm = cfg.targetBpm;
+    state.practice.increment = Math.max(1, cfg.increment);
+    state.practice.barsPerStep = Math.max(1, cfg.barsPerStep);
+    state.practice.barsElapsed = 0;
+    state.bpm = cfg.startBpm;
+    if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; state.nextNoteTime = state.audioCtx.currentTime + 0.03; }
+    updatePracticeUI();
+    showToast(`Practice ramp started: ${cfg.startBpm} → ${cfg.targetBpm} BPM`);
+}
+
+function stopPractice(silent) {
+    state.practice.active = false;
+    state.practice.barsElapsed = 0;
+    updatePracticeUI();
+    if (!silent) showToast('Practice ramp stopped');
+}
+
+function onMeasureComplete() {
+    if (!state.practice.active) return;
+    state.practice.barsElapsed++;
+    if (state.practice.barsElapsed >= state.practice.barsPerStep) {
+        state.practice.barsElapsed = 0;
+        const dir = state.practice.targetBpm >= state.practice.startBpm ? 1 : -1;
+        const next = state.bpm + dir * state.practice.increment;
+        const reached = dir > 0 ? next >= state.practice.targetBpm : next <= state.practice.targetBpm;
+        state.bpm = reached ? state.practice.targetBpm : next;
+        if (reached) {
+            showToast(`Practice target reached: ${state.bpm} BPM`);
+            state.practice.active = false;
+        }
+    }
+    updatePracticeUI();
+}
+
+function updatePracticeUI() {
+    const btn = document.getElementById('practiceBtn');
+    const statusEl = document.getElementById('practiceStatus');
+    const statusText = document.getElementById('practiceStatusText');
+    if (state.practice.active) {
+        btn.classList.add('practice-active');
+        statusEl.classList.remove('hidden'); statusEl.classList.add('flex');
+        const totalSteps = Math.max(1, Math.ceil(Math.abs(state.practice.targetBpm - state.practice.startBpm) / state.practice.increment));
+        const stepsDone = Math.max(0, Math.round(Math.abs(state.bpm - state.practice.startBpm) / state.practice.increment));
+        const barsToGo = state.practice.barsPerStep - state.practice.barsElapsed;
+        statusText.textContent = `RAMP ${state.practice.startBpm}→${state.practice.targetBpm} · step ${Math.min(stepsDone + 1, totalSteps)}/${totalSteps} · next step in ${barsToGo} bar${barsToGo !== 1 ? 's' : ''}`;
+    } else {
+        btn.classList.remove('practice-active');
+        statusEl.classList.add('hidden'); statusEl.classList.remove('flex');
+    }
+}
+
+// ===== CANVAS =====
+function setupCanvas() {
+    const cv = document.getElementById('wheelCanvas'), ct = document.getElementById('canvasContainer');
+    const dpr = window.devicePixelRatio || 1, sz = Math.min(ct.clientWidth - 16, 420);
+    cv.style.width = sz + 'px'; cv.style.height = sz + 'px';
+    cv.width = sz * dpr; cv.height = sz * dpr;
+    const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    state.canvas = cv; state.ctx = c; state.canvasSize = sz;
+}
+
+function drawWheel() {
+    const { ctx: c, canvasSize: sz } = state; if (!c) return;
+    const cx = sz / 2, cy = sz / 2, R = sz * 0.42;
+    c.clearRect(0, 0, sz, sz);
+    const bg = c.createRadialGradient(cx, cy, R * 0.15, cx, cy, R * 1.25);
+    bg.addColorStop(0, 'rgba(212,168,83,0.03)'); bg.addColorStop(1, 'rgba(212,168,83,0)');
+    c.fillStyle = bg; c.fillRect(0, 0, sz, sz);
+
+    const tw = Math.max(6, sz * 0.018), ca = bpmToAngle(state.bpm);
+    c.beginPath(); c.arc(cx, cy, R, START_RAD, END_RAD, false);
+    c.strokeStyle = '#1e1e22'; c.lineWidth = tw; c.lineCap = 'round'; c.stroke();
+
+    if (state.bpm > MIN_BPM) {
+        c.beginPath(); c.arc(cx, cy, R, START_RAD, ca, false);
+        const ag = c.createLinearGradient(cx + R * Math.cos(START_RAD), cy + R * Math.sin(START_RAD), cx + R * Math.cos(ca), cy + R * Math.sin(ca));
+        ag.addColorStop(0, '#9E7A3A'); ag.addColorStop(1, '#D4A853');
+        c.strokeStyle = ag; c.lineWidth = tw; c.lineCap = 'round'; c.stroke();
+    }
+
+    for (let bpm = MIN_BPM; bpm <= MAX_BPM; bpm += 5) {
+        const a = bpmToAngle(bpm), isMj = bpm % 20 === 0, isMd = bpm % 10 === 0 && !isMj;
+        const len = isMj ? sz * 0.04 : (isMd ? sz * 0.025 : sz * 0.014), o = R + tw / 2 + 3;
+        c.beginPath(); c.moveTo(cx + o * Math.cos(a), cy + o * Math.sin(a));
+        c.lineTo(cx + (o + len) * Math.cos(a), cy + (o + len) * Math.sin(a));
+        c.strokeStyle = isMj ? '#52525b' : (isMd ? '#3f3f46' : '#27272a');
+        c.lineWidth = isMj ? 1.5 : 1; c.lineCap = 'round'; c.stroke();
+    }
+
+    c.font = `500 ${Math.max(9, sz * 0.024)}px "Space Grotesk", sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    const majorLabels = [];
+    for (let b = MIN_BPM; b <= MAX_BPM; b += 40) majorLabels.push(b);
+    if (majorLabels[majorLabels.length - 1] !== MAX_BPM) majorLabels.push(MAX_BPM);
+    majorLabels.forEach(bpm => {
+        const a = bpmToAngle(bpm), lr = R + tw / 2 + sz * 0.065;
+        c.fillStyle = Math.abs(bpm - state.bpm) < 3 ? '#D4A853' : '#52525b';
+        c.fillText(bpm.toString(), cx + lr * Math.cos(a), cy + lr * Math.sin(a));
+    });
+
+    const hx = cx + R * Math.cos(ca), hy = cy + R * Math.sin(ca), hr = Math.max(8, sz * 0.028);
+    const hg = c.createRadialGradient(hx, hy, 0, hx, hy, hr * 3);
+    hg.addColorStop(0, 'rgba(212,168,83,0.25)'); hg.addColorStop(1, 'rgba(212,168,83,0)');
+    c.fillStyle = hg; c.fillRect(hx - hr * 3, hy - hr * 3, hr * 6, hr * 6);
+    c.beginPath(); c.arc(hx, hy, hr, 0, Math.PI * 2); c.fillStyle = '#D4A853'; c.fill();
+    c.beginPath(); c.arc(hx, hy, hr * 0.5, 0, Math.PI * 2); c.fillStyle = '#F0C96E'; c.fill();
+
+    // ===== BEAT INDICATOR RING =====
+    const beats = getBeatsPerMeasure(), mult = getSubdivMult(), total = beats * mult;
+    const dR = R * 0.55, ms = Math.max(7, sz * 0.026), ss = Math.max(2.8, sz * 0.011), p = state.beatPulse;
+
+    // Ring outline
+    c.beginPath(); c.arc(cx, cy, dR, 0, Math.PI * 2);
+    c.strokeStyle = 'rgba(63,63,70,0.25)'; c.lineWidth = 1; c.stroke();
+
+    for (let i = 0; i < total; i++) {
+        const a = -Math.PI / 2 + (i / total) * Math.PI * 2;
+        const dx = cx + dR * Math.cos(a), dy = cy + dR * Math.sin(a);
+        const isMain = i % mult === 0, mi = Math.floor(i / mult);
+        const isAcc = isMain && mi === 0, isAct = state.visualClick === i;
+
+        if (isMain) {
+            if (isAct && p > 0) {
+                const gr = ms * (2.5 + p * 1.5);
+                const gg = c.createRadialGradient(dx, dy, 0, dx, dy, gr);
+                gg.addColorStop(0, `rgba(212,168,83,${0.35 * p})`); gg.addColorStop(1, 'rgba(212,168,83,0)');
+                c.fillStyle = gg; c.beginPath(); c.arc(dx, dy, gr, 0, Math.PI * 2); c.fill();
+                c.beginPath(); c.arc(dx, dy, ms * (1 + p * 0.25), 0, Math.PI * 2);
+                c.fillStyle = isAcc ? '#F0C96E' : '#D4A853'; c.fill();
+            } else {
+                c.beginPath(); c.arc(dx, dy, ms, 0, Math.PI * 2);
+                c.fillStyle = isAcc ? '#2a2218' : '#1c1c20'; c.fill();
+                c.beginPath(); c.arc(dx, dy, ms, 0, Math.PI * 2);
+                c.strokeStyle = isAcc ? 'rgba(212,168,83,0.35)' : 'rgba(113,113,122,0.3)';
+                c.lineWidth = 1.2; c.stroke();
+                c.beginPath(); c.arc(dx, dy, ms * 0.45, 0, Math.PI * 2);
+                c.fillStyle = isAcc ? '#8a6d30' : '#52525b'; c.fill();
+            }
+        } else {
+            if (isAct && p > 0) {
+                c.beginPath(); c.arc(dx, dy, ss * 2, 0, Math.PI * 2);
+                c.fillStyle = `rgba(212,168,83,${0.2 * p})`; c.fill();
+                c.beginPath(); c.arc(dx, dy, ss * 1.3, 0, Math.PI * 2);
+                c.fillStyle = `rgba(212,168,83,${0.5 * p})`; c.fill();
+            } else {
+                c.beginPath(); c.arc(dx, dy, ss, 0, Math.PI * 2);
+                c.fillStyle = '#2a2a2e'; c.fill();
+            }
+        }
+    }
+
+    const bp = state.isPlaying ? p * 0.015 : 0;
+    c.font = `300 ${Math.max(36, sz * 0.16) * (1 + bp)}px "JetBrains Mono", monospace`;
+    c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#fafafa';
+    c.fillText(state.bpm.toString(), cx, cy - sz * 0.02);
+    c.font = `400 ${Math.max(10, sz * 0.032)}px "Space Grotesk", sans-serif`;
+    c.fillStyle = '#D4A853'; c.fillText(getTempoMarking(state.bpm), cx, cy + sz * 0.08);
+    if (state.subdivision !== 'quarter') {
+        c.font = `300 ${Math.max(8, sz * 0.024)}px "Space Grotesk", sans-serif`;
+        c.fillStyle = '#52525b';
+        c.fillText((SUBDIVISIONS[state.subdivision] || SUBDIVISIONS.quarter).label, cx, cy + sz * 0.13);
+    }
+}
+
+// ===== WHEEL INTERACTION =====
+function getCanvasCoords(e) {
+    const r = state.canvas.getBoundingClientRect();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (cx - r.left) * (state.canvasSize / r.width), y: (cy - r.top) * (state.canvasSize / r.height) };
+}
+function handlePointerDown(e) {
+    e.preventDefault();
+    const { x, y } = getCanvasCoords(e), cx = state.canvasSize / 2, cy = state.canvasSize / 2;
+    const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+    if (Math.abs(d - state.canvasSize * 0.42) < state.canvasSize * 0.08 || d < state.canvasSize * 0.36) {
+        state.isDragging = true; state.canvas.classList.add('dragging');
+        let a = Math.atan2(y - cy, x - cx); if (isAngleInArc(a)) state.bpm = angleToBpm(a);
+    }
+}
+function handlePointerMove(e) {
+    if (!state.isDragging && !e.touches) return;
+    const { x, y } = getCanvasCoords(e);
+    if (state.isDragging) { e.preventDefault(); let a = Math.atan2(y - state.canvasSize / 2, x - state.canvasSize / 2); if (isAngleInArc(a)) state.bpm = angleToBpm(a); }
+}
+function handlePointerUp() { state.isDragging = false; state.canvas.classList.remove('dragging'); }
+
+// ===== TAP TEMPO =====
+let tapTimes = [];
+function handleTap() {
+    ensureAudio(); const now = Date.now();
+    if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > 2000) tapTimes = [];
+    tapTimes.push(now); if (tapTimes.length > 8) tapTimes.shift();
+    const btn = document.getElementById('tapBtn');
+    btn.classList.remove('tap-flash'); void btn.offsetWidth; btn.classList.add('tap-flash');
+    if (tapTimes.length >= 2) {
+        let t = 0; for (let i = 1; i < tapTimes.length; i++) t += tapTimes[i] - tapTimes[i - 1];
+        state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(60000 / (t / (tapTimes.length - 1)))));
+    }
+}
+
+// ===== TIMER =====
+function toggleTimer() {
+    if (state.timerRunning) { clearInterval(state.timerInterval); state.timerRunning = false; }
+    else { state.timerRunning = true; state.timerInterval = setInterval(() => { state.timerSeconds++; updateTimerDisplay(); }, 1000); }
+    updateTimerBtn();
+}
+function resetTimer() { clearInterval(state.timerInterval); state.timerRunning = false; state.timerSeconds = 0; updateTimerDisplay(); updateTimerBtn(); }
+function updateTimerDisplay() {
+    document.getElementById('timerDisplay').textContent = String(Math.floor(state.timerSeconds / 60)).padStart(2, '0') + ':' + String(state.timerSeconds % 60).padStart(2, '0');
+}
+function updateTimerBtn() { document.getElementById('timerIcon').className = state.timerRunning ? 'fas fa-pause' : 'fas fa-play'; }
+
+// ===== SET-LIST DATA =====
+function getDefaultData() {
+    return [
+        { id: 'sl1', name: 'Friday Night Show', songs: [
+            { id: 's1', name: 'Opening Jam', bpm: 120, timeSig: '4/4', subdivision: 'quarter', notes: 'Start with hi-hat only, band enters bar 5' },
+            { id: 's2', name: 'Midnight Blues', bpm: 82, timeSig: '4/4', subdivision: 'eighth', notes: 'Slow shuffle feel, watch for dynamics' },
+            { id: 's3', name: 'Funky Town', bpm: 110, timeSig: '4/4', subdivision: 'sixteenth', notes: 'Tight pocket, ghost notes on snare' },
+            { id: 's4', name: 'Waltz in D Minor', bpm: 138, timeSig: '3/4', subdivision: 'eighth-triplet', notes: 'Light touch, brushes optional' },
+            { id: 's5', name: 'Closing Ballad', bpm: 68, timeSig: '6/8', subdivision: 'quarter', notes: 'Build to crescendo at bridge' },
+        ]},
+        { id: 'sl2', name: 'Rehearsal Room', songs: [
+            { id: 's6', name: 'New Song Idea', bpm: 96, timeSig: '4/4', subdivision: 'quarter', notes: 'Experiment with fills in the B section' },
+            { id: 's7', name: 'Highway Star Cover', bpm: 134, timeSig: '4/4', subdivision: 'eighth', notes: 'Double-time feel in chorus' },
+            { id: 's8', name: 'Odd Meter Groove', bpm: 150, timeSig: '7/8', subdivision: 'eighth-triplet', notes: 'Group as 2+2+3' },
+        ]}
+    ];
+}
+
+function loadData() {
+    try {
+        const s = localStorage.getItem(STORAGE_KEY);
+        if (s) {
+            const d = JSON.parse(s);
+            state.setlists = d.setlists || getDefaultData();
+            state.activeSetlistId = d.activeSetlistId || state.setlists[0]?.id;
+            if (d.soundKit) state.soundKit = d.soundKit;
+            // Migrate old songs missing subdivision, or using the old 'triplet' key
+            state.setlists.forEach(sl => sl.songs.forEach(song => {
+                if (!song.subdivision) song.subdivision = 'quarter';
+                else if (song.subdivision === 'triplet') song.subdivision = 'eighth-triplet';
+                else if (!SUBDIVISIONS[song.subdivision]) song.subdivision = 'quarter';
+            }));
+        } else {
+            state.setlists = getDefaultData(); state.activeSetlistId = state.setlists[0]?.id; saveData();
+        }
+    } catch { state.setlists = getDefaultData(); state.activeSetlistId = state.setlists[0]?.id; }
+}
+
+function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit })); }
+function getActiveSetlist() { return state.setlists.find(s => s.id === state.activeSetlistId) || null; }
+
+function createSetlist(name) {
+    const sl = { id: genId(), name, songs: [] };
+    state.setlists.push(sl); state.activeSetlistId = sl.id;
+    saveData(); renderSetlistSelect(); renderSongs(); showToast(`Set-list "${name}" created`);
+}
+
+function deleteSetlist(id) {
+    if (state.setlists.length <= 1) { showToast('Cannot delete the last set-list'); return; }
+    const sl = state.setlists.find(s => s.id === id);
+    state.setlists = state.setlists.filter(s => s.id !== id);
+    if (state.activeSetlistId === id) state.activeSetlistId = state.setlists[0]?.id;
+    saveData(); renderSetlistSelect(); renderSongs(); showToast(`"${sl?.name}" deleted`);
+}
+
+function addSong(d) {
+    const sl = getActiveSetlist(); if (!sl) return;
+    const song = { id: genId(), ...d }; sl.songs.push(song);
+    saveData(); renderSongs(); showToast(`"${song.name}" added`);
+}
+
+function updateSong(id, u) {
+    const sl = getActiveSetlist(); if (!sl) return;
+    const song = sl.songs.find(s => s.id === id);
+    if (song) { Object.assign(song, u); saveData(); renderSongs(); showToast(`"${song.name}" updated`); }
+}
+
+function deleteSong(id) {
+    const sl = getActiveSetlist(); if (!sl) return;
+    const song = sl.songs.find(s => s.id === id);
+    sl.songs = sl.songs.filter(s => s.id !== id);
+    if (state.activeSongId === id) state.activeSongId = null;
+    saveData(); renderSongs(); showToast(`"${song?.name}" removed`);
+}
+
+function moveSong(id, dir) {
+    const sl = getActiveSetlist(); if (!sl) return;
+    const i = sl.songs.findIndex(s => s.id === id), ni = i + dir;
+    if (ni < 0 || ni >= sl.songs.length) return;
+    [sl.songs[i], sl.songs[ni]] = [sl.songs[ni], sl.songs[i]];
+    saveData(); renderSongs();
+}
+
+function loadAndPlaySong(song) {
+    state.activeSongId = song.id;
+    const tb = Math.max(MIN_BPM, Math.min(MAX_BPM, song.bpm));
+    state.timeSig = song.timeSig;
+    state.subdivision = song.subdivision || 'quarter';
+    document.getElementById('timeSigSelect').value = state.timeSig;
+    document.getElementById('subdivSelect').value = state.subdivision;
+    if (state.practice.active) stopPractice(true);
+    if (state.isPlaying) {
+        state.bpm = tb; state.currentClick = 0; state.visualClick = -1;
+        state.nextNoteTime = state.audioCtx.currentTime + 0.03;
+    } else {
+        state.bpm = tb; startMetronome();
+    }
+    renderSongs(); showToast(`Now playing: ${song.name}`);
+}
+
+// ===== EXPORT =====
+function exportSetlist(sl) {
+    const payload = {
+        app: 'Kasika Pro Metronome', version: 1, exportedAt: new Date().toISOString(),
+        name: sl.name,
+        songs: sl.songs.map(({ name, bpm, timeSig, subdivision, notes }) => ({ name, bpm, timeSig, subdivision, notes: notes || '' })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = sl.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'setlist';
+    a.href = url; a.download = `${safeName}-setlist.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    showToast(`Exported "${sl.name}" (${sl.songs.length} songs)`);
+}
+
+// ===== SEARCH =====
+function performSearch(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) return { setlists: [], songs: [] };
+    const matchedSetlists = state.setlists.filter(sl => sl.name.toLowerCase().includes(q));
+    const matchedSongs = [];
+    state.setlists.forEach(sl => {
+        sl.songs.forEach(song => {
+            if (song.name.toLowerCase().includes(q) || (song.notes && song.notes.toLowerCase().includes(q))) {
+                matchedSongs.push({ song, setlistId: sl.id, setlistName: sl.name });
+            }
+        });
+    });
+    return { setlists: matchedSetlists, songs: matchedSongs };
+}
+
+function renderSearchResults(query) {
+    const container = document.getElementById('searchResults');
+    if (!query.trim()) { container.innerHTML = '<p class="text-zinc-600 text-sm text-center py-8">Start typing to search set-lists and songs...</p>'; return; }
+    const { setlists, songs } = performSearch(query);
+    if (!setlists.length && !songs.length) { container.innerHTML = '<p class="text-zinc-600 text-sm text-center py-8">No matches found</p>'; return; }
+    let html = '';
+    if (setlists.length) {
+        html += `<div class="text-[11px] text-zinc-600 uppercase tracking-wider mb-1.5 mt-1">Set-lists</div>`;
+        html += setlists.map(sl => `
+            <div class="search-result-hit flex items-center justify-between px-3 py-2.5 rounded-lg" data-goto-setlist="${sl.id}">
+                <div class="flex items-center gap-2.5 min-w-0">
+                    <i class="fas fa-list-ul text-zinc-600 text-xs"></i>
+                    <span class="text-sm text-zinc-200 truncate">${escHtml(sl.name)}</span>
+                </div>
+                <span class="text-[11px] text-zinc-600 flex-shrink-0">${sl.songs.length} songs</span>
+            </div>`).join('');
+    }
+    if (songs.length) {
+        html += `<div class="text-[11px] text-zinc-600 uppercase tracking-wider mb-1.5 mt-3">Songs</div>`;
+        html += songs.map(({ song, setlistId, setlistName }) => {
+            const opts = state.setlists.map(s => `<option value="${s.id}" ${s.id === state.activeSetlistId ? 'selected' : ''}>${escHtml(s.name)}</option>`).join('');
+            return `
+            <div class="search-song-row px-3 py-2.5" data-song-id="${song.id}" data-source-setlist="${setlistId}">
+                <div class="mb-1.5">
+                    <div class="text-sm text-zinc-200 truncate">${escHtml(song.name)}</div>
+                    <div class="text-[11px] text-zinc-600 truncate">from "${escHtml(setlistName)}" · ${song.bpm} BPM · ${song.timeSig}</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <select class="edit-select add-target-select flex-1" style="width:auto;">${opts}</select>
+                    <button class="add-target-btn text-xs px-3 py-1.5 rounded-lg bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 transition-colors flex-shrink-0">
+                        <i class="fas fa-plus mr-1"></i>Add
+                    </button>
+                </div>
+            </div>`;
+        }).join('');
+    }
+    container.innerHTML = html;
+}
+
+function openSearchModal() {
+    document.getElementById('searchInput').value = '';
+    renderSearchResults('');
+    showModal('searchModal');
+    setTimeout(() => document.getElementById('searchInput').focus(), 200);
+}
+
+// ===== UI RENDERING =====
+function renderSetlistSelect() {
+    const sel = document.getElementById('setlistSelect'); sel.innerHTML = '';
+    state.setlists.forEach(sl => {
+        const o = document.createElement('option'); o.value = sl.id;
+        o.textContent = `${sl.name} (${sl.songs.length})`; o.selected = sl.id === state.activeSetlistId;
+        sel.appendChild(o);
+    });
+}
+
+function renderSongs() {
+    const container = document.getElementById('songList'), empty = document.getElementById('emptyState');
+    const sl = getActiveSetlist(), countEl = document.getElementById('editSongCount');
+    if (!sl || sl.songs.length === 0) {
+        container.innerHTML = ''; empty.classList.remove('hidden');
+        countEl.textContent = ''; return;
+    }
+    empty.classList.add('hidden');
+    countEl.textContent = `${sl.songs.length} song${sl.songs.length !== 1 ? 's' : ''}`;
+    state.editMode ? renderEditMode(container, sl) : renderPlayMode(container, sl);
+}
+
+function renderPlayMode(container, sl) {
+    container.innerHTML = sl.songs.map((song, idx) => {
+        const isA = state.activeSongId === song.id;
+        const sub = song.subdivision && song.subdivision !== 'quarter';
+        return `
+        <div class="song-play-row ${isA ? 'song-active' : ''} flex items-center gap-3 px-4 py-3 border-l-2 border-transparent" data-song-id="${song.id}">
+            <div class="w-6 text-center flex-shrink-0">
+                <span class="text-[11px] font-mono ${isA ? 'text-gold' : 'text-zinc-600'}">${String(idx + 1).padStart(2, '0')}</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium ${isA ? 'text-gold' : 'text-zinc-200'} truncate">${escHtml(song.name)}</div>
+                ${song.notes ? `<div class="text-[11px] text-zinc-600 truncate mt-0.5">${escHtml(song.notes)}</div>` : ''}
+            </div>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                <span class="font-mono text-sm ${isA ? 'text-gold-bright' : 'text-zinc-400'}">${song.bpm}</span>
+                <span class="text-[11px] px-1.5 py-0.5 rounded bg-s3 text-zinc-500">${song.timeSig}</span>
+                ${sub ? `<span class="sub-badge">${(SUBDIVISIONS[song.subdivision] || {}).short || ''}</span>` : ''}
+                ${isA ? '<i class="fas fa-volume-high text-gold text-[10px] ml-0.5"></i>' : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderEditMode(container, sl) {
+    const tsOpts = TS_OPTIONS.map(t => `<option value="${t}">${t}</option>`).join('');
+    const subOpts = SUBDIV_OPTIONS.map(s => `<option value="${s}">${SUBDIVISIONS[s].short}</option>`).join('');
+
+    container.innerHTML = sl.songs.map((song, idx) => `
+        <div class="edit-row flex items-center gap-2 px-3 py-2.5 border-b border-brd/20" data-song-id="${song.id}">
+            <div class="drag-handle flex flex-col items-center gap-0.5 py-1 px-0.5" data-grip="${song.id}" title="Drag to reorder">
+                <i class="fas fa-grip-vertical text-[10px]"></i>
+            </div>
+            <div class="w-5 text-center flex-shrink-0">
+                <span class="text-[11px] font-mono text-zinc-600">${String(idx + 1).padStart(2, '0')}</span>
+            </div>
+            <input type="text" class="edit-input flex-1 min-w-0" value="${escHtml(song.name)}" data-field="name" data-song-id="${song.id}" placeholder="Song name">
+            <input type="number" class="edit-input edit-input-bpm" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
+            <select class="edit-select" data-field="timeSig" data-song-id="${song.id}">
+                ${tsOpts.replace(`value="${song.timeSig}"`, `value="${song.timeSig}" selected`)}
+            </select>
+            <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
+                ${subOpts.replace(`value="${song.subdivision || 'quarter'}"`, `value="${song.subdivision || 'quarter'}" selected`)}
+            </select>
+            <div class="flex flex-col gap-0.5 flex-shrink-0">
+                <button class="edit-btn edit-btn-move" data-action="move-up" data-song-id="${song.id}" title="Move up" ${idx === 0 ? 'disabled' : ''}>
+                    <i class="fas fa-chevron-up"></i>
+                </button>
+                <button class="edit-btn edit-btn-move" data-action="move-down" data-song-id="${song.id}" title="Move down" ${idx === sl.songs.length - 1 ? 'disabled' : ''}>
+                    <i class="fas fa-chevron-down"></i>
+                </button>
+            </div>
+            <button class="edit-btn edit-btn-del" data-action="delete" data-song-id="${song.id}" title="Remove song">
+                <i class="fas fa-trash-can"></i>
+            </button>
+        </div>
+    `).join('');
+
+    // Inline edit events
+    container.querySelectorAll('.edit-input, .edit-select').forEach(el => {
+        el.addEventListener('change', handleInlineEdit);
+        el.addEventListener('blur', handleInlineEdit);
+        el.addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+        // BPM cursor: position at right on focus
+        if (el.dataset.field === 'bpm') {
+            el.addEventListener('focus', function() {
+                setTimeout(() => { this.setSelectionRange(this.value.length, this.value.length); }, 0);
+            });
+        }
+    });
+}
+
+function handleInlineEdit(e) {
+    const el = e.target, sid = el.dataset.songId, f = el.dataset.field;
+    if (!sid || !f) return;
+    const sl = getActiveSetlist(); if (!sl) return;
+    const song = sl.songs.find(s => s.id === sid); if (!song) return;
+    if (f === 'name') { const v = el.value.trim(); if (v) song.name = v; else el.value = song.name; }
+    else if (f === 'bpm') { const v = parseInt(el.value, 10); if (!isNaN(v)) song.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, v)); else el.value = song.bpm; }
+    else if (f === 'timeSig') { song.timeSig = el.value; }
+    else if (f === 'subdivision') { song.subdivision = el.value; }
+    saveData();
+}
+
+function updateEditBarUI() {
+    const btn = document.getElementById('editToggleBtn'), icon = document.getElementById('editToggleIcon');
+    const label = document.getElementById('editToggleLabel'), bar = document.getElementById('editBar');
+    const addArea = document.getElementById('addSongArea');
+    if (state.editMode) {
+        icon.className = 'fas fa-check'; label.textContent = 'DONE'; btn.style.color = '#D4A853';
+        bar.classList.add('edit-mode-bar'); addArea.classList.remove('hidden'); addArea.classList.add('flex');
+    } else {
+        icon.className = 'fas fa-pen-to-square'; label.textContent = 'EDIT MODE'; btn.style.color = '#71717a';
+        bar.classList.remove('edit-mode-bar'); addArea.classList.add('hidden'); addArea.classList.remove('flex');
+    }
+}
+
+function updatePlayBtn() {
+    const btn = document.getElementById('playBtn'), icon = document.getElementById('playIcon');
+    if (state.isPlaying) { icon.className = 'fas fa-stop'; btn.classList.add('play-active'); btn.style.borderColor = 'rgba(212,168,83,0.6)'; }
+    else { icon.className = 'fas fa-play ml-0.5'; btn.classList.remove('play-active'); btn.style.borderColor = ''; }
+}
+
+function showModal(id) { document.getElementById(id).classList.add('active'); }
+function hideModal(id) { document.getElementById(id).classList.remove('active'); }
+function showToast(msg) {
+    const c = document.getElementById('toastContainer'), t = document.createElement('div');
+    t.className = 'toast'; t.textContent = msg; c.appendChild(t);
+    setTimeout(() => { t.classList.add('toast-exit'); setTimeout(() => t.remove(), 300); }, 2200);
+}
+
+// ===== CUSTOM DRAG AND DROP =====
+function setupCustomDrag() {
+    const list = document.getElementById('songList');
+    let dragClone = null, dragOffsetY = 0, dragStartY = 0, hasMoved = false;
+
+    function getGrip(e) {
+        const target = e.target.closest('[data-grip]');
+        if (!target) return null;
+        return target.closest('.edit-row');
+    }
+
+    function getY(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
+
+    function clearDrop() {
+        if (state.dropLineEl) { state.dropLineEl.remove(); state.dropLineEl = null; }
+    }
+
+    function showDrop(beforeEl) {
+        if (state.dropLineEl && state.dropLineEl.nextSibling === beforeEl) return;
+        if (!beforeEl && state.dropLineEl && state.dropLineEl === list.lastElementChild) return;
+        clearDrop();
+        const line = document.createElement('div');
+        line.className = 'drop-line'; line.id = 'activeDropLine';
+        if (beforeEl) beforeEl.before(line); else list.appendChild(line);
+        state.dropLineEl = line;
+    }
+
+    function getRowAtY(y) {
+        const rows = list.querySelectorAll('.edit-row:not(.dragging-row)');
+        for (const row of rows) {
+            const r = row.getBoundingClientRect();
+            if (y >= r.top && y <= r.bottom) return row;
+        }
+        return null;
+    }
+
+    function makeClone(row) {
+        const rect = row.getBoundingClientRect();
+        const clone = row.cloneNode(true);
+        clone.classList.remove('dragging-row');
+        clone.style.position = 'fixed';
+        clone.style.left = rect.left + 'px';
+        clone.style.top = rect.top + 'px';
+        clone.style.width = rect.width + 'px';
+        clone.style.pointerEvents = 'none';
+        clone.style.zIndex = '600';
+        clone.style.opacity = '0.95';
+        clone.style.background = '#1c1c20';
+        clone.style.borderRadius = '10px';
+        clone.style.boxShadow = '0 10px 28px rgba(0,0,0,0.55), 0 0 0 1px rgba(212,168,83,0.25)';
+        clone.style.transform = 'scale(1.01)';
+        document.body.appendChild(clone);
+        return clone;
+    }
+
+    function onDown(e) {
+        const row = getGrip(e);
+        if (!row) return;
+        e.preventDefault();
+        const y = getY(e);
+        const rect = row.getBoundingClientRect();
+        state.customDragId = row.dataset.songId;
+        dragOffsetY = y - rect.top;
+        dragStartY = y;
+        hasMoved = false;
+        row.classList.add('dragging-row');
+        dragClone = makeClone(row);
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+    }
+
+    function onMove(e) {
+        if (!state.customDragId) return;
+        e.preventDefault();
+        const y = getY(e);
+        if (Math.abs(y - dragStartY) > 2) hasMoved = true;
+        if (dragClone) dragClone.style.top = (y - dragOffsetY) + 'px';
+
+        const listRect = list.getBoundingClientRect();
+        if (y < listRect.top + 12) list.scrollTop -= 8;
+        else if (y > listRect.bottom - 12) list.scrollTop += 8;
+
+        const row = getRowAtY(y);
+        if (!row) {
+            const rows = list.querySelectorAll('.edit-row:not(.dragging-row)');
+            if (rows.length === 0) return;
+            const firstRect = rows[0].getBoundingClientRect();
+            const lastRect = rows[rows.length - 1].getBoundingClientRect();
+            if (y <= firstRect.top) showDrop(rows[0]);
+            else if (y >= lastRect.bottom) showDrop(null);
+            return;
+        }
+        const r = row.getBoundingClientRect();
+        const before = y < r.top + r.height / 2;
+        showDrop(before ? row : row.nextElementSibling);
+    }
+
+    function onUp() {
+        if (!state.customDragId) return;
+        document.body.style.userSelect = '';
+        document.body.style.webkitUserSelect = '';
+
+        const sl = getActiveSetlist();
+        if (sl && hasMoved) {
+            const dropLine = document.getElementById('activeDropLine');
+            if (dropLine) {
+                // Insert index = count of .edit-row elements that appear before the drop line in the DOM
+                let insertIdx = 0;
+                for (const child of list.children) {
+                    if (child === dropLine) break;
+                    if (child.classList.contains('edit-row')) insertIdx++;
+                }
+                const fromIdx = sl.songs.findIndex(s => s.id === state.customDragId);
+                if (fromIdx >= 0 && fromIdx !== insertIdx && fromIdx !== insertIdx - 1) {
+                    const [moved] = sl.songs.splice(fromIdx, 1);
+                    if (fromIdx < insertIdx) insertIdx--;
+                    sl.songs.splice(insertIdx, 0, moved);
+                    saveData();
+                }
+            }
+        }
+
+        cleanup();
+        renderSongs();
+    }
+
+    function cleanup() {
+        clearDrop();
+        if (dragClone) { dragClone.remove(); dragClone = null; }
+        list.querySelectorAll('.dragging-row').forEach(r => r.classList.remove('dragging-row'));
+        state.customDragId = null;
+        hasMoved = false;
+    }
+
+    list.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    list.addEventListener('touchstart', onDown, { passive: false });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onUp);
+}
+
+// ===== ANIMATION LOOP =====
+function animationLoop() {
+    state.beatPulse = Math.max(0, 1 - (performance.now() - state.lastBeatTimestamp) / 220);
+    drawWheel();
+    requestAnimationFrame(animationLoop);
+}
+
+// ===== EVENT LISTENERS =====
+function setupEvents() {
+    const canvas = state.canvas;
+    canvas.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+    canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+    window.addEventListener('touchmove', handlePointerMove, { passive: false });
+    window.addEventListener('touchend', handlePointerUp);
+    canvas.addEventListener('wheel', e => { e.preventDefault(); state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + (e.deltaY > 0 ? -1 : 1))); }, { passive: false });
+
+    document.getElementById('playBtn').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
+    document.getElementById('tapBtn').addEventListener('click', handleTap);
+    document.getElementById('timeSigSelect').addEventListener('change', e => { state.timeSig = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
+    document.getElementById('subdivSelect').addEventListener('change', e => { state.subdivision = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
+    document.getElementById('soundKitSelect').addEventListener('change', e => { state.soundKit = e.target.value; saveData(); if (e.target.value === 'voice' && window.speechSynthesis) { window.speechSynthesis.getVoices(); } });
+    document.getElementById('volumeSlider').addEventListener('input', e => { state.volume = parseInt(e.target.value) / 100; });
+    document.getElementById('timerToggle').addEventListener('click', toggleTimer);
+    document.getElementById('timerReset').addEventListener('click', resetTimer);
+    document.getElementById('setlistSelect').addEventListener('change', e => { state.activeSetlistId = e.target.value; state.activeSongId = null; saveData(); renderSongs(); });
+
+    document.getElementById('addSetlistBtn').addEventListener('click', () => {
+        document.getElementById('setlistNameInput').value = ''; showModal('setlistModal');
+        setTimeout(() => document.getElementById('setlistNameInput').focus(), 200);
+    });
+    document.getElementById('deleteSetlistBtn').addEventListener('click', () => {
+        const sl = getActiveSetlist(); if (!sl) return;
+        document.getElementById('deleteTitle').textContent = `Delete "${sl.name}"?`;
+        document.getElementById('deleteMessage').textContent = `${sl.songs.length} song(s) will be permanently removed.`;
+        document.getElementById('deleteConfirmBtn').onclick = () => { deleteSetlist(sl.id); hideModal('deleteModal'); };
+        showModal('deleteModal');
+    });
+    document.getElementById('setlistForm').addEventListener('submit', e => { e.preventDefault(); const n = document.getElementById('setlistNameInput').value.trim(); if (!n) return; createSetlist(n); hideModal('setlistModal'); });
+
+    document.getElementById('exportSetlistBtn').addEventListener('click', () => {
+        const sl = getActiveSetlist(); if (!sl) return;
+        if (!sl.songs.length) { showToast('Nothing to export yet'); return; }
+        exportSetlist(sl);
+    });
+
+    document.getElementById('addSongBtn').addEventListener('click', () => {
+        document.getElementById('songModalTitle').textContent = 'Add Song';
+        document.getElementById('songEditId').value = '';
+        document.getElementById('songNameInput').value = '';
+        document.getElementById('songBpmInput').value = state.bpm;
+        document.getElementById('songTimeSigInput').value = state.timeSig;
+        document.getElementById('songSubdivInput').value = state.subdivision;
+        document.getElementById('songNotesInput').value = '';
+        showModal('songModal');
+        setTimeout(() => document.getElementById('songNameInput').focus(), 200);
+    });
+
+    document.getElementById('songForm').addEventListener('submit', e => {
+        e.preventDefault();
+        const eid = document.getElementById('songEditId').value;
+        const d = {
+            name: document.getElementById('songNameInput').value.trim(),
+            bpm: parseInt(document.getElementById('songBpmInput').value, 10),
+            timeSig: document.getElementById('songTimeSigInput').value,
+            subdivision: document.getElementById('songSubdivInput').value,
+            notes: document.getElementById('songNotesInput').value.trim(),
+        };
+        if (!d.name || isNaN(d.bpm)) return;
+        d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
+        eid ? updateSong(eid, d) : addSong(d);
+        hideModal('songModal');
+    });
+
+    document.getElementById('editToggleBtn').addEventListener('click', () => { state.editMode = !state.editMode; updateEditBarUI(); renderSongs(); });
+
+    // Song list click delegation
+    document.getElementById('songList').addEventListener('click', e => {
+        if (state.editMode) {
+            const ab = e.target.closest('[data-action]');
+            if (!ab) return;
+            const a = ab.dataset.action, sid = ab.dataset.songId;
+            if (a === 'move-up') moveSong(sid, -1);
+            else if (a === 'move-down') moveSong(sid, 1);
+            else if (a === 'delete') {
+                const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === sid); if (!song) return;
+                document.getElementById('deleteTitle').textContent = `Remove "${song.name}"?`;
+                document.getElementById('deleteMessage').textContent = 'This song will be removed from the set-list.';
+                document.getElementById('deleteConfirmBtn').onclick = () => { deleteSong(sid); hideModal('deleteModal'); };
+                showModal('deleteModal');
+            }
+            return;
+        }
+        const row = e.target.closest('.song-play-row');
+        if (!row) return;
+        const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === row.dataset.songId);
+        if (song) loadAndPlaySong(song);
+    });
+
+    // ---- Practice mode ----
+    document.getElementById('practiceBtn').addEventListener('click', () => {
+        if (state.practice.active) { stopPractice(); } else { openPracticeModal(); }
+    });
+    document.getElementById('practiceStopBtn').addEventListener('click', () => stopPractice());
+    document.getElementById('practiceForm').addEventListener('submit', e => {
+        e.preventDefault();
+        const startBpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(document.getElementById('practiceStartBpm').value, 10)));
+        const targetBpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(document.getElementById('practiceTargetBpm').value, 10)));
+        const increment = parseInt(document.getElementById('practiceIncrement').value, 10);
+        const barsPerStep = parseInt(document.getElementById('practiceBars').value, 10);
+        if (isNaN(startBpm) || isNaN(targetBpm) || isNaN(increment) || isNaN(barsPerStep)) return;
+        if (startBpm === targetBpm) { showToast('Target BPM must differ from start BPM'); return; }
+        hideModal('practiceModal');
+        startPractice({ startBpm, targetBpm, increment, barsPerStep });
+    });
+
+    // ---- Search ----
+    document.getElementById('searchBtn').addEventListener('click', openSearchModal);
+    document.getElementById('findExistingSongBtn').addEventListener('click', openSearchModal);
+    document.getElementById('searchInput').addEventListener('input', e => renderSearchResults(e.target.value));
+    document.getElementById('searchResults').addEventListener('click', e => {
+        const gotoEl = e.target.closest('[data-goto-setlist]');
+        if (gotoEl) {
+            state.activeSetlistId = gotoEl.dataset.gotoSetlist; state.activeSongId = null;
+            saveData(); renderSetlistSelect(); renderSongs(); hideModal('searchModal');
+            return;
+        }
+        const btn = e.target.closest('.add-target-btn');
+        if (btn) {
+            const row = btn.closest('.search-song-row');
+            const songId = row.dataset.songId, sourceId = row.dataset.sourceSetlist;
+            const targetId = row.querySelector('.add-target-select').value;
+            const sourceSl = state.setlists.find(s => s.id === sourceId);
+            const song = sourceSl?.songs.find(s => s.id === songId);
+            const targetSl = state.setlists.find(s => s.id === targetId);
+            if (!song || !targetSl) return;
+            if (sourceId === targetId) { showToast('Already in that set-list'); return; }
+            if (targetSl.songs.some(s => s.name.toLowerCase() === song.name.toLowerCase() && s.bpm === song.bpm)) {
+                showToast(`"${song.name}" is already in "${targetSl.name}"`); return;
+            }
+            const { id, ...rest } = song;
+            targetSl.songs.push({ id: genId(), ...rest });
+            saveData(); renderSetlistSelect();
+            if (state.activeSetlistId === targetId) renderSongs();
+            showToast(`Added "${song.name}" to "${targetSl.name}"`);
+        }
+    });
+
+    document.addEventListener('keydown', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+        if (e.code === 'Space') { e.preventDefault(); state.isPlaying ? stopMetronome() : startMetronome(); }
+        else if (e.code === 'KeyT') handleTap();
+        else if (e.code === 'ArrowUp') { e.preventDefault(); state.bpm = Math.min(MAX_BPM, state.bpm + (e.shiftKey ? 5 : 1)); }
+        else if (e.code === 'ArrowDown') { e.preventDefault(); state.bpm = Math.max(MIN_BPM, state.bpm - (e.shiftKey ? 5 : 1)); }
+        else if (e.code === 'ArrowRight') { e.preventDefault(); state.bpm = Math.min(MAX_BPM, state.bpm + (e.shiftKey ? 10 : 5)); }
+        else if (e.code === 'ArrowLeft') { e.preventDefault(); state.bpm = Math.max(MIN_BPM, state.bpm - (e.shiftKey ? 10 : 5)); }
+    });
+
+    document.querySelectorAll('.modal-overlay').forEach(o => { o.addEventListener('click', e => { if (e.target === o) hideModal(o.id); }); });
+    document.addEventListener('keydown', e => { if (e.code === 'Escape') document.querySelectorAll('.modal-overlay.active').forEach(m => hideModal(m.id)); });
+
+    let rt;
+    window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(setupCanvas, 100); });
+}
+
+// ===== INIT =====
+function init() {
+    loadData(); setupCanvas(); renderSetlistSelect(); renderSongs();
+    updatePlayBtn(); updateEditBarUI(); updateTimerDisplay();
+    document.getElementById('soundKitSelect').value = state.soundKit;
+    updatePracticeUI();
+    setupEvents(); setupCustomDrag();
+    if (window.speechSynthesis) window.speechSynthesis.getVoices();
+    requestAnimationFrame(animationLoop);
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
