@@ -295,6 +295,15 @@ tailwind.config = {
                 <span id="editSongCount" class="text-[11px] text-zinc-600"></span>
             </div>
 
+            <div class="p-3 border-b border-brd/50 hidden flex-col gap-2" id="addSongArea">
+                <button id="addSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
+                    <i class="fas fa-plus mr-2 text-xs"></i>Add New Song
+                </button>
+                <button id="findExistingSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
+                    <i class="fas fa-magnifying-glass mr-2 text-xs"></i>Find Existing Song
+                </button>
+            </div>
+
             <div class="flex-1 overflow-y-auto" id="songListContainer">
                 <div id="songList"></div>
                 <div id="emptyState" class="hidden p-8 text-center">
@@ -302,15 +311,6 @@ tailwind.config = {
                     <p class="text-zinc-600 text-sm">No songs yet</p>
                     <p class="text-zinc-700 text-xs mt-1">Enable edit mode to add songs</p>
                 </div>
-            </div>
-
-            <div class="p-3 border-t border-brd/50 hidden flex-col gap-2" id="addSongArea">
-                <button id="addSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
-                    <i class="fas fa-plus mr-2 text-xs"></i>Add New Song
-                </button>
-                <button id="findExistingSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
-                    <i class="fas fa-magnifying-glass mr-2 text-xs"></i>Find Existing Song
-                </button>
             </div>
         </div>
     </aside>
@@ -323,7 +323,8 @@ tailwind.config = {
             <input type="hidden" id="songEditId">
             <div>
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Song Name</label>
-                <input type="text" id="songNameInput" class="modal-input" placeholder="e.g. Midnight Blues" required>
+                <input type="text" id="songNameInput" class="modal-input" placeholder="e.g. Midnight Blues" required autocomplete="off">
+                <div id="songNameSuggestions" class="hidden mt-2 rounded-lg border border-brd/50 bg-s3/60 overflow-hidden max-h-52 overflow-y-auto"></div>
             </div>
             <div class="flex gap-3">
                 <div class="flex-1">
@@ -1041,6 +1042,37 @@ function openSearchModal() {
     setTimeout(() => document.getElementById('searchInput').focus(), 200);
 }
 
+function renderSongSuggestions(query) {
+    const box = document.getElementById('songNameSuggestions');
+    const q = query.trim().toLowerCase();
+    const editId = document.getElementById('songEditId').value;
+    if (!q) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const matches = [];
+    state.setlists.forEach(sl => {
+        sl.songs.forEach(song => {
+            if (song.id === editId) return;
+            if (song.name.toLowerCase().includes(q)) matches.push({ song, setlistId: sl.id, setlistName: sl.name });
+        });
+    });
+    if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    box.innerHTML = matches.slice(0, 6).map(({ song, setlistId, setlistName }) => `
+        <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-brd/30 last:border-b-0 hover:bg-white/5" data-suggest-song="${song.id}" data-suggest-setlist="${setlistId}">
+            <div class="min-w-0">
+                <div class="text-xs text-zinc-200 truncate">${escHtml(song.name)}</div>
+                <div class="text-[10px] text-zinc-600 truncate">from "${escHtml(setlistName)}" · ${song.bpm} BPM · ${song.timeSig}</div>
+            </div>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                <button type="button" class="suggest-play-btn w-7 h-7 rounded-md bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 flex items-center justify-center" title="Play now">
+                    <i class="fas fa-play text-[10px] ml-0.5"></i>
+                </button>
+                <button type="button" class="suggest-add-btn text-[11px] px-2.5 py-1 rounded-md bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25" title="Add to current set-list">
+                    <i class="fas fa-plus mr-1"></i>Add
+                </button>
+            </div>
+        </div>`).join('');
+    box.classList.remove('hidden');
+}
+
 // ===== UI RENDERING =====
 function renderSetlistSelect() {
     const sel = document.getElementById('setlistSelect'); sel.innerHTML = '';
@@ -1074,7 +1106,7 @@ function renderPlayMode(container, sl) {
             </div>
             <div class="flex-1 min-w-0">
                 <div class="text-sm font-medium ${isA ? 'text-gold' : 'text-zinc-200'} truncate">${escHtml(song.name)}</div>
-                ${song.notes ? `<div class="text-[11px] text-zinc-600 truncate mt-0.5">${escHtml(song.notes)}</div>` : ''}
+                ${song.notes ? `<div class="text-[11px] text-[#2dd4bf]/70 truncate mt-0.5">${escHtml(song.notes)}</div>` : ''}
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
                 <span class="font-mono text-sm ${isA ? 'text-gold-bright' : 'text-zinc-400'}">${song.bpm}</span>
@@ -1372,8 +1404,39 @@ function setupEvents() {
         document.getElementById('songTimeSigInput').value = state.timeSig;
         document.getElementById('songSubdivInput').value = state.subdivision;
         document.getElementById('songNotesInput').value = '';
+        document.getElementById('songNameSuggestions').classList.add('hidden');
+        document.getElementById('songNameSuggestions').innerHTML = '';
         showModal('songModal');
         setTimeout(() => document.getElementById('songNameInput').focus(), 200);
+    });
+
+    document.getElementById('songNameInput').addEventListener('input', e => renderSongSuggestions(e.target.value));
+
+    document.getElementById('songNameSuggestions').addEventListener('click', e => {
+        const row = e.target.closest('[data-suggest-song]');
+        if (!row) return;
+        const songId = row.dataset.suggestSong, sourceSetlistId = row.dataset.suggestSetlist;
+        const sourceSl = state.setlists.find(s => s.id === sourceSetlistId);
+        const song = sourceSl?.songs.find(s => s.id === songId);
+        if (!song) return;
+        if (e.target.closest('.suggest-play-btn')) {
+            hideModal('songModal');
+            loadAndPlaySong(song);
+            return;
+        }
+        if (e.target.closest('.suggest-add-btn')) {
+            const targetSl = getActiveSetlist();
+            if (!targetSl) return;
+            if (targetSl.id === sourceSetlistId) { showToast(`"${song.name}" is already in this set-list`); return; }
+            if (targetSl.songs.some(s => s.name.toLowerCase() === song.name.toLowerCase() && s.bpm === song.bpm)) {
+                showToast(`"${song.name}" is already in "${targetSl.name}"`); return;
+            }
+            const { id, ...rest } = song;
+            targetSl.songs.push({ id: genId(), ...rest });
+            saveData(); renderSetlistSelect(); renderSongs();
+            hideModal('songModal');
+            showToast(`Added "${song.name}" to "${targetSl.name}"`);
+        }
     });
 
     document.getElementById('songForm').addEventListener('submit', e => {
@@ -1389,6 +1452,8 @@ function setupEvents() {
         if (!d.name || isNaN(d.bpm)) return;
         d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
         eid ? updateSong(eid, d) : addSong(d);
+        document.getElementById('songNameSuggestions').classList.add('hidden');
+        document.getElementById('songNameSuggestions').innerHTML = '';
         hideModal('songModal');
     });
 
