@@ -300,7 +300,10 @@ tailwind.config = {
 
         <div class="w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-4 py-3 flex items-center justify-center gap-6">
             <button id="tempoMinusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Decrease tempo">−</button>
-            <span class="text-[11px] text-zinc-600 uppercase tracking-wider font-medium">Tempo Nudge</span>
+            <div class="text-center">
+                <div class="font-mono text-2xl font-light text-zinc-100 tabular-nums leading-none" id="bpmDisplayMain">120</div>
+                <div class="text-[10px] text-zinc-600 uppercase tracking-wider mt-0.5">BPM</div>
+            </div>
             <button id="tempoPlusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Increase tempo">+</button>
         </div>
 
@@ -495,13 +498,16 @@ tailwind.config = {
             <button type="button" class="color-swatch" data-text-color="#f87171" style="background:#f87171" title="Red"></button>
         </div>
         <div id="drawTools" class="hidden items-center gap-1.5 flex-shrink-0">
+            <button type="button" id="drawPencilBtn" class="text-fmt-btn active" title="Pencil"><i class="fas fa-pencil"></i></button>
+            <button type="button" id="drawEraserBtn" class="text-fmt-btn" title="Eraser — erases where you drag"><i class="fas fa-eraser"></i></button>
+            <div class="w-px h-4 bg-brd mx-0.5"></div>
             <button type="button" class="color-swatch active" data-color="#D4A853" style="background:#D4A853" title="Gold"></button>
             <button type="button" class="color-swatch" data-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
             <button type="button" class="color-swatch" data-color="#F472B6" style="background:#F472B6" title="Pink"></button>
             <button type="button" class="color-swatch" data-color="#fafafa" style="background:#fafafa" title="White"></button>
             <button type="button" class="color-swatch" data-color="#f87171" style="background:#f87171" title="Red"></button>
-            <button type="button" id="drawClearBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs ml-1" title="Clear drawing">
-                <i class="fas fa-eraser"></i>
+            <button type="button" id="drawClearBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs ml-1" title="Clear entire drawing">
+                <i class="fas fa-trash-can"></i>
             </button>
         </div>
     </div>
@@ -816,6 +822,7 @@ const state = {
     activeNoteId: null,
     noteMode: 'text',
     drawColor: '#D4A853',
+    noteTool: 'pencil',
     noteCanvas: null, noteCtx: null, noteDrawing: false, noteLastX: 0, noteLastY: 0,
     noteSaveTimer: null,
 };
@@ -826,7 +833,7 @@ const START_RAD = START_DEG * Math.PI / 180;
 const END_RAD = (START_DEG + SWEEP_DEG) * Math.PI / 180;
 const SWEEP_RAD = SWEEP_DEG * Math.PI / 180;
 const STORAGE_KEY = 'kasika-pro-v4';
-const SCHEDULE_AHEAD = 0.2, SCHEDULE_INTERVAL = 25;
+const SCHEDULE_AHEAD = 0.35, SCHEDULE_INTERVAL = 20;
 
 const SUBDIVISIONS = {
     quarter:             { mult: 1, label: 'Quarter',        short: 'Qtr' },
@@ -879,6 +886,7 @@ function cycleBeatTone(idx) {
 }
 
 function updateBeatBlocksVisual() {
+    if (currentAppView !== 'setlists') return;
     const mult = getSubdivMult(), p = state.beatPulse;
     BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
         const container = document.getElementById(id);
@@ -920,7 +928,16 @@ function isAngleInArc(angle) {
 
 // ===== AUDIO ENGINE =====
 function ensureAudio() {
-    if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!state.audioCtx) {
+        state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Mobile browsers / OS power-saving can suspend the audio context out from under us
+        // (screen lock, phone call, backgrounded tab). Auto-resume the instant that happens.
+        state.audioCtx.onstatechange = () => {
+            if (state.audioCtx.state === 'suspended' && state.isPlaying) {
+                state.audioCtx.resume();
+            }
+        };
+    }
     if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
 }
 
@@ -1017,18 +1034,24 @@ function getSubdivisionPanValue() {
 
 function playClick(type, time, beatNum) {
     const kit = state.soundKit;
+    const c = state.audioCtx;
+    // If the JS thread stalled and this note's time has already slipped well into the
+    // past, drop it rather than clamping it to "now" — clamping several late notes
+    // together is what produced the audible glitch/cluster. A clean skip sounds better
+    // than a garbled burst, and the very next on-time note keeps the beat locked.
+    if (time < c.currentTime - 0.05) return;
     const pan = type === 'sub' ? getSubdivisionPanValue() : 0;
     if (kit === 'voice') {
         if (type === 'sub') {
-            const c = state.audioCtx, t = Math.max(time, c.currentTime);
+            const t = Math.max(time, c.currentTime);
             playBeep(c, t, 'sub', state.volume * 0.6, pan);
         } else {
-            const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
+            const delay = Math.max(0, (time - c.currentTime) * 1000);
             setTimeout(() => speakBeat(beatNum), delay);
         }
         return;
     }
-    const c = state.audioCtx, t = Math.max(time, c.currentTime), v = state.volume;
+    const t = Math.max(time, c.currentTime), v = state.volume;
     if (kit === 'woodblock') { playWoodblock(c, t, type, v, pan); return; }
     if (kit === 'cowbell') { playCowbell(c, t, type, v, pan); return; }
     playBeep(c, t, type, v, pan);
@@ -1049,11 +1072,27 @@ function stopMetronome() {
 
 function scheduler() {
     if (!state.isPlaying) return;
+    if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
     const ct = state.audioCtx.currentTime;
-    if (state.nextNoteTime < ct - 0.3) { state.nextNoteTime = ct + 0.02; state.currentClick = 0; }
+    if (state.nextNoteTime < ct - 0.5) { state.nextNoteTime = ct + 0.03; state.currentClick = 0; }
     while (state.nextNoteTime < ct + SCHEDULE_AHEAD) { scheduleNote(state.currentClick, state.nextNoteTime); advanceClick(); }
     state.schedulerTimer = setTimeout(scheduler, SCHEDULE_INTERVAL);
 }
+
+function recoverAudioIfNeeded() {
+    if (!state.audioCtx) return;
+    if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+    if (state.isPlaying) {
+        // Coming back from a background tab / locked screen can leave nextNoteTime
+        // stale by many seconds. Rather than let the catch-up logic try to replay a
+        // long silent gap, just cleanly resync to "now" on the next beat.
+        state.nextNoteTime = state.audioCtx.currentTime + 0.03;
+        state.currentClick = 0;
+    }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) recoverAudioIfNeeded(); });
+window.addEventListener('focus', recoverAudioIfNeeded);
+window.addEventListener('pageshow', recoverAudioIfNeeded);
 
 function scheduleNote(ci, time) {
     const m = getSubdivMult(), isSub = ci % m !== 0, mb = Math.floor(ci / m);
@@ -1327,9 +1366,24 @@ function getCanvasCoords(e) {
     const cy = e.touches ? e.touches[0].clientY : e.clientY;
     return { x: (cx - r.left) * (state.canvasSize / r.width), y: (cy - r.top) * (state.canvasSize / r.height) };
 }
+function hitTestBeatDot(x, y, cx, cy) {
+    const sz = state.canvasSize, R = sz * 0.42, dR = R * 0.55;
+    const beats = getBeatsPerMeasure(), mult = getSubdivMult(), total = beats * mult;
+    const ms = Math.max(7, sz * 0.026);
+    const hitR = ms * 2.1;
+    for (let i = 0; i < beats; i++) {
+        const a = -Math.PI / 2 + ((i * mult) / total) * Math.PI * 2;
+        const dx = cx + dR * Math.cos(a), dy = cy + dR * Math.sin(a);
+        if (Math.sqrt((x - dx) ** 2 + (y - dy) ** 2) <= hitR) return i;
+    }
+    return -1;
+}
+
 function handlePointerDown(e) {
     e.preventDefault();
     const { x, y } = getCanvasCoords(e), cx = state.canvasSize / 2, cy = state.canvasSize / 2;
+    const beatIdx = hitTestBeatDot(x, y, cx, cy);
+    if (beatIdx !== -1) { cycleBeatTone(beatIdx); return; }
     const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
     if (Math.abs(d - state.canvasSize * 0.42) < state.canvasSize * 0.08 || d < state.canvasSize * 0.36) {
         state.isDragging = true; state.canvas.classList.add('dragging');
@@ -1650,6 +1704,7 @@ function openNoteEditor(id) {
     document.getElementById('boldBtn').classList.remove('active');
     document.querySelectorAll('#textTools .color-swatch').forEach(s => s.classList.remove('active'));
     document.querySelector('#textTools .color-swatch[data-text-color="#fafafa"]').classList.add('active');
+    setDrawTool('pencil');
     setNoteMode('text');
     pushView('note-editor');
     applyViewState('note-editor');
@@ -1756,17 +1811,24 @@ function noteDrawStart(e) {
     state.noteDrawing = true;
     const p = getCanvasPoint(e);
     state.noteLastX = p.x; state.noteLastY = p.y;
-    state.noteCtx.strokeStyle = state.drawColor;
-    state.noteCtx.beginPath();
-    state.noteCtx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
-    state.noteCtx.fillStyle = state.drawColor;
-    state.noteCtx.fill();
+    const ctx = state.noteCtx;
+    const isEraser = state.noteTool === 'eraser';
+    ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+    ctx.lineWidth = isEraser ? 20 : 3;
+    ctx.strokeStyle = state.drawColor;
+    ctx.fillStyle = state.drawColor;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, isEraser ? 10 : 1.5, 0, Math.PI * 2);
+    ctx.fill();
 }
 function noteDrawMove(e) {
     if (!state.noteDrawing) return;
     e.preventDefault();
     const p = getCanvasPoint(e);
     const ctx = state.noteCtx;
+    const isEraser = state.noteTool === 'eraser';
+    ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+    ctx.lineWidth = isEraser ? 20 : 3;
     ctx.strokeStyle = state.drawColor;
     ctx.beginPath();
     ctx.moveTo(state.noteLastX, state.noteLastY);
@@ -1777,12 +1839,19 @@ function noteDrawMove(e) {
 function noteDrawEnd() {
     if (!state.noteDrawing) return;
     state.noteDrawing = false;
+    if (state.noteCtx) state.noteCtx.globalCompositeOperation = 'source-over';
     const note = getActiveNote();
     if (note && state.noteCanvas) {
         note.drawingDataUrl = state.noteCanvas.toDataURL('image/png');
         note.updatedAt = Date.now();
         saveData();
     }
+}
+
+function setDrawTool(tool) {
+    state.noteTool = tool;
+    document.getElementById('drawPencilBtn').classList.toggle('active', tool === 'pencil');
+    document.getElementById('drawEraserBtn').classList.toggle('active', tool === 'eraser');
 }
 
 function clearNoteDrawing() {
@@ -2272,6 +2341,8 @@ function animationLoop() {
 function updateSetlistBpmDisplay() {
     const el = document.getElementById('bpmDisplaySetlist');
     if (el) el.textContent = state.bpm;
+    const elMain = document.getElementById('bpmDisplayMain');
+    if (elMain) elMain.textContent = state.bpm;
 }
 
 // ===== VIEW NAVIGATION (History API — makes phone/browser Back close the current view instead of leaving the app) =====
@@ -2360,6 +2431,8 @@ function setupEvents() {
             sw.classList.add('active');
         });
     });
+    document.getElementById('drawPencilBtn').addEventListener('click', () => setDrawTool('pencil'));
+    document.getElementById('drawEraserBtn').addEventListener('click', () => setDrawTool('eraser'));
     document.getElementById('drawClearBtn').addEventListener('click', clearNoteDrawing);
 
     // Text formatting (bold + color). mousedown preventDefault keeps the text
