@@ -192,10 +192,10 @@ tailwind.config = {
         padding: 10px 12px 12px;
     }
     .beat-block {
-        width: 38px; height: 38px; border-radius: 9px;
+        width: 46px; height: 46px; border-radius: 10px;
         background: #17171b; border: 1.5px solid #2a2a30;
         display: flex; align-items: center; justify-content: center;
-        font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700;
+        font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700;
         cursor: pointer; user-select: none; flex-shrink: 0;
         transition: background-color 0.08s ease-out, box-shadow 0.08s ease-out, transform 0.08s ease-out, color 0.08s ease-out;
     }
@@ -208,6 +208,20 @@ tailwind.config = {
     .pan-opt-btn { background: #0e0e10; border: 1px solid #2a2a30; color: #71717a; transition: all 0.15s; }
     .pan-opt-btn:hover { border-color: rgba(45,212,191,0.4); }
     .pan-opt-btn.pan-active { border-color: #2dd4bf; color: #2dd4bf; background: rgba(45,212,191,0.1); }
+    .note-mode-btn {
+        flex-shrink: 0; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
+        background: #17171b; border: 1px solid #2a2a30; color: #71717a; transition: all 0.15s;
+    }
+    .note-mode-btn:hover { color: #a1a1aa; }
+    .note-mode-btn.active { background: rgba(45,212,191,0.12); border-color: #2dd4bf; color: #2dd4bf; }
+    .draw-color-swatch {
+        width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; flex-shrink: 0; cursor: pointer;
+        transition: transform 0.1s, border-color 0.1s;
+    }
+    .draw-color-swatch:hover { transform: scale(1.1); }
+    .draw-color-swatch.active { border-color: #fafafa; box-shadow: 0 0 0 2px #09090b, 0 0 0 3px currentColor; }
+    .note-item { transition: background 0.15s; cursor: pointer; }
+    .note-item:hover { background: rgba(45,212,191,0.06); }
     .practice-active { color: #D4A853 !important; border-color: rgba(212,168,83,0.5) !important; background: rgba(212,168,83,0.08) !important; }
     @keyframes ramp-dot {
         0%, 100% { opacity: 0.35; } 50% { opacity: 1; }
@@ -245,6 +259,16 @@ tailwind.config = {
             <span class="hidden sm:inline">Arrows: BPM</span>
         </div>
         <div class="w-px h-4 bg-brd hidden sm:block"></div>
+        <button id="mainSearchBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all text-xs" title="Search set-lists and songs" aria-label="Search">
+            <i class="fas fa-magnifying-glass"></i>
+        </button>
+        <button id="openSetlistsBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-gold hover:border-gold/30 transition-all font-medium" title="Open set-lists">
+            <i class="fas fa-list-ul text-[10px]"></i><span class="hidden sm:inline">Set-lists</span>
+        </button>
+        <button id="openNotesBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all font-medium" title="Open notes">
+            <i class="fas fa-note-sticky text-[10px]"></i><span class="hidden sm:inline">Notes</span>
+        </button>
+        <div class="w-px h-4 bg-brd hidden sm:block"></div>
         <button id="syncSignInBtn" class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
             <i class="fas fa-cloud-arrow-up text-[10px]"></i>
             <span class="hidden sm:inline">Sync</span>
@@ -265,12 +289,10 @@ tailwind.config = {
             <canvas id="wheelCanvas"></canvas>
         </div>
 
-        <div class="beat-blocks-bar w-full max-w-md rounded-xl">
-            <div class="flex items-center justify-between mb-2 px-0.5">
-                <span class="text-[10px] text-zinc-600 uppercase tracking-wider">Beat Tones</span>
-                <span class="text-[10px] text-zinc-700">tap a block to cycle its tone</span>
-            </div>
-            <div class="flex items-center justify-center gap-1.5 flex-wrap" id="beatBlocksContainer"></div>
+        <div class="w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-4 py-3 flex items-center justify-center gap-6">
+            <button id="tempoMinusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Decrease tempo">−</button>
+            <span class="text-[11px] text-zinc-600 uppercase tracking-wider font-medium">Tempo Nudge</span>
+            <button id="tempoPlusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Increase tempo">+</button>
         </div>
 
         <div class="flex flex-wrap items-center justify-center gap-3 mt-5 w-full max-w-md">
@@ -331,58 +353,145 @@ tailwind.config = {
             <span id="songModStatusText"></span>
         </div>
     </section>
+</main>
 
-    <aside class="w-full lg:w-[420px] lg:flex-shrink-0 flex flex-col">
-        <div class="bg-s2/60 border border-brd/50 rounded-2xl overflow-hidden flex flex-col lg:max-h-[calc(100vh-120px)]">
-            <div class="p-4 border-b border-brd/50">
-                <div class="flex items-center justify-between mb-3">
-                    <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-300 uppercase">Set-lists</h2>
-                    <div class="flex gap-1.5">
-                        <button id="searchBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Search set-lists and songs" title="Search">
-                            <i class="fas fa-magnifying-glass"></i>
-                        </button>
-                        <button id="addSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="New set-list" title="New set-list">
-                            <i class="fas fa-plus"></i>
-                        </button>
-                        <button id="exportSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Export set-list" title="Export set-list as JSON">
-                            <i class="fas fa-download"></i>
-                        </button>
-                        <button id="deleteSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs" aria-label="Delete set-list" title="Delete set-list">
-                            <i class="fas fa-trash-can"></i>
-                        </button>
-                    </div>
+<div id="setlistsView" class="fixed inset-0 z-[200] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50">
+        <div class="flex items-center gap-3 px-4 pt-3 pb-1">
+            <button id="closeSetlistsBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" aria-label="Back to metronome" title="Back to metronome">
+                <i class="fas fa-arrow-left text-xs"></i>
+            </button>
+            <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-200 uppercase flex-1">Set-lists</h2>
+        </div>
+
+        <div class="px-4 pt-2">
+            <div class="flex items-center justify-between mb-2 px-0.5">
+                <span class="text-[10px] text-zinc-600 uppercase tracking-wider">Beat Tones</span>
+                <span class="text-[10px] text-zinc-700">tap a block to cycle its tone</span>
+            </div>
+            <div class="flex items-center justify-center gap-2 flex-wrap pb-1" id="beatBlocksContainerSetlist"></div>
+        </div>
+
+        <div class="p-4 border-b border-brd/50">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex gap-1.5">
+                    <button id="searchBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Search set-lists and songs" title="Search">
+                        <i class="fas fa-magnifying-glass"></i>
+                    </button>
+                    <button id="addSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="New set-list" title="New set-list">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                    <button id="exportSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-gold hover:border-gold/30 transition-all text-xs" aria-label="Export set-list" title="Export set-list as JSON">
+                        <i class="fas fa-download"></i>
+                    </button>
+                    <button id="deleteSetlistBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs" aria-label="Delete set-list" title="Delete set-list">
+                        <i class="fas fa-trash-can"></i>
+                    </button>
                 </div>
-                <select id="setlistSelect" class="custom-select w-full" aria-label="Select set-list"></select>
             </div>
+            <select id="setlistSelect" class="custom-select w-full" aria-label="Select set-list"></select>
+        </div>
 
-            <div class="px-4 py-2 border-b border-brd/30 flex items-center justify-between" id="editBar">
-                <button id="editToggleBtn" class="flex items-center gap-2 text-sm font-semibold tracking-wide transition-all px-3.5 py-2 rounded-lg border" aria-label="Toggle edit mode">
-                    <i class="fas fa-pen-to-square text-sm" id="editToggleIcon"></i>
-                    <span id="editToggleLabel">EDIT MODE</span>
-                </button>
-                <span id="editSongCount" class="text-[11px] text-zinc-600"></span>
+        <div class="px-4 py-2 border-b border-brd/30 flex items-center justify-between" id="editBar">
+            <button id="editToggleBtn" class="flex items-center gap-2 text-sm font-semibold tracking-wide transition-all px-3.5 py-2 rounded-lg border" aria-label="Toggle edit mode">
+                <i class="fas fa-pen-to-square text-sm" id="editToggleIcon"></i>
+                <span id="editToggleLabel">EDIT MODE</span>
+            </button>
+            <span id="editSongCount" class="text-[11px] text-zinc-600"></span>
+        </div>
+
+        <div class="p-3 border-b border-brd/50 hidden flex-col gap-2" id="addSongArea">
+            <button id="addSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
+                <i class="fas fa-plus mr-2 text-xs"></i>Add New Song
+            </button>
+            <button id="findExistingSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
+                <i class="fas fa-magnifying-glass mr-2 text-xs"></i>Find Existing Song
+            </button>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto" id="songListContainer">
+        <div id="songList"></div>
+        <div id="emptyState" class="hidden p-8 text-center">
+            <i class="fas fa-music text-zinc-700 text-3xl mb-3"></i>
+            <p class="text-zinc-600 text-sm">No songs yet</p>
+            <p class="text-zinc-700 text-xs mt-1">Enable edit mode to add songs</p>
+        </div>
+    </div>
+
+    <div class="flex-shrink-0 bg-[#0e0e10] border-t border-brd/50 px-4 py-3">
+        <div class="flex items-center justify-center gap-4 max-w-md mx-auto">
+            <button id="playBtnSetlist" class="w-14 h-14 flex-shrink-0 rounded-full bg-s2 border-2 border-gold/30 flex items-center justify-center text-gold text-lg hover:border-gold/60 hover:bg-gold/5 transition-all" aria-label="Play or stop">
+                <i class="fas fa-play ml-0.5" id="playIconSetlist"></i>
+            </button>
+            <button id="tempoMinusBtn" class="w-10 h-10 flex-shrink-0 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-lg font-semibold hover:border-gold/40 hover:text-gold transition-all" aria-label="Decrease tempo">−</button>
+            <div class="text-center flex-1 min-w-0">
+                <div class="font-mono text-3xl font-light text-zinc-100 tabular-nums leading-none" id="bpmDisplaySetlist">120</div>
+                <div class="text-[10px] text-zinc-600 uppercase tracking-wider mt-0.5">BPM</div>
             </div>
+            <button id="tempoPlusBtn" class="w-10 h-10 flex-shrink-0 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-lg font-semibold hover:border-gold/40 hover:text-gold transition-all" aria-label="Increase tempo">+</button>
+        </div>
+    </div>
+</div>
 
-            <div class="p-3 border-b border-brd/50 hidden flex-col gap-2" id="addSongArea">
-                <button id="addSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
-                    <i class="fas fa-plus mr-2 text-xs"></i>Add New Song
-                </button>
-                <button id="findExistingSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
-                    <i class="fas fa-magnifying-glass mr-2 text-xs"></i>Find Existing Song
-                </button>
-            </div>
-
-            <div class="flex-1 overflow-y-auto" id="songListContainer">
-                <div id="songList"></div>
-                <div id="emptyState" class="hidden p-8 text-center">
-                    <i class="fas fa-music text-zinc-700 text-3xl mb-3"></i>
-                    <p class="text-zinc-600 text-sm">No songs yet</p>
-                    <p class="text-zinc-700 text-xs mt-1">Enable edit mode to add songs</p>
-                </div>
+<div id="notesView" class="fixed inset-0 z-[200] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50">
+        <div class="flex items-center gap-3 px-4 pt-3 pb-3">
+            <button id="closeNotesBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all" aria-label="Back to metronome" title="Back to metronome">
+                <i class="fas fa-arrow-left text-xs"></i>
+            </button>
+            <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-200 uppercase flex-1">Notes</h2>
+            <button id="newNoteBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-400 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all" aria-label="New note" title="New note">
+                <i class="fas fa-plus text-xs"></i>
+            </button>
+        </div>
+        <div class="px-4 pb-3">
+            <div class="relative">
+                <i class="fas fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600 text-xs"></i>
+                <input type="text" id="notesSearchInput" class="modal-input" style="padding-left:34px;" placeholder="Search all notes...">
             </div>
         </div>
-    </aside>
-</main>
+    </div>
+    <div class="flex-1 overflow-y-auto" id="notesListContainer">
+        <div id="notesList"></div>
+        <div id="notesEmptyState" class="hidden p-10 text-center">
+            <i class="fas fa-note-sticky text-zinc-700 text-3xl mb-3"></i>
+            <p class="text-zinc-600 text-sm">No notes yet</p>
+            <p class="text-zinc-700 text-xs mt-1">Tap + to write or sketch something</p>
+        </div>
+    </div>
+</div>
+
+<div id="noteEditorView" class="fixed inset-0 z-[210] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50 px-3 py-2.5 flex items-center gap-2">
+        <button id="closeNoteEditorBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all" aria-label="Back to notes" title="Back to notes">
+            <i class="fas fa-arrow-left text-xs"></i>
+        </button>
+        <input type="text" id="noteTitleInput" class="flex-1 min-w-0 bg-transparent text-zinc-100 font-display font-semibold text-base outline-none placeholder:text-zinc-600" placeholder="Untitled note">
+        <button id="deleteNoteBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all" aria-label="Delete note" title="Delete note">
+            <i class="fas fa-trash-can text-xs"></i>
+        </button>
+    </div>
+    <div class="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-brd/30 bg-s2/40 overflow-x-auto">
+        <button type="button" class="note-mode-btn" data-mode="text" id="noteModeTextBtn"><i class="fas fa-align-left mr-1.5"></i>Text</button>
+        <button type="button" class="note-mode-btn" data-mode="draw" id="noteModeDrawBtn"><i class="fas fa-pencil mr-1.5"></i>Draw</button>
+        <div class="flex-1"></div>
+        <div id="drawTools" class="hidden items-center gap-1.5 flex-shrink-0">
+            <button type="button" class="draw-color-swatch active" data-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+            <button type="button" class="draw-color-swatch" data-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+            <button type="button" class="draw-color-swatch" data-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+            <button type="button" class="draw-color-swatch" data-color="#fafafa" style="background:#fafafa" title="White"></button>
+            <button type="button" class="draw-color-swatch" data-color="#f87171" style="background:#f87171" title="Red"></button>
+            <button type="button" id="drawClearBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs ml-1" title="Clear drawing">
+                <i class="fas fa-eraser"></i>
+            </button>
+        </div>
+    </div>
+    <div class="flex-1 relative overflow-hidden" id="noteContentArea">
+        <textarea id="noteTextArea" class="absolute inset-0 w-full h-full bg-transparent text-zinc-200 text-sm leading-relaxed p-4 resize-none outline-none placeholder:text-zinc-700" placeholder="Write anything — lyrics, set notes, reminders..."></textarea>
+        <canvas id="noteDrawCanvas" class="hidden absolute inset-0 w-full h-full" style="touch-action:none;"></canvas>
+    </div>
+</div>
 
 <div class="modal-overlay" id="songModal">
     <div class="modal-box" style="max-width:460px;">
@@ -616,7 +725,7 @@ function startRemoteSync(uid) {
             // First time this account has synced: push whatever is currently local up to the cloud.
             docRef.set({
                 setlists: state.setlists, activeSetlistId: state.activeSetlistId,
-                soundKit: state.soundKit, beatTones: state.beatTones,
+                soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
             return;
@@ -628,10 +737,12 @@ function startRemoteSync(uid) {
         if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones }));
+        if (Array.isArray(d.notes)) state.notes = d.notes;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes }));
         renderSetlistSelect(); renderSongs();
         document.getElementById('soundKitSelect').value = state.soundKit;
         renderBeatBlocks();
+        renderNotesList();
         applyingRemoteUpdate = false;
     }, err => console.warn('Sync listener error:', err));
 }
@@ -646,7 +757,7 @@ function pushToCloud() {
     saveDebounceTimer = setTimeout(() => {
         fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).set({
             setlists: state.setlists, activeSetlistId: state.activeSetlistId,
-            soundKit: state.soundKit, beatTones: state.beatTones,
+            soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         }, { merge: true }).catch(err => console.warn('Cloud save failed:', err));
     }, 600);
@@ -683,6 +794,12 @@ const state = {
     songMod: { active: false, sections: [], index: 0, barsElapsed: 0, loop: false },
     beatTones: [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
     subdivisionPan: 'center',
+    notes: [],
+    activeNoteId: null,
+    noteMode: 'text',
+    drawColor: '#D4A853',
+    noteCanvas: null, noteCtx: null, noteDrawing: false, noteLastX: 0, noteLastY: 0,
+    noteSaveTimer: null,
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -719,18 +836,20 @@ function hexToRgba(hex, alpha) {
 
 // ===== BEAT TONE BLOCKS =====
 const TONE_COLORS = { 1: '#2dd4bf', 2: '#F472B6', 3: '#F0C96E' };
+const BEAT_BLOCK_CONTAINER_IDS = ['beatBlocksContainerSetlist'];
 
 function renderBeatBlocks() {
     const n = getBeatsPerMeasure();
-    const container = document.getElementById('beatBlocksContainer');
-    if (!container) return;
     let html = '';
     for (let i = 0; i < n; i++) {
         const tone = state.beatTones[i] || 2;
         const color = TONE_COLORS[tone];
         html += `<button type="button" class="beat-block" data-beat-idx="${i}" style="--tone-color:${color}; border-color:${color}66; color:${color};" title="Beat ${i + 1} · tone ${tone} — click to cycle">${i + 1}</button>`;
     }
-    container.innerHTML = html;
+    BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
+        const container = document.getElementById(id);
+        if (container) container.innerHTML = html;
+    });
 }
 
 function cycleBeatTone(idx) {
@@ -742,20 +861,22 @@ function cycleBeatTone(idx) {
 }
 
 function updateBeatBlocksVisual() {
-    const container = document.getElementById('beatBlocksContainer');
-    if (!container) return;
     const mult = getSubdivMult(), p = state.beatPulse;
-    container.querySelectorAll('.beat-block').forEach(btn => {
-        const idx = parseInt(btn.dataset.beatIdx, 10);
-        if (state.visualClick === idx * mult && p > 0) {
-            btn.classList.add('lit');
-            btn.style.opacity = String(0.6 + p * 0.4);
-            btn.style.transform = `scale(${1 + p * 0.12})`;
-        } else {
-            btn.classList.remove('lit');
-            btn.style.opacity = '';
-            btn.style.transform = '';
-        }
+    BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
+        const container = document.getElementById(id);
+        if (!container) return;
+        container.querySelectorAll('.beat-block').forEach(btn => {
+            const idx = parseInt(btn.dataset.beatIdx, 10);
+            if (state.visualClick === idx * mult && p > 0) {
+                btn.classList.add('lit');
+                btn.style.opacity = String(0.6 + p * 0.4);
+                btn.style.transform = `scale(${1 + p * 0.12})`;
+            } else {
+                btn.classList.remove('lit');
+                btn.style.opacity = '';
+                btn.style.transform = '';
+            }
+        });
     });
 }
 
@@ -1257,6 +1378,7 @@ function loadData() {
             state.activeSetlistId = d.activeSetlistId || state.setlists[0]?.id;
             if (d.soundKit) state.soundKit = d.soundKit;
             if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
+            if (Array.isArray(d.notes)) state.notes = d.notes;
             // Migrate old songs missing subdivision, or using the old 'triplet' key
             state.setlists.forEach(sl => sl.songs.forEach(song => {
                 if (!song.subdivision) song.subdivision = 'quarter';
@@ -1270,7 +1392,7 @@ function loadData() {
 }
 
 function saveData() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes }));
     pushToCloud();
 }
 function getActiveSetlist() { return state.setlists.find(s => s.id === state.activeSetlistId) || null; }
@@ -1444,6 +1566,213 @@ function openSearchModal() {
     renderSearchResults('');
     showModal('searchModal');
     setTimeout(() => document.getElementById('searchInput').focus(), 200);
+}
+
+// ===== NOTES =====
+function openNotesView() {
+    document.getElementById('notesView').classList.remove('hidden');
+    document.getElementById('notesView').classList.add('flex');
+    document.getElementById('notesSearchInput').value = '';
+    renderNotesList('');
+}
+function closeNotesView() {
+    document.getElementById('notesView').classList.add('hidden');
+    document.getElementById('notesView').classList.remove('flex');
+}
+
+function renderNotesList(query) {
+    const q = (query || '').trim().toLowerCase();
+    const list = document.getElementById('notesList');
+    const empty = document.getElementById('notesEmptyState');
+    let items = state.notes.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    if (q) items = items.filter(n => (n.title || '').toLowerCase().includes(q) || (n.content || '').toLowerCase().includes(q));
+
+    if (!items.length) {
+        list.innerHTML = '';
+        empty.classList.remove('hidden');
+        if (q) { empty.querySelector('p').textContent = 'No matching notes'; }
+        else { empty.querySelector('p').textContent = 'No notes yet'; }
+        return;
+    }
+    empty.classList.add('hidden');
+    list.innerHTML = items.map(n => {
+        const title = escHtml(n.title || 'Untitled note');
+        const snippet = escHtml((n.content || '').replace(/\s+/g, ' ').trim().slice(0, 90));
+        const hasDrawing = !!n.drawingDataUrl;
+        const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+        return `
+        <div class="note-item flex items-start gap-3 px-4 py-3 border-b border-brd/20" data-note-id="${n.id}">
+            <div class="w-9 h-9 rounded-lg bg-s3 border border-brd/50 flex items-center justify-center flex-shrink-0 text-[#2dd4bf]">
+                <i class="fas ${hasDrawing ? 'fa-pencil' : 'fa-note-sticky'} text-xs"></i>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-zinc-200 truncate">${title}</div>
+                <div class="text-[11px] text-zinc-600 truncate mt-0.5">${snippet || (hasDrawing ? 'Drawing' : 'No additional text')}</div>
+            </div>
+            <span class="text-[10px] text-zinc-700 flex-shrink-0 mt-1">${date}</span>
+        </div>`;
+    }).join('');
+}
+
+function createNewNote() {
+    const note = { id: genId(), title: '', content: '', drawingDataUrl: null, updatedAt: Date.now() };
+    state.notes.push(note);
+    saveData();
+    openNoteEditor(note.id);
+}
+
+function openNoteEditor(id) {
+    const note = state.notes.find(n => n.id === id);
+    if (!note) return;
+    state.activeNoteId = id;
+    document.getElementById('noteTitleInput').value = note.title || '';
+    document.getElementById('noteTextArea').value = note.content || '';
+    setNoteMode('text');
+    document.getElementById('noteEditorView').classList.remove('hidden');
+    document.getElementById('noteEditorView').classList.add('flex');
+    setTimeout(() => {
+        setupNoteCanvas();
+    }, 50);
+}
+
+function closeNoteEditor() {
+    saveActiveNote(true);
+    document.getElementById('noteEditorView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.remove('flex');
+    state.activeNoteId = null;
+    renderNotesList(document.getElementById('notesSearchInput').value);
+}
+
+function getActiveNote() { return state.notes.find(n => n.id === state.activeNoteId) || null; }
+
+function saveActiveNote(immediate) {
+    const note = getActiveNote();
+    if (!note) return;
+    const doSave = () => {
+        note.title = document.getElementById('noteTitleInput').value.trim();
+        note.content = document.getElementById('noteTextArea').value;
+        note.updatedAt = Date.now();
+        saveData();
+    };
+    if (immediate) { clearTimeout(state.noteSaveTimer); doSave(); return; }
+    clearTimeout(state.noteSaveTimer);
+    state.noteSaveTimer = setTimeout(doSave, 500);
+}
+
+function deleteActiveNote() {
+    const note = getActiveNote();
+    if (!note) return;
+    document.getElementById('deleteTitle').textContent = `Delete "${note.title || 'Untitled note'}"?`;
+    document.getElementById('deleteMessage').textContent = 'This note (and any drawing on it) will be permanently removed.';
+    document.getElementById('deleteConfirmBtn').onclick = () => {
+        state.notes = state.notes.filter(n => n.id !== note.id);
+        state.activeNoteId = null;
+        saveData();
+        hideModal('deleteModal');
+        document.getElementById('noteEditorView').classList.add('hidden');
+        document.getElementById('noteEditorView').classList.remove('flex');
+        renderNotesList(document.getElementById('notesSearchInput').value);
+        showToast('Note deleted');
+    };
+    showModal('deleteModal');
+}
+
+function setNoteMode(mode) {
+    state.noteMode = mode;
+    const textArea = document.getElementById('noteTextArea');
+    const canvas = document.getElementById('noteDrawCanvas');
+    const drawTools = document.getElementById('drawTools');
+    document.getElementById('noteModeTextBtn').classList.toggle('active', mode === 'text');
+    document.getElementById('noteModeDrawBtn').classList.toggle('active', mode === 'draw');
+    if (mode === 'draw') {
+        textArea.classList.add('hidden');
+        canvas.classList.remove('hidden');
+        drawTools.classList.remove('hidden'); drawTools.classList.add('flex');
+        setupNoteCanvas();
+    } else {
+        textArea.classList.remove('hidden');
+        canvas.classList.add('hidden');
+        drawTools.classList.add('hidden'); drawTools.classList.remove('flex');
+    }
+}
+
+// ---- Drawing engine ----
+function setupNoteCanvas() {
+    const canvas = document.getElementById('noteDrawCanvas');
+    const container = document.getElementById('noteContentArea');
+    if (!canvas || !container) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
+    state.noteCanvas = canvas; state.noteCtx = ctx;
+    const note = getActiveNote();
+    if (note) loadDrawingIntoCanvas(note.drawingDataUrl);
+}
+
+function loadDrawingIntoCanvas(dataUrl) {
+    const ctx = state.noteCtx, canvas = state.noteCanvas;
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!dataUrl) return;
+    const img = new Image();
+    img.onload = () => {
+        const dpr = window.devicePixelRatio || 1;
+        ctx.drawImage(img, 0, 0, canvas.width / dpr, canvas.height / dpr);
+    };
+    img.src = dataUrl;
+}
+
+function getCanvasPoint(e) {
+    const canvas = state.noteCanvas;
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function noteDrawStart(e) {
+    if (state.noteMode !== 'draw') return;
+    e.preventDefault();
+    state.noteDrawing = true;
+    const p = getCanvasPoint(e);
+    state.noteLastX = p.x; state.noteLastY = p.y;
+    state.noteCtx.strokeStyle = state.drawColor;
+    state.noteCtx.beginPath();
+    state.noteCtx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+    state.noteCtx.fillStyle = state.drawColor;
+    state.noteCtx.fill();
+}
+function noteDrawMove(e) {
+    if (!state.noteDrawing) return;
+    e.preventDefault();
+    const p = getCanvasPoint(e);
+    const ctx = state.noteCtx;
+    ctx.strokeStyle = state.drawColor;
+    ctx.beginPath();
+    ctx.moveTo(state.noteLastX, state.noteLastY);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    state.noteLastX = p.x; state.noteLastY = p.y;
+}
+function noteDrawEnd() {
+    if (!state.noteDrawing) return;
+    state.noteDrawing = false;
+    const note = getActiveNote();
+    if (note && state.noteCanvas) {
+        note.drawingDataUrl = state.noteCanvas.toDataURL('image/png');
+        note.updatedAt = Date.now();
+        saveData();
+    }
+}
+
+function clearNoteDrawing() {
+    const ctx = state.noteCtx, canvas = state.noteCanvas;
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const note = getActiveNote();
+    if (note) { note.drawingDataUrl = null; note.updatedAt = Date.now(); saveData(); }
 }
 
 function renderSongSuggestions(query) {
@@ -1682,8 +2011,14 @@ function updateEditBarUI() {
 
 function updatePlayBtn() {
     const btn = document.getElementById('playBtn'), icon = document.getElementById('playIcon');
-    if (state.isPlaying) { icon.className = 'fas fa-stop'; btn.classList.add('play-active'); btn.style.borderColor = 'rgba(212,168,83,0.6)'; }
-    else { icon.className = 'fas fa-play ml-0.5'; btn.classList.remove('play-active'); btn.style.borderColor = ''; }
+    const btn2 = document.getElementById('playBtnSetlist'), icon2 = document.getElementById('playIconSetlist');
+    if (state.isPlaying) {
+        icon.className = 'fas fa-stop'; btn.classList.add('play-active'); btn.style.borderColor = 'rgba(212,168,83,0.6)';
+        if (icon2) { icon2.className = 'fas fa-stop'; btn2.classList.add('play-active'); btn2.style.borderColor = 'rgba(212,168,83,0.6)'; }
+    } else {
+        icon.className = 'fas fa-play ml-0.5'; btn.classList.remove('play-active'); btn.style.borderColor = '';
+        if (icon2) { icon2.className = 'fas fa-play ml-0.5'; btn2.classList.remove('play-active'); btn2.style.borderColor = ''; }
+    }
 }
 
 function showModal(id) { document.getElementById(id).classList.add('active'); }
@@ -1912,7 +2247,27 @@ function animationLoop() {
     state.beatPulse = Math.max(0, 1 - (performance.now() - state.lastBeatTimestamp) / 220);
     drawWheel();
     updateBeatBlocksVisual();
+    updateSetlistBpmDisplay();
     requestAnimationFrame(animationLoop);
+}
+
+function updateSetlistBpmDisplay() {
+    const el = document.getElementById('bpmDisplaySetlist');
+    if (el) el.textContent = state.bpm;
+}
+
+function openSetlistsView() {
+    document.getElementById('setlistsView').classList.remove('hidden');
+    document.getElementById('setlistsView').classList.add('flex');
+}
+
+function closeSetlistsView() {
+    document.getElementById('setlistsView').classList.add('hidden');
+    document.getElementById('setlistsView').classList.remove('flex');
+}
+
+function adjustTempo(delta) {
+    state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + delta));
 }
 
 // ===== EVENT LISTENERS =====
@@ -1927,6 +2282,45 @@ function setupEvents() {
     canvas.addEventListener('wheel', e => { e.preventDefault(); state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + (e.deltaY > 0 ? -1 : 1))); }, { passive: false });
 
     document.getElementById('playBtn').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
+    document.getElementById('playBtnSetlist').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
+    document.getElementById('tempoMinusBtn').addEventListener('click', () => adjustTempo(-1));
+    document.getElementById('tempoPlusBtn').addEventListener('click', () => adjustTempo(1));
+    document.getElementById('tempoMinusBtnMain').addEventListener('click', () => adjustTempo(-1));
+    document.getElementById('tempoPlusBtnMain').addEventListener('click', () => adjustTempo(1));
+    document.getElementById('openSetlistsBtn').addEventListener('click', openSetlistsView);
+    document.getElementById('closeSetlistsBtn').addEventListener('click', closeSetlistsView);
+    document.getElementById('mainSearchBtn').addEventListener('click', openSearchModal);
+
+    // ---- Notes ----
+    document.getElementById('openNotesBtn').addEventListener('click', openNotesView);
+    document.getElementById('closeNotesBtn').addEventListener('click', closeNotesView);
+    document.getElementById('newNoteBtn').addEventListener('click', createNewNote);
+    document.getElementById('notesSearchInput').addEventListener('input', e => renderNotesList(e.target.value));
+    document.getElementById('notesList').addEventListener('click', e => {
+        const row = e.target.closest('.note-item');
+        if (!row) return;
+        openNoteEditor(row.dataset.noteId);
+    });
+    document.getElementById('closeNoteEditorBtn').addEventListener('click', closeNoteEditor);
+    document.getElementById('deleteNoteBtn').addEventListener('click', deleteActiveNote);
+    document.getElementById('noteTitleInput').addEventListener('input', () => saveActiveNote(false));
+    document.getElementById('noteTextArea').addEventListener('input', () => saveActiveNote(false));
+    document.getElementById('noteModeTextBtn').addEventListener('click', () => setNoteMode('text'));
+    document.getElementById('noteModeDrawBtn').addEventListener('click', () => setNoteMode('draw'));
+    document.querySelectorAll('.draw-color-swatch').forEach(sw => {
+        sw.addEventListener('click', () => {
+            state.drawColor = sw.dataset.color;
+            document.querySelectorAll('.draw-color-swatch').forEach(s => s.classList.remove('active'));
+            sw.classList.add('active');
+        });
+    });
+    document.getElementById('drawClearBtn').addEventListener('click', clearNoteDrawing);
+    const noteCanvasEl = document.getElementById('noteDrawCanvas');
+    noteCanvasEl.addEventListener('pointerdown', noteDrawStart);
+    noteCanvasEl.addEventListener('pointermove', noteDrawMove);
+    window.addEventListener('pointerup', noteDrawEnd);
+    noteCanvasEl.addEventListener('pointerleave', noteDrawEnd);
+    noteCanvasEl.addEventListener('pointercancel', noteDrawEnd);
     document.getElementById('tapBtn').addEventListener('click', handleTap);
     document.getElementById('timeSigSelect').addEventListener('click', () => {
         openTimeSigPicker(state.timeSig, val => {
@@ -1936,10 +2330,14 @@ function setupEvents() {
             renderBeatBlocks();
         });
     });
-    document.getElementById('beatBlocksContainer').addEventListener('click', e => {
-        const btn = e.target.closest('.beat-block');
-        if (!btn) return;
-        cycleBeatTone(parseInt(btn.dataset.beatIdx, 10));
+    BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('click', e => {
+            const btn = e.target.closest('.beat-block');
+            if (!btn) return;
+            cycleBeatTone(parseInt(btn.dataset.beatIdx, 10));
+        });
     });
     document.getElementById('subdivSelect').addEventListener('change', e => { state.subdivision = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
     document.getElementById('soundKitSelect').addEventListener('change', e => { state.soundKit = e.target.value; saveData(); if (e.target.value === 'voice' && window.speechSynthesis) { window.speechSynthesis.getVoices(); } });
@@ -2147,7 +2545,13 @@ function setupEvents() {
     document.addEventListener('keydown', e => { if (e.code === 'Escape') document.querySelectorAll('.modal-overlay.active').forEach(m => hideModal(m.id)); });
 
     let rt;
-    window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(setupCanvas, 100); });
+    window.addEventListener('resize', () => {
+        clearTimeout(rt);
+        rt = setTimeout(() => {
+            setupCanvas();
+            if (state.activeNoteId) setupNoteCanvas();
+        }, 100);
+    });
 }
 
 // ===== INIT =====
