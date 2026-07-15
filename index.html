@@ -198,6 +198,9 @@ tailwind.config = {
         color: #0e0e10 !important;
         box-shadow: 0 0 14px 3px var(--tone-color);
     }
+    .pan-opt-btn { background: #0e0e10; border: 1px solid #2a2a30; color: #71717a; transition: all 0.15s; }
+    .pan-opt-btn:hover { border-color: rgba(45,212,191,0.4); }
+    .pan-opt-btn.pan-active { border-color: #2dd4bf; color: #2dd4bf; background: rgba(45,212,191,0.1); }
     .practice-active { color: #D4A853 !important; border-color: rgba(212,168,83,0.5) !important; background: rgba(212,168,83,0.08) !important; }
     @keyframes ramp-dot {
         0%, 100% { opacity: 0.35; } 50% { opacity: 1; }
@@ -394,6 +397,20 @@ tailwind.config = {
                 </select>
             </div>
             <div>
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Subdivision Pan</label>
+                <p class="text-[11px] text-zinc-600 mb-1.5">Main beat tones always play centered. Pan the subdivision clicks left or right for separation.</p>
+                <div class="flex gap-2" id="songSubdivPanGroup">
+                    <button type="button" class="pan-opt-btn flex-1 py-2 rounded-lg text-xs font-medium" data-pan="left">
+                        <i class="fas fa-arrow-left mr-1"></i>Left
+                    </button>
+                    <button type="button" class="pan-opt-btn flex-1 py-2 rounded-lg text-xs font-medium" data-pan="center">Center</button>
+                    <button type="button" class="pan-opt-btn flex-1 py-2 rounded-lg text-xs font-medium" data-pan="right">
+                        Right<i class="fas fa-arrow-right ml-1"></i>
+                    </button>
+                </div>
+                <input type="hidden" id="songSubdivPanValue" value="center">
+            </div>
+            <div>
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Notes (optional)</label>
                 <textarea id="songNotesInput" class="modal-input resize-none" rows="2" placeholder="Set changes, cues, reminders..."></textarea>
             </div>
@@ -528,6 +545,7 @@ const state = {
     practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
     songMod: { active: false, sections: [], index: 0, barsElapsed: 0, loop: false },
     beatTones: [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+    subdivisionPan: 'center',
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -558,7 +576,7 @@ function bpmToAngle(bpm) { return START_RAD + ((bpm - MIN_BPM) / (MAX_BPM - MIN_
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 // ===== BEAT TONE BLOCKS =====
-const TONE_COLORS = { 1: '#F0C96E', 2: '#D4A853', 3: '#2dd4bf' };
+const TONE_COLORS = { 1: '#2dd4bf', 2: '#F472B6', 3: '#F0C96E' };
 
 function renderBeatBlocks() {
     const n = getBeatsPerMeasure();
@@ -626,47 +644,61 @@ function ensureAudio() {
 }
 
 // ---- Sound kits ----
-function playBeep(c, t, type, v) {
+function connectOut(c, g, pan) {
+    if (pan) {
+        const p = c.createStereoPanner();
+        p.pan.value = pan;
+        g.connect(p); p.connect(c.destination);
+        return p;
+    }
+    g.connect(c.destination);
+    return null;
+}
+
+function playBeep(c, t, type, v, pan) {
     const o = c.createOscillator(), g = c.createGain();
-    o.connect(g); g.connect(c.destination);
+    o.connect(g);
+    const p = connectOut(c, g, pan);
     if (type === 'tone1') { o.frequency.value = 1250; g.gain.setValueAtTime(0.95 * v, t); }
     else if (type === 'tone3') { o.frequency.value = 640; g.gain.setValueAtTime(0.55 * v, t); }
     else if (type === 'sub') { o.frequency.value = 680; g.gain.setValueAtTime(0.3 * v, t); }
     else { o.frequency.value = 900; g.gain.setValueAtTime(0.62 * v, t); }
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
     o.start(t); o.stop(t + 0.07);
-    o.onended = () => { o.disconnect(); g.disconnect(); };
+    o.onended = () => { o.disconnect(); g.disconnect(); if (p) p.disconnect(); };
 }
 
-function playWoodblock(c, t, type, v) {
+function playWoodblock(c, t, type, v, pan) {
     const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
     const baseFreq = type === 'tone1' ? 1450 : type === 'tone3' ? 900 : type === 'sub' ? 950 : 1150;
     f.type = 'bandpass'; f.frequency.value = baseFreq; f.Q.value = 7;
     o.type = 'triangle';
     o.frequency.setValueAtTime(baseFreq * 1.35, t);
     o.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, t + 0.02);
-    o.connect(f); f.connect(g); g.connect(c.destination);
+    o.connect(f); f.connect(g);
+    const p = connectOut(c, g, pan);
     const peak = (type === 'tone1' ? 1.0 : type === 'tone3' ? 0.62 : type === 'sub' ? 0.36 : 0.78) * v;
     g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
     o.start(t); o.stop(t + 0.05);
-    o.onended = () => { o.disconnect(); g.disconnect(); f.disconnect(); };
+    o.onended = () => { o.disconnect(); g.disconnect(); f.disconnect(); if (p) p.disconnect(); };
 }
 
-function playCowbell(c, t, type, v) {
+function playCowbell(c, t, type, v, pan) {
     const o1 = c.createOscillator(), o2 = c.createOscillator();
     const f = c.createBiquadFilter(), g = c.createGain();
     o1.type = 'square'; o2.type = 'square';
     const freqSet = type === 'tone1' ? [860, 580, 2900] : type === 'tone3' ? [720, 480, 2200] : [800, 540, 2640];
     o1.frequency.value = freqSet[0]; o2.frequency.value = freqSet[1];
     f.type = 'bandpass'; f.frequency.value = freqSet[2]; f.Q.value = 1.1;
-    o1.connect(f); o2.connect(f); f.connect(g); g.connect(c.destination);
+    o1.connect(f); o2.connect(f); f.connect(g);
+    const p = connectOut(c, g, pan);
     const dur = type === 'sub' ? 0.09 : 0.2;
     const peak = (type === 'tone1' ? 0.78 : type === 'tone3' ? 0.44 : type === 'sub' ? 0.2 : 0.5) * v;
     g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o1.start(t); o2.start(t); o1.stop(t + dur + 0.02); o2.stop(t + dur + 0.02);
-    o1.onended = () => { o1.disconnect(); o2.disconnect(); f.disconnect(); g.disconnect(); };
+    o1.onended = () => { o1.disconnect(); o2.disconnect(); f.disconnect(); g.disconnect(); if (p) p.disconnect(); };
 }
 
 let cachedVoice = null;
@@ -696,12 +728,19 @@ function speakBeat(n) {
     window.speechSynthesis.speak(u);
 }
 
+function getSubdivisionPanValue() {
+    if (state.subdivisionPan === 'left') return -0.85;
+    if (state.subdivisionPan === 'right') return 0.85;
+    return 0;
+}
+
 function playClick(type, time, beatNum) {
     const kit = state.soundKit;
+    const pan = type === 'sub' ? getSubdivisionPanValue() : 0;
     if (kit === 'voice') {
         if (type === 'sub') {
             const c = state.audioCtx, t = Math.max(time, c.currentTime);
-            playBeep(c, t, 'sub', state.volume * 0.6);
+            playBeep(c, t, 'sub', state.volume * 0.6, pan);
         } else {
             const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
             setTimeout(() => speakBeat(beatNum), delay);
@@ -709,9 +748,9 @@ function playClick(type, time, beatNum) {
         return;
     }
     const c = state.audioCtx, t = Math.max(time, c.currentTime), v = state.volume;
-    if (kit === 'woodblock') { playWoodblock(c, t, type, v); return; }
-    if (kit === 'cowbell') { playCowbell(c, t, type, v); return; }
-    playBeep(c, t, type, v);
+    if (kit === 'woodblock') { playWoodblock(c, t, type, v, pan); return; }
+    if (kit === 'cowbell') { playCowbell(c, t, type, v, pan); return; }
+    playBeep(c, t, type, v, pan);
 }
 
 function startMetronome() {
@@ -1137,6 +1176,7 @@ function loadAndPlaySong(song) {
     const tb = Math.max(MIN_BPM, Math.min(MAX_BPM, song.bpm));
     state.timeSig = song.timeSig;
     state.subdivision = song.subdivision || 'quarter';
+    state.subdivisionPan = song.subdivisionPan || 'center';
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     renderBeatBlocks();
@@ -1226,6 +1266,13 @@ function renderSearchResults(query) {
     container.innerHTML = html;
 }
 
+function setSubdivPanUI(val) {
+    document.getElementById('songSubdivPanValue').value = val;
+    document.querySelectorAll('#songSubdivPanGroup .pan-opt-btn').forEach(b => {
+        b.classList.toggle('pan-active', b.dataset.pan === val);
+    });
+}
+
 function openSongEditModal(id) {
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === id);
@@ -1237,6 +1284,7 @@ function openSongEditModal(id) {
     document.getElementById('songTimeSigInput').textContent = song.timeSig;
     document.getElementById('songSubdivInput').value = song.subdivision || 'quarter';
     document.getElementById('songNotesInput').value = song.notes || '';
+    setSubdivPanUI(song.subdivisionPan || 'center');
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
     editingModulations = (song.modulations || []).map(m => ({ ...m }));
@@ -1781,6 +1829,7 @@ function setupEvents() {
         document.getElementById('songTimeSigInput').textContent = state.timeSig;
         document.getElementById('songSubdivInput').value = state.subdivision;
         document.getElementById('songNotesInput').value = '';
+        setSubdivPanUI('center');
         document.getElementById('songNameSuggestions').classList.add('hidden');
         document.getElementById('songNameSuggestions').innerHTML = '';
         editingModulations = [];
@@ -1788,6 +1837,12 @@ function setupEvents() {
         renderModulationRows();
         showModal('songModal');
         setTimeout(() => document.getElementById('songNameInput').focus(), 200);
+    });
+
+    document.getElementById('songSubdivPanGroup').addEventListener('click', e => {
+        const btn = e.target.closest('.pan-opt-btn');
+        if (!btn) return;
+        setSubdivPanUI(btn.dataset.pan);
     });
 
     document.getElementById('songNameInput').addEventListener('input', e => renderSongSuggestions(e.target.value));
@@ -1833,6 +1888,7 @@ function setupEvents() {
             bpm: parseInt(document.getElementById('songBpmInput').value, 10),
             timeSig: document.getElementById('songTimeSigInput').textContent.trim(),
             subdivision: document.getElementById('songSubdivInput').value,
+            subdivisionPan: document.getElementById('songSubdivPanValue').value,
             notes: document.getElementById('songNotesInput').value.trim(),
             modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
