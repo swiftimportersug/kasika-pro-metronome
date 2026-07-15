@@ -214,12 +214,21 @@ tailwind.config = {
     }
     .note-mode-btn:hover { color: #a1a1aa; }
     .note-mode-btn.active { background: rgba(45,212,191,0.12); border-color: #2dd4bf; color: #2dd4bf; }
-    .draw-color-swatch {
+    .color-swatch {
         width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; flex-shrink: 0; cursor: pointer;
         transition: transform 0.1s, border-color 0.1s;
     }
-    .draw-color-swatch:hover { transform: scale(1.1); }
-    .draw-color-swatch.active { border-color: #fafafa; box-shadow: 0 0 0 2px #09090b, 0 0 0 3px currentColor; }
+    .color-swatch:hover { transform: scale(1.1); }
+    .color-swatch.active { border-color: #fafafa; box-shadow: 0 0 0 2px #09090b, 0 0 0 3px currentColor; }
+    .text-fmt-btn {
+        width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+        background: #17171b; border: 1px solid #2a2a30; color: #a1a1aa;
+        display: flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer;
+        transition: all 0.15s;
+    }
+    .text-fmt-btn:hover { color: #fafafa; border-color: #3f3f46; }
+    .text-fmt-btn.active { background: rgba(212,168,83,0.15); border-color: #D4A853; color: #D4A853; }
+    #noteTextArea:empty:before { content: attr(data-placeholder); color: #3f3f46; pointer-events: none; }
     .note-item { transition: background 0.15s; cursor: pointer; }
     .note-item:hover { background: rgba(45,212,191,0.06); }
     .practice-active { color: #D4A853 !important; border-color: rgba(212,168,83,0.5) !important; background: rgba(212,168,83,0.08) !important; }
@@ -476,19 +485,28 @@ tailwind.config = {
         <button type="button" class="note-mode-btn" data-mode="text" id="noteModeTextBtn"><i class="fas fa-align-left mr-1.5"></i>Text</button>
         <button type="button" class="note-mode-btn" data-mode="draw" id="noteModeDrawBtn"><i class="fas fa-pencil mr-1.5"></i>Draw</button>
         <div class="flex-1"></div>
+        <div id="textTools" class="flex items-center gap-1.5 flex-shrink-0">
+            <button type="button" id="boldBtn" class="text-fmt-btn" title="Bold"><i class="fas fa-bold"></i></button>
+            <div class="w-px h-4 bg-brd mx-0.5"></div>
+            <button type="button" class="color-swatch active" data-text-color="#fafafa" style="background:#fafafa" title="White"></button>
+            <button type="button" class="color-swatch" data-text-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+            <button type="button" class="color-swatch" data-text-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+            <button type="button" class="color-swatch" data-text-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+            <button type="button" class="color-swatch" data-text-color="#f87171" style="background:#f87171" title="Red"></button>
+        </div>
         <div id="drawTools" class="hidden items-center gap-1.5 flex-shrink-0">
-            <button type="button" class="draw-color-swatch active" data-color="#D4A853" style="background:#D4A853" title="Gold"></button>
-            <button type="button" class="draw-color-swatch" data-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
-            <button type="button" class="draw-color-swatch" data-color="#F472B6" style="background:#F472B6" title="Pink"></button>
-            <button type="button" class="draw-color-swatch" data-color="#fafafa" style="background:#fafafa" title="White"></button>
-            <button type="button" class="draw-color-swatch" data-color="#f87171" style="background:#f87171" title="Red"></button>
+            <button type="button" class="color-swatch active" data-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+            <button type="button" class="color-swatch" data-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+            <button type="button" class="color-swatch" data-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+            <button type="button" class="color-swatch" data-color="#fafafa" style="background:#fafafa" title="White"></button>
+            <button type="button" class="color-swatch" data-color="#f87171" style="background:#f87171" title="Red"></button>
             <button type="button" id="drawClearBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 flex items-center justify-center text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all text-xs ml-1" title="Clear drawing">
                 <i class="fas fa-eraser"></i>
             </button>
         </div>
     </div>
     <div class="flex-1 relative overflow-hidden" id="noteContentArea">
-        <textarea id="noteTextArea" class="absolute inset-0 w-full h-full bg-transparent text-zinc-200 text-sm leading-relaxed p-4 resize-none outline-none placeholder:text-zinc-700" placeholder="Write anything — lyrics, set notes, reminders..."></textarea>
+        <div id="noteTextArea" class="absolute inset-0 w-full h-full bg-transparent text-zinc-200 text-sm leading-relaxed p-4 outline-none overflow-y-auto" contenteditable="true" data-placeholder="Write anything — lyrics, set notes, reminders..."></div>
         <canvas id="noteDrawCanvas" class="hidden absolute inset-0 w-full h-full" style="touch-action:none;"></canvas>
     </div>
 </div>
@@ -1576,12 +1594,18 @@ function openNotesView() {
 }
 function closeNotesView() { history.back(); }
 
+function stripHtml(html) {
+    const d = document.createElement('div');
+    d.innerHTML = html || '';
+    return d.textContent || '';
+}
+
 function renderNotesList(query) {
     const q = (query || '').trim().toLowerCase();
     const list = document.getElementById('notesList');
     const empty = document.getElementById('notesEmptyState');
     let items = state.notes.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    if (q) items = items.filter(n => (n.title || '').toLowerCase().includes(q) || (n.content || '').toLowerCase().includes(q));
+    if (q) items = items.filter(n => (n.title || '').toLowerCase().includes(q) || stripHtml(n.content).toLowerCase().includes(q));
 
     if (!items.length) {
         list.innerHTML = '';
@@ -1593,7 +1617,7 @@ function renderNotesList(query) {
     empty.classList.add('hidden');
     list.innerHTML = items.map(n => {
         const title = escHtml(n.title || 'Untitled note');
-        const snippet = escHtml((n.content || '').replace(/\s+/g, ' ').trim().slice(0, 90));
+        const snippet = escHtml(stripHtml(n.content).replace(/\s+/g, ' ').trim().slice(0, 90));
         const hasDrawing = !!n.drawingDataUrl;
         const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
         return `
@@ -1622,7 +1646,10 @@ function openNoteEditor(id) {
     if (!note) return;
     state.activeNoteId = id;
     document.getElementById('noteTitleInput').value = note.title || '';
-    document.getElementById('noteTextArea').value = note.content || '';
+    document.getElementById('noteTextArea').innerHTML = note.content || '';
+    document.getElementById('boldBtn').classList.remove('active');
+    document.querySelectorAll('#textTools .color-swatch').forEach(s => s.classList.remove('active'));
+    document.querySelector('#textTools .color-swatch[data-text-color="#fafafa"]').classList.add('active');
     setNoteMode('text');
     pushView('note-editor');
     applyViewState('note-editor');
@@ -1640,7 +1667,7 @@ function saveActiveNote(immediate) {
     if (!note) return;
     const doSave = () => {
         note.title = document.getElementById('noteTitleInput').value.trim();
-        note.content = document.getElementById('noteTextArea').value;
+        note.content = document.getElementById('noteTextArea').innerHTML;
         note.updatedAt = Date.now();
         saveData();
     };
@@ -1670,17 +1697,20 @@ function setNoteMode(mode) {
     const textArea = document.getElementById('noteTextArea');
     const canvas = document.getElementById('noteDrawCanvas');
     const drawTools = document.getElementById('drawTools');
+    const textTools = document.getElementById('textTools');
     document.getElementById('noteModeTextBtn').classList.toggle('active', mode === 'text');
     document.getElementById('noteModeDrawBtn').classList.toggle('active', mode === 'draw');
     if (mode === 'draw') {
         textArea.classList.add('hidden');
         canvas.classList.remove('hidden');
         drawTools.classList.remove('hidden'); drawTools.classList.add('flex');
+        textTools.classList.add('hidden'); textTools.classList.remove('flex');
         setupNoteCanvas();
     } else {
         textArea.classList.remove('hidden');
         canvas.classList.add('hidden');
         drawTools.classList.add('hidden'); drawTools.classList.remove('flex');
+        textTools.classList.remove('hidden'); textTools.classList.add('flex');
     }
 }
 
@@ -2323,14 +2353,42 @@ function setupEvents() {
     document.getElementById('noteTextArea').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteModeTextBtn').addEventListener('click', () => setNoteMode('text'));
     document.getElementById('noteModeDrawBtn').addEventListener('click', () => setNoteMode('draw'));
-    document.querySelectorAll('.draw-color-swatch').forEach(sw => {
+    document.querySelectorAll('#drawTools .color-swatch').forEach(sw => {
         sw.addEventListener('click', () => {
             state.drawColor = sw.dataset.color;
-            document.querySelectorAll('.draw-color-swatch').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('#drawTools .color-swatch').forEach(s => s.classList.remove('active'));
             sw.classList.add('active');
         });
     });
     document.getElementById('drawClearBtn').addEventListener('click', clearNoteDrawing);
+
+    // Text formatting (bold + color). mousedown preventDefault keeps the text
+    // selection intact — otherwise clicking a toolbar button blurs the editor first.
+    const boldBtn = document.getElementById('boldBtn');
+    boldBtn.addEventListener('mousedown', e => e.preventDefault());
+    boldBtn.addEventListener('click', () => {
+        document.getElementById('noteTextArea').focus();
+        document.execCommand('bold');
+        boldBtn.classList.toggle('active', document.queryCommandState('bold'));
+        saveActiveNote(false);
+    });
+    document.querySelectorAll('#textTools .color-swatch').forEach(sw => {
+        sw.addEventListener('mousedown', e => e.preventDefault());
+        sw.addEventListener('click', () => {
+            document.getElementById('noteTextArea').focus();
+            document.execCommand('foreColor', false, sw.dataset.textColor);
+            document.querySelectorAll('#textTools .color-swatch').forEach(s => s.classList.remove('active'));
+            sw.classList.add('active');
+            saveActiveNote(false);
+        });
+    });
+    document.getElementById('noteTextArea').addEventListener('keyup', () => {
+        boldBtn.classList.toggle('active', document.queryCommandState('bold'));
+    });
+    document.getElementById('noteTextArea').addEventListener('mouseup', () => {
+        boldBtn.classList.toggle('active', document.queryCommandState('bold'));
+    });
+
     const noteCanvasEl = document.getElementById('noteDrawCanvas');
     noteCanvasEl.addEventListener('pointerdown', noteDrawStart);
     noteCanvasEl.addEventListener('pointermove', noteDrawMove);
