@@ -159,6 +159,25 @@ tailwind.config = {
     }
     #wheelCanvas { cursor: grab; touch-action: none; }
     #wheelCanvas.dragging { cursor: grabbing; }
+    .ts-picker-col {
+        height: 220px; width: 60px; overflow-y: scroll; scroll-snap-type: y mandatory;
+        scrollbar-width: none; -ms-overflow-style: none;
+    }
+    .ts-picker-col::-webkit-scrollbar { display: none; }
+    .ts-picker-item {
+        height: 44px; display: flex; align-items: center; justify-content: center;
+        font-family: 'JetBrains Mono', monospace; font-size: 19px; color: #52525b;
+        scroll-snap-align: center; transition: color 0.12s, font-size 0.12s; user-select: none;
+    }
+    .ts-picker-item.active { color: #D4A853; font-size: 25px; font-weight: 600; }
+    .ts-picker-pad { height: 88px; flex-shrink: 0; }
+    .ts-picker-divider { font-family: 'JetBrains Mono', monospace; font-size: 26px; color: #52525b; }
+    .ts-picker-highlight {
+        position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 44px;
+        border-top: 1px solid rgba(212,168,83,0.3); border-bottom: 1px solid rgba(212,168,83,0.3);
+        background: rgba(212,168,83,0.04); pointer-events: none;
+    }
+    .ts-trigger-btn { text-align: left; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
     .practice-active { color: #D4A853 !important; border-color: rgba(212,168,83,0.5) !important; background: rgba(212,168,83,0.08) !important; }
     @keyframes ramp-dot {
         0%, 100% { opacity: 0.35; } 50% { opacity: 1; }
@@ -202,15 +221,7 @@ tailwind.config = {
             <canvas id="wheelCanvas"></canvas>
         </div>
         <div class="flex flex-wrap items-center justify-center gap-3 mt-5 w-full max-w-md">
-            <select id="timeSigSelect" class="custom-select" aria-label="Time signature">
-                <option value="2/4">2/4</option>
-                <option value="3/4">3/4</option>
-                <option value="4/4" selected>4/4</option>
-                <option value="5/4">5/4</option>
-                <option value="6/8">6/8</option>
-                <option value="7/8">7/8</option>
-                <option value="12/8">12/8</option>
-            </select>
+            <button type="button" id="timeSigSelect" class="custom-select ts-trigger-btn" aria-label="Time signature">4/4</button>
             <select id="subdivSelect" class="custom-select" aria-label="Subdivision">
                 <option value="quarter">Quarter</option>
                 <option value="eighth">Eighth</option>
@@ -337,15 +348,7 @@ tailwind.config = {
                 </div>
                 <div class="flex-1">
                     <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Time Sig</label>
-                    <select id="songTimeSigInput" class="custom-select w-full">
-                        <option value="2/4">2/4</option>
-                        <option value="3/4">3/4</option>
-                        <option value="4/4" selected>4/4</option>
-                        <option value="5/4">5/4</option>
-                        <option value="6/8">6/8</option>
-                        <option value="7/8">7/8</option>
-                        <option value="12/8">12/8</option>
-                    </select>
+                    <button type="button" id="songTimeSigInput" class="custom-select w-full ts-trigger-btn">4/4</button>
                 </div>
             </div>
             <div>
@@ -462,6 +465,25 @@ tailwind.config = {
     </div>
 </div>
 
+<div class="modal-overlay" id="timeSigModal">
+    <div class="modal-box" style="max-width:300px; text-align:center;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Time Signature</h3>
+        <p class="text-[11px] text-zinc-600 mb-4">Scroll each column to build any time signature</p>
+        <div class="relative mx-auto" style="width:180px;">
+            <div class="ts-picker-highlight"></div>
+            <div class="flex items-center justify-center gap-3" style="height:220px;">
+                <div class="ts-picker-col" id="tsNumCol"></div>
+                <div class="ts-picker-divider">/</div>
+                <div class="ts-picker-col" id="tsDenCol"></div>
+            </div>
+        </div>
+        <div class="flex gap-3 mt-5">
+            <button type="button" id="tsPickerApplyBtn" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Apply</button>
+            <button type="button" onclick="hideModal('timeSigModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <script>
 const state = {
     bpm: 120, timeSig: '4/4', subdivision: 'quarter',
@@ -484,7 +506,7 @@ const START_RAD = START_DEG * Math.PI / 180;
 const END_RAD = (START_DEG + SWEEP_DEG) * Math.PI / 180;
 const SWEEP_RAD = SWEEP_DEG * Math.PI / 180;
 const STORAGE_KEY = 'kasika-pro-v4';
-const SCHEDULE_AHEAD = 0.15, SCHEDULE_INTERVAL = 20;
+const SCHEDULE_AHEAD = 0.2, SCHEDULE_INTERVAL = 25;
 
 const SUBDIVISIONS = {
     quarter:             { mult: 1, label: 'Quarter',        short: 'Qtr' },
@@ -496,7 +518,6 @@ const SUBDIVISIONS = {
     septuplet:           { mult: 7, label: 'Septuplet',      short: '7T' },
     'thirty-second':     { mult: 8, label: 'Thirty-second',  short: '32nd' },
 };
-const TS_OPTIONS = ['2/4','3/4','4/4','5/4','6/8','7/8','12/8'];
 const SUBDIV_OPTIONS = Object.keys(SUBDIVISIONS);
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -762,9 +783,12 @@ function advanceSongModulation() {
         const next = sm.sections[nextIndex];
         const tsChanged = next.timeSig !== state.timeSig;
         state.bpm = next.bpm; state.timeSig = next.timeSig;
-        document.getElementById('timeSigSelect').value = state.timeSig;
-        state.currentClick = 0; state.visualClick = -1;
-        if (state.isPlaying) state.nextNoteTime = state.audioCtx.currentTime + 0.03;
+        document.getElementById('timeSigSelect').textContent = state.timeSig;
+        // NOTE: nextNoteTime is intentionally left untouched here. advanceClick() already
+        // computed the exact audio-clock time for beat 1 of this new section using the OLD
+        // tempo's beat duration (correct: the interval INTO beat 1 belongs to the old tempo,
+        // the interval FROM beat 1 onward uses the new one). Overwriting it with "now" would
+        // snap the beat to the wrong moment and produce an audible jump/glitch.
         showToast(`Section ${nextIndex + 1}/${sm.sections.length} · ${next.bpm} BPM${tsChanged ? ' · ' + next.timeSig : ''}`);
     }
     updateSongModUI();
@@ -1037,7 +1061,7 @@ function loadAndPlaySong(song) {
     const tb = Math.max(MIN_BPM, Math.min(MAX_BPM, song.bpm));
     state.timeSig = song.timeSig;
     state.subdivision = song.subdivision || 'quarter';
-    document.getElementById('timeSigSelect').value = state.timeSig;
+    document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     if (state.practice.active) stopPractice(true);
     initSongModulation(song);
@@ -1133,7 +1157,7 @@ function openSongEditModal(id) {
     document.getElementById('songEditId').value = song.id;
     document.getElementById('songNameInput').value = song.name;
     document.getElementById('songBpmInput').value = song.bpm;
-    document.getElementById('songTimeSigInput').value = song.timeSig;
+    document.getElementById('songTimeSigInput').textContent = song.timeSig;
     document.getElementById('songSubdivInput').value = song.subdivision || 'quarter';
     document.getElementById('songNotesInput').value = song.notes || '';
     document.getElementById('songNameSuggestions').classList.add('hidden');
@@ -1197,7 +1221,6 @@ function renderModulationRows() {
     }
     loopRow.style.display = 'flex';
     hint.textContent = 'Each change applies after the given number of bars of the section before it.';
-    const tsOpts = TS_OPTIONS.map(t => `<option value="${t}">${t}</option>`).join('');
     list.innerHTML = editingModulations.map((m, i) => `
         <div class="flex items-center gap-1.5 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" data-mod-idx="${i}">
             <span class="text-[10px] text-zinc-600 flex-shrink-0">Sec ${i + 2}</span>
@@ -1205,9 +1228,7 @@ function renderModulationRows() {
             <input type="number" class="edit-input mod-bars" style="width:44px" min="1" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}">
             <span class="text-[10px] text-zinc-600 flex-shrink-0">bars →</span>
             <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
-            <select class="edit-select mod-timesig" data-mod-field="timeSig" data-mod-idx="${i}">
-                ${tsOpts.replace(`value="${m.timeSig}"`, `value="${m.timeSig}" selected`)}
-            </select>
+            <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
             <button type="button" class="edit-btn edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                 <i class="fas fa-trash-can"></i>
             </button>
@@ -1217,7 +1238,7 @@ function renderModulationRows() {
 function addModulationRow() {
     const last = editingModulations[editingModulations.length - 1];
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
-    const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').value;
+    const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm + 10)), timeSig: baseTimeSig });
     renderModulationRows();
 }
@@ -1225,10 +1246,21 @@ function addModulationRow() {
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('addModulationBtn').addEventListener('click', addModulationRow);
     document.getElementById('modulationList').addEventListener('click', e => {
-        const btn = e.target.closest('.mod-remove');
-        if (!btn) return;
-        editingModulations.splice(parseInt(btn.dataset.modIdx, 10), 1);
-        renderModulationRows();
+        const removeBtn = e.target.closest('.mod-remove');
+        if (removeBtn) {
+            editingModulations.splice(parseInt(removeBtn.dataset.modIdx, 10), 1);
+            renderModulationRows();
+            return;
+        }
+        const tsBtn = e.target.closest('.mod-timesig-btn');
+        if (tsBtn) {
+            const idx = parseInt(tsBtn.dataset.modIdx, 10);
+            if (!editingModulations[idx]) return;
+            openTimeSigPicker(editingModulations[idx].timeSig, val => {
+                editingModulations[idx].timeSig = val;
+                renderModulationRows();
+            });
+        }
     });
     document.getElementById('modulationList').addEventListener('change', e => {
         const el = e.target.closest('[data-mod-field]');
@@ -1290,7 +1322,6 @@ function renderPlayMode(container, sl) {
 }
 
 function renderEditMode(container, sl) {
-    const tsOpts = TS_OPTIONS.map(t => `<option value="${t}">${t}</option>`).join('');
     const subOpts = SUBDIV_OPTIONS.map(s => `<option value="${s}">${SUBDIVISIONS[s].short}</option>`).join('');
 
     container.innerHTML = sl.songs.map((song, idx) => `
@@ -1303,9 +1334,7 @@ function renderEditMode(container, sl) {
             </div>
             <input type="text" class="edit-input flex-1 min-w-0" value="${escHtml(song.name)}" data-field="name" data-song-id="${song.id}" placeholder="Song name">
             <input type="number" class="edit-input edit-input-bpm" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
-            <select class="edit-select" data-field="timeSig" data-song-id="${song.id}">
-                ${tsOpts.replace(`value="${song.timeSig}"`, `value="${song.timeSig}" selected`)}
-            </select>
+            <button type="button" class="edit-select ts-inline-btn flex-shrink-0" data-song-id="${song.id}" style="width:44px;">${song.timeSig}</button>
             <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
                 ${subOpts.replace(`value="${song.subdivision || 'quarter'}"`, `value="${song.subdivision || 'quarter'}" selected`)}
             </select>
@@ -1337,6 +1366,19 @@ function renderEditMode(container, sl) {
                 setTimeout(() => { this.setSelectionRange(this.value.length, this.value.length); }, 0);
             });
         }
+    });
+    container.querySelectorAll('.ts-inline-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const sid = btn.dataset.songId;
+            const s2 = getActiveSetlist();
+            const song = s2?.songs.find(x => x.id === sid);
+            if (!song) return;
+            openTimeSigPicker(song.timeSig, val => {
+                song.timeSig = val;
+                saveData();
+                renderSongs();
+            });
+        });
     });
 }
 
@@ -1523,6 +1565,77 @@ function setupCustomDrag() {
     document.addEventListener('touchend', onUp);
 }
 
+// ===== TIME SIGNATURE PICKER (two scrollable columns: numerator 1-16, denominator 1/2/4/8) =====
+const TS_NUMS = Array.from({ length: 16 }, (_, i) => i + 1);
+const TS_DENS = [1, 2, 4, 8];
+const TS_ITEM_H = 44;
+let tsPickerApply = null;
+let tsPickerNum = 4, tsPickerDen = 4;
+let tsScrollTimers = {};
+
+function buildTsColumn(id, values) {
+    const col = document.getElementById(id);
+    col.innerHTML = '<div class="ts-picker-pad"></div>' +
+        values.map(v => `<div class="ts-picker-item" data-val="${v}">${v}</div>`).join('') +
+        '<div class="ts-picker-pad"></div>';
+}
+
+function highlightTsColumn(id, value) {
+    document.querySelectorAll(`#${id} .ts-picker-item`).forEach(el => {
+        el.classList.toggle('active', parseInt(el.dataset.val, 10) === value);
+    });
+}
+
+function scrollTsColumnTo(id, value, values) {
+    const col = document.getElementById(id);
+    const idx = Math.max(0, values.indexOf(value));
+    col.scrollTop = idx * TS_ITEM_H;
+}
+
+function initTsPickerColumns() {
+    buildTsColumn('tsNumCol', TS_NUMS);
+    buildTsColumn('tsDenCol', TS_DENS);
+    document.getElementById('tsNumCol').addEventListener('scroll', () => {
+        clearTimeout(tsScrollTimers.num);
+        tsScrollTimers.num = setTimeout(() => {
+            const col = document.getElementById('tsNumCol');
+            const idx = Math.max(0, Math.min(TS_NUMS.length - 1, Math.round(col.scrollTop / TS_ITEM_H)));
+            tsPickerNum = TS_NUMS[idx];
+            highlightTsColumn('tsNumCol', tsPickerNum);
+        }, 90);
+    });
+    document.getElementById('tsDenCol').addEventListener('scroll', () => {
+        clearTimeout(tsScrollTimers.den);
+        tsScrollTimers.den = setTimeout(() => {
+            const col = document.getElementById('tsDenCol');
+            const idx = Math.max(0, Math.min(TS_DENS.length - 1, Math.round(col.scrollTop / TS_ITEM_H)));
+            tsPickerDen = TS_DENS[idx];
+            highlightTsColumn('tsDenCol', tsPickerDen);
+        }, 90);
+    });
+    document.getElementById('tsPickerApplyBtn').addEventListener('click', () => {
+        const val = `${tsPickerNum}/${tsPickerDen}`;
+        hideModal('timeSigModal');
+        if (tsPickerApply) tsPickerApply(val);
+    });
+}
+
+function openTimeSigPicker(current, onApply) {
+    const parts = String(current || '4/4').split('/');
+    let n = parseInt(parts[0], 10) || 4;
+    let d = parseInt(parts[1], 10) || 4;
+    n = Math.max(1, Math.min(16, n));
+    if (!TS_DENS.includes(d)) d = 4;
+    tsPickerNum = n; tsPickerDen = d; tsPickerApply = onApply;
+    showModal('timeSigModal');
+    requestAnimationFrame(() => {
+        scrollTsColumnTo('tsNumCol', n, TS_NUMS);
+        scrollTsColumnTo('tsDenCol', d, TS_DENS);
+        highlightTsColumn('tsNumCol', n);
+        highlightTsColumn('tsDenCol', d);
+    });
+}
+
 // ===== ANIMATION LOOP =====
 function animationLoop() {
     state.beatPulse = Math.max(0, 1 - (performance.now() - state.lastBeatTimestamp) / 220);
@@ -1543,7 +1656,13 @@ function setupEvents() {
 
     document.getElementById('playBtn').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
     document.getElementById('tapBtn').addEventListener('click', handleTap);
-    document.getElementById('timeSigSelect').addEventListener('change', e => { state.timeSig = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
+    document.getElementById('timeSigSelect').addEventListener('click', () => {
+        openTimeSigPicker(state.timeSig, val => {
+            state.timeSig = val;
+            document.getElementById('timeSigSelect').textContent = val;
+            if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; }
+        });
+    });
     document.getElementById('subdivSelect').addEventListener('change', e => { state.subdivision = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
     document.getElementById('soundKitSelect').addEventListener('change', e => { state.soundKit = e.target.value; saveData(); if (e.target.value === 'voice' && window.speechSynthesis) { window.speechSynthesis.getVoices(); } });
     document.getElementById('volumeSlider').addEventListener('input', e => { state.volume = parseInt(e.target.value) / 100; });
@@ -1575,7 +1694,7 @@ function setupEvents() {
         document.getElementById('songEditId').value = '';
         document.getElementById('songNameInput').value = '';
         document.getElementById('songBpmInput').value = state.bpm;
-        document.getElementById('songTimeSigInput').value = state.timeSig;
+        document.getElementById('songTimeSigInput').textContent = state.timeSig;
         document.getElementById('songSubdivInput').value = state.subdivision;
         document.getElementById('songNotesInput').value = '';
         document.getElementById('songNameSuggestions').classList.add('hidden');
@@ -1588,6 +1707,12 @@ function setupEvents() {
     });
 
     document.getElementById('songNameInput').addEventListener('input', e => renderSongSuggestions(e.target.value));
+
+    document.getElementById('songTimeSigInput').addEventListener('click', () => {
+        openTimeSigPicker(document.getElementById('songTimeSigInput').textContent.trim(), val => {
+            document.getElementById('songTimeSigInput').textContent = val;
+        });
+    });
 
     document.getElementById('songNameSuggestions').addEventListener('click', e => {
         const row = e.target.closest('[data-suggest-song]');
@@ -1622,7 +1747,7 @@ function setupEvents() {
         const d = {
             name: document.getElementById('songNameInput').value.trim(),
             bpm: parseInt(document.getElementById('songBpmInput').value, 10),
-            timeSig: document.getElementById('songTimeSigInput').value,
+            timeSig: document.getElementById('songTimeSigInput').textContent.trim(),
             subdivision: document.getElementById('songSubdivInput').value,
             notes: document.getElementById('songNotesInput').value.trim(),
             modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig })),
@@ -1744,7 +1869,9 @@ function init() {
     loadData(); setupCanvas(); renderSetlistSelect(); renderSongs();
     updatePlayBtn(); updateEditBarUI(); updateTimerDisplay();
     document.getElementById('soundKitSelect').value = state.soundKit;
+    document.getElementById('timeSigSelect').textContent = state.timeSig;
     updatePracticeUI();
+    initTsPickerColumns();
     setupEvents(); setupCustomDrag();
     if (window.speechSynthesis) window.speechSynthesis.getVoices();
     requestAnimationFrame(animationLoop);
