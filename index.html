@@ -1570,15 +1570,11 @@ function openSearchModal() {
 
 // ===== NOTES =====
 function openNotesView() {
-    document.getElementById('notesView').classList.remove('hidden');
-    document.getElementById('notesView').classList.add('flex');
     document.getElementById('notesSearchInput').value = '';
-    renderNotesList('');
+    pushView('notes');
+    applyViewState('notes');
 }
-function closeNotesView() {
-    document.getElementById('notesView').classList.add('hidden');
-    document.getElementById('notesView').classList.remove('flex');
-}
+function closeNotesView() { history.back(); }
 
 function renderNotesList(query) {
     const q = (query || '').trim().toLowerCase();
@@ -1628,20 +1624,14 @@ function openNoteEditor(id) {
     document.getElementById('noteTitleInput').value = note.title || '';
     document.getElementById('noteTextArea').value = note.content || '';
     setNoteMode('text');
-    document.getElementById('noteEditorView').classList.remove('hidden');
-    document.getElementById('noteEditorView').classList.add('flex');
+    pushView('note-editor');
+    applyViewState('note-editor');
     setTimeout(() => {
         setupNoteCanvas();
     }, 50);
 }
 
-function closeNoteEditor() {
-    saveActiveNote(true);
-    document.getElementById('noteEditorView').classList.add('hidden');
-    document.getElementById('noteEditorView').classList.remove('flex');
-    state.activeNoteId = null;
-    renderNotesList(document.getElementById('notesSearchInput').value);
-}
+function closeNoteEditor() { history.back(); }
 
 function getActiveNote() { return state.notes.find(n => n.id === state.activeNoteId) || null; }
 
@@ -1669,10 +1659,8 @@ function deleteActiveNote() {
         state.activeNoteId = null;
         saveData();
         hideModal('deleteModal');
-        document.getElementById('noteEditorView').classList.add('hidden');
-        document.getElementById('noteEditorView').classList.remove('flex');
-        renderNotesList(document.getElementById('notesSearchInput').value);
         showToast('Note deleted');
+        history.back();
     };
     showModal('deleteModal');
 }
@@ -2256,15 +2244,43 @@ function updateSetlistBpmDisplay() {
     if (el) el.textContent = state.bpm;
 }
 
-function openSetlistsView() {
-    document.getElementById('setlistsView').classList.remove('hidden');
-    document.getElementById('setlistsView').classList.add('flex');
+// ===== VIEW NAVIGATION (History API — makes phone/browser Back close the current view instead of leaving the app) =====
+let currentAppView = 'main'; // 'main' | 'setlists' | 'notes' | 'note-editor'
+
+function pushView(view) {
+    currentAppView = view;
+    history.pushState({ view }, '', '#' + view);
 }
 
-function closeSetlistsView() {
-    document.getElementById('setlistsView').classList.add('hidden');
-    document.getElementById('setlistsView').classList.remove('flex');
+function applyViewState(view) {
+    const target = view || 'main';
+    if (currentAppView === 'note-editor' && target !== 'note-editor') {
+        saveActiveNote(true);
+        state.activeNoteId = null;
+    }
+    currentAppView = target;
+
+    const setlistsEl = document.getElementById('setlistsView');
+    const notesEl = document.getElementById('notesView');
+    const editorEl = document.getElementById('noteEditorView');
+
+    if (target === 'setlists') { setlistsEl.classList.remove('hidden'); setlistsEl.classList.add('flex'); }
+    else { setlistsEl.classList.add('hidden'); setlistsEl.classList.remove('flex'); }
+
+    if (target === 'notes' || target === 'note-editor') { notesEl.classList.remove('hidden'); notesEl.classList.add('flex'); }
+    else { notesEl.classList.add('hidden'); notesEl.classList.remove('flex'); }
+    if (target === 'notes') renderNotesList(document.getElementById('notesSearchInput').value);
+
+    if (target === 'note-editor') { editorEl.classList.remove('hidden'); editorEl.classList.add('flex'); }
+    else { editorEl.classList.add('hidden'); editorEl.classList.remove('flex'); }
 }
+
+window.addEventListener('popstate', e => {
+    applyViewState(e.state ? e.state.view : 'main');
+});
+
+function openSetlistsView() { pushView('setlists'); applyViewState('setlists'); }
+function closeSetlistsView() { history.back(); }
 
 function adjustTempo(delta) {
     state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + delta));
@@ -2564,6 +2580,7 @@ function init() {
     updatePracticeUI();
     initTsPickerColumns();
     initFirebase();
+    history.replaceState({ view: 'main' }, '', location.pathname + location.search);
     document.getElementById('syncSignInBtn').addEventListener('click', signInForSync);
     document.getElementById('syncSignOutBtn').addEventListener('click', signOutOfSync);
     setupEvents(); setupCustomDrag();
