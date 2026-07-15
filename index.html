@@ -178,6 +178,26 @@ tailwind.config = {
         background: rgba(212,168,83,0.04); pointer-events: none;
     }
     .ts-trigger-btn { text-align: left; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+    .beat-blocks-bar {
+        position: sticky; top: 0; z-index: 30;
+        background: rgba(9,9,11,0.94); backdrop-filter: blur(6px);
+        border-bottom: 1px solid rgba(42,42,48,0.6);
+        padding: 10px 12px 12px;
+    }
+    .beat-block {
+        width: 38px; height: 38px; border-radius: 9px;
+        background: #17171b; border: 1.5px solid #2a2a30;
+        display: flex; align-items: center; justify-content: center;
+        font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700;
+        cursor: pointer; user-select: none; flex-shrink: 0;
+        transition: background-color 0.08s ease-out, box-shadow 0.08s ease-out, transform 0.08s ease-out, color 0.08s ease-out;
+    }
+    .beat-block:hover { filter: brightness(1.2); }
+    .beat-block.lit {
+        background: var(--tone-color) !important;
+        color: #0e0e10 !important;
+        box-shadow: 0 0 14px 3px var(--tone-color);
+    }
     .practice-active { color: #D4A853 !important; border-color: rgba(212,168,83,0.5) !important; background: rgba(212,168,83,0.08) !important; }
     @keyframes ramp-dot {
         0%, 100% { opacity: 0.35; } 50% { opacity: 1; }
@@ -220,6 +240,15 @@ tailwind.config = {
         <div class="w-full flex justify-center" id="canvasContainer">
             <canvas id="wheelCanvas"></canvas>
         </div>
+
+        <div class="beat-blocks-bar w-full max-w-md rounded-xl">
+            <div class="flex items-center justify-between mb-2 px-0.5">
+                <span class="text-[10px] text-zinc-600 uppercase tracking-wider">Beat Tones</span>
+                <span class="text-[10px] text-zinc-700">tap a block to cycle its tone</span>
+            </div>
+            <div class="flex items-center justify-center gap-1.5 flex-wrap" id="beatBlocksContainer"></div>
+        </div>
+
         <div class="flex flex-wrap items-center justify-center gap-3 mt-5 w-full max-w-md">
             <button type="button" id="timeSigSelect" class="custom-select ts-trigger-btn" aria-label="Time signature">4/4</button>
             <select id="subdivSelect" class="custom-select" aria-label="Subdivision">
@@ -498,6 +527,7 @@ const state = {
     soundKit: 'beep',
     practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
     songMod: { active: false, sections: [], index: 0, barsElapsed: 0, loop: false },
+    beatTones: [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -526,6 +556,48 @@ function getSubdivMult() { return (SUBDIVISIONS[state.subdivision] || SUBDIVISIO
 function getClicksPerMeasure() { return getBeatsPerMeasure() * getSubdivMult(); }
 function bpmToAngle(bpm) { return START_RAD + ((bpm - MIN_BPM) / (MAX_BPM - MIN_BPM)) * SWEEP_RAD; }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ===== BEAT TONE BLOCKS =====
+const TONE_COLORS = { 1: '#F0C96E', 2: '#D4A853', 3: '#2dd4bf' };
+
+function renderBeatBlocks() {
+    const n = getBeatsPerMeasure();
+    const container = document.getElementById('beatBlocksContainer');
+    if (!container) return;
+    let html = '';
+    for (let i = 0; i < n; i++) {
+        const tone = state.beatTones[i] || 2;
+        const color = TONE_COLORS[tone];
+        html += `<button type="button" class="beat-block" data-beat-idx="${i}" style="--tone-color:${color}; border-color:${color}66; color:${color};" title="Beat ${i + 1} · tone ${tone} — click to cycle">${i + 1}</button>`;
+    }
+    container.innerHTML = html;
+}
+
+function cycleBeatTone(idx) {
+    if (idx < 0 || idx >= state.beatTones.length) return;
+    const cur = state.beatTones[idx] || 2;
+    state.beatTones[idx] = cur >= 3 ? 1 : cur + 1;
+    renderBeatBlocks();
+    saveData();
+}
+
+function updateBeatBlocksVisual() {
+    const container = document.getElementById('beatBlocksContainer');
+    if (!container) return;
+    const mult = getSubdivMult(), p = state.beatPulse;
+    container.querySelectorAll('.beat-block').forEach(btn => {
+        const idx = parseInt(btn.dataset.beatIdx, 10);
+        if (state.visualClick === idx * mult && p > 0) {
+            btn.classList.add('lit');
+            btn.style.opacity = String(0.6 + p * 0.4);
+            btn.style.transform = `scale(${1 + p * 0.12})`;
+        } else {
+            btn.classList.remove('lit');
+            btn.style.opacity = '';
+            btn.style.transform = '';
+        }
+    });
+}
 
 function getTempoMarking(b) {
     if (b < 50) return 'Grave'; if (b < 60) return 'Largo'; if (b < 66) return 'Larghetto';
@@ -557,9 +629,10 @@ function ensureAudio() {
 function playBeep(c, t, type, v) {
     const o = c.createOscillator(), g = c.createGain();
     o.connect(g); g.connect(c.destination);
-    if (type === 'accent') { o.frequency.value = 1200; g.gain.setValueAtTime(0.95 * v, t); }
+    if (type === 'tone1') { o.frequency.value = 1250; g.gain.setValueAtTime(0.95 * v, t); }
+    else if (type === 'tone3') { o.frequency.value = 640; g.gain.setValueAtTime(0.55 * v, t); }
     else if (type === 'sub') { o.frequency.value = 680; g.gain.setValueAtTime(0.3 * v, t); }
-    else { o.frequency.value = 880; g.gain.setValueAtTime(0.62 * v, t); }
+    else { o.frequency.value = 900; g.gain.setValueAtTime(0.62 * v, t); }
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
     o.start(t); o.stop(t + 0.07);
     o.onended = () => { o.disconnect(); g.disconnect(); };
@@ -567,13 +640,13 @@ function playBeep(c, t, type, v) {
 
 function playWoodblock(c, t, type, v) {
     const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
-    const baseFreq = type === 'accent' ? 1450 : type === 'sub' ? 950 : 1150;
+    const baseFreq = type === 'tone1' ? 1450 : type === 'tone3' ? 900 : type === 'sub' ? 950 : 1150;
     f.type = 'bandpass'; f.frequency.value = baseFreq; f.Q.value = 7;
     o.type = 'triangle';
     o.frequency.setValueAtTime(baseFreq * 1.35, t);
     o.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, t + 0.02);
     o.connect(f); f.connect(g); g.connect(c.destination);
-    const peak = (type === 'accent' ? 1.0 : type === 'sub' ? 0.36 : 0.78) * v;
+    const peak = (type === 'tone1' ? 1.0 : type === 'tone3' ? 0.62 : type === 'sub' ? 0.36 : 0.78) * v;
     g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
     o.start(t); o.stop(t + 0.05);
@@ -584,11 +657,12 @@ function playCowbell(c, t, type, v) {
     const o1 = c.createOscillator(), o2 = c.createOscillator();
     const f = c.createBiquadFilter(), g = c.createGain();
     o1.type = 'square'; o2.type = 'square';
-    o1.frequency.value = 800; o2.frequency.value = 540;
-    f.type = 'bandpass'; f.frequency.value = 2640; f.Q.value = 1.1;
+    const freqSet = type === 'tone1' ? [860, 580, 2900] : type === 'tone3' ? [720, 480, 2200] : [800, 540, 2640];
+    o1.frequency.value = freqSet[0]; o2.frequency.value = freqSet[1];
+    f.type = 'bandpass'; f.frequency.value = freqSet[2]; f.Q.value = 1.1;
     o1.connect(f); o2.connect(f); f.connect(g); g.connect(c.destination);
     const dur = type === 'sub' ? 0.09 : 0.2;
-    const peak = (type === 'accent' ? 0.78 : type === 'sub' ? 0.2 : 0.5) * v;
+    const peak = (type === 'tone1' ? 0.78 : type === 'tone3' ? 0.44 : type === 'sub' ? 0.2 : 0.5) * v;
     g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o1.start(t); o2.start(t); o1.stop(t + dur + 0.02); o2.stop(t + dur + 0.02);
@@ -663,8 +737,8 @@ function scheduler() {
 
 function scheduleNote(ci, time) {
     const m = getSubdivMult(), isSub = ci % m !== 0, mb = Math.floor(ci / m);
-    const isAcc = mb === 0 && !isSub;
-    playClick(isAcc ? 'accent' : (isSub ? 'sub' : 'normal'), time, mb + 1);
+    const clickType = isSub ? 'sub' : `tone${state.beatTones[mb] || 2}`;
+    playClick(clickType, time, mb + 1);
     const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
     const cap = ci;
     setTimeout(() => { state.visualClick = cap; state.lastBeatTimestamp = performance.now(); }, delay);
@@ -784,6 +858,7 @@ function advanceSongModulation() {
         const tsChanged = next.timeSig !== state.timeSig;
         state.bpm = next.bpm; state.timeSig = next.timeSig;
         document.getElementById('timeSigSelect').textContent = state.timeSig;
+        if (tsChanged) renderBeatBlocks();
         // NOTE: nextNoteTime is intentionally left untouched here. advanceClick() already
         // computed the exact audio-clock time for beat 1 of this new section using the OLD
         // tempo's beat duration (correct: the interval INTO beat 1 belongs to the old tempo,
@@ -999,6 +1074,7 @@ function loadData() {
             state.setlists = d.setlists || getDefaultData();
             state.activeSetlistId = d.activeSetlistId || state.setlists[0]?.id;
             if (d.soundKit) state.soundKit = d.soundKit;
+            if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
             // Migrate old songs missing subdivision, or using the old 'triplet' key
             state.setlists.forEach(sl => sl.songs.forEach(song => {
                 if (!song.subdivision) song.subdivision = 'quarter';
@@ -1011,7 +1087,7 @@ function loadData() {
     } catch { state.setlists = getDefaultData(); state.activeSetlistId = state.setlists[0]?.id; }
 }
 
-function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit })); }
+function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones })); }
 function getActiveSetlist() { return state.setlists.find(s => s.id === state.activeSetlistId) || null; }
 
 function createSetlist(name) {
@@ -1063,6 +1139,7 @@ function loadAndPlaySong(song) {
     state.subdivision = song.subdivision || 'quarter';
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
+    renderBeatBlocks();
     if (state.practice.active) stopPractice(true);
     initSongModulation(song);
     if (state.isPlaying) {
@@ -1640,6 +1717,7 @@ function openTimeSigPicker(current, onApply) {
 function animationLoop() {
     state.beatPulse = Math.max(0, 1 - (performance.now() - state.lastBeatTimestamp) / 220);
     drawWheel();
+    updateBeatBlocksVisual();
     requestAnimationFrame(animationLoop);
 }
 
@@ -1661,7 +1739,13 @@ function setupEvents() {
             state.timeSig = val;
             document.getElementById('timeSigSelect').textContent = val;
             if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; }
+            renderBeatBlocks();
         });
+    });
+    document.getElementById('beatBlocksContainer').addEventListener('click', e => {
+        const btn = e.target.closest('.beat-block');
+        if (!btn) return;
+        cycleBeatTone(parseInt(btn.dataset.beatIdx, 10));
     });
     document.getElementById('subdivSelect').addEventListener('change', e => { state.subdivision = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
     document.getElementById('soundKitSelect').addEventListener('change', e => { state.soundKit = e.target.value; saveData(); if (e.target.value === 'voice' && window.speechSynthesis) { window.speechSynthesis.getVoices(); } });
@@ -1870,6 +1954,7 @@ function init() {
     updatePlayBtn(); updateEditBarUI(); updateTimerDisplay();
     document.getElementById('soundKitSelect').value = state.soundKit;
     document.getElementById('timeSigSelect').textContent = state.timeSig;
+    renderBeatBlocks();
     updatePracticeUI();
     initTsPickerColumns();
     setupEvents(); setupCustomDrag();
