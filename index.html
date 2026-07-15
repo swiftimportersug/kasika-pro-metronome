@@ -262,6 +262,10 @@ tailwind.config = {
                 <i class="fas fa-xmark"></i>
             </button>
         </div>
+        <div id="songModStatus" class="hidden items-center gap-2.5 mt-4 bg-[#2dd4bf]/5 border border-[#2dd4bf]/25 rounded-xl px-4 py-2.5 text-xs font-mono text-[#2dd4bf] tracking-wide max-w-md w-full justify-center">
+            <i class="fas fa-wave-square text-[11px]"></i>
+            <span id="songModStatusText"></span>
+        </div>
     </section>
 
     <aside class="w-full lg:w-[420px] lg:flex-shrink-0 flex flex-col">
@@ -317,7 +321,7 @@ tailwind.config = {
 </main>
 
 <div class="modal-overlay" id="songModal">
-    <div class="modal-box">
+    <div class="modal-box" style="max-width:460px;">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-5" id="songModalTitle">Add Song</h3>
         <form id="songForm" class="flex flex-col gap-4">
             <input type="hidden" id="songEditId">
@@ -361,6 +365,22 @@ tailwind.config = {
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Notes (optional)</label>
                 <textarea id="songNotesInput" class="modal-input resize-none" rows="2" placeholder="Set changes, cues, reminders..."></textarea>
             </div>
+
+            <div class="border-t border-brd/50 pt-4">
+                <div class="flex items-center justify-between mb-2">
+                    <label class="text-xs text-[#2dd4bf] uppercase tracking-wider font-semibold">Tempo / Time-Sig Modulation</label>
+                    <button type="button" id="addModulationBtn" class="text-[11px] px-2.5 py-1 rounded-md bg-[#2dd4bf]/15 text-[#2dd4bf] border border-[#2dd4bf]/30 hover:bg-[#2dd4bf]/25 transition-colors">
+                        <i class="fas fa-plus mr-1"></i>Add Change
+                    </button>
+                </div>
+                <p class="text-[11px] text-zinc-600 mb-2.5" id="modulationHint">The song starts at the BPM / time sig above. Add a change to switch tempo or time signature after a set number of bars.</p>
+                <div id="modulationList" class="flex flex-col gap-2"></div>
+                <label class="flex items-center gap-2 mt-3 text-[11px] text-zinc-500 select-none" id="modulationLoopRow" style="display:none;">
+                    <input type="checkbox" id="modulationLoopInput" style="accent-color:#2dd4bf;">
+                    Loop back to the start after the final section
+                </label>
+            </div>
+
             <div class="flex gap-3 mt-2">
                 <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
                 <button type="button" onclick="hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
@@ -455,6 +475,7 @@ const state = {
     customDragId: null, dropLineEl: null,
     soundKit: 'beep',
     practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
+    songMod: { active: false, sections: [], index: 0, barsElapsed: 0, loop: false },
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -645,6 +666,7 @@ function openPracticeModal() {
 }
 
 function startPractice(cfg) {
+    stopSongModulation(true);
     state.practice.active = true;
     state.practice.startBpm = cfg.startBpm;
     state.practice.targetBpm = cfg.targetBpm;
@@ -665,20 +687,22 @@ function stopPractice(silent) {
 }
 
 function onMeasureComplete() {
-    if (!state.practice.active) return;
-    state.practice.barsElapsed++;
-    if (state.practice.barsElapsed >= state.practice.barsPerStep) {
-        state.practice.barsElapsed = 0;
-        const dir = state.practice.targetBpm >= state.practice.startBpm ? 1 : -1;
-        const next = state.bpm + dir * state.practice.increment;
-        const reached = dir > 0 ? next >= state.practice.targetBpm : next <= state.practice.targetBpm;
-        state.bpm = reached ? state.practice.targetBpm : next;
-        if (reached) {
-            showToast(`Practice target reached: ${state.bpm} BPM`);
-            state.practice.active = false;
+    if (state.practice.active) {
+        state.practice.barsElapsed++;
+        if (state.practice.barsElapsed >= state.practice.barsPerStep) {
+            state.practice.barsElapsed = 0;
+            const dir = state.practice.targetBpm >= state.practice.startBpm ? 1 : -1;
+            const next = state.bpm + dir * state.practice.increment;
+            const reached = dir > 0 ? next >= state.practice.targetBpm : next <= state.practice.targetBpm;
+            state.bpm = reached ? state.practice.targetBpm : next;
+            if (reached) {
+                showToast(`Practice target reached: ${state.bpm} BPM`);
+                state.practice.active = false;
+            }
         }
+        updatePracticeUI();
     }
-    updatePracticeUI();
+    if (state.songMod.active) advanceSongModulation();
 }
 
 function updatePracticeUI() {
@@ -697,6 +721,71 @@ function updatePracticeUI() {
         statusEl.classList.add('hidden'); statusEl.classList.remove('flex');
     }
 }
+
+// ===== SONG MODULATION (per-song tempo / time-sig changes) =====
+function buildSongModSections(song) {
+    const sections = [{ bpm: song.bpm, timeSig: song.timeSig, bars: null }];
+    const mods = song.modulations || [];
+    mods.forEach((m, i) => {
+        sections[i].bars = m.bars; // duration of the section this modulation follows
+        sections.push({ bpm: m.bpm, timeSig: m.timeSig, bars: null });
+    });
+    return sections;
+}
+
+function initSongModulation(song) {
+    const sections = buildSongModSections(song);
+    state.songMod = { active: sections.length > 1, sections, index: 0, barsElapsed: 0, loop: !!song.modulationLoop };
+    updateSongModUI();
+}
+
+function stopSongModulation(silent) {
+    if (!state.songMod.sections.length && !state.songMod.active) return;
+    state.songMod = { active: false, sections: [], index: 0, barsElapsed: 0, loop: false };
+    updateSongModUI();
+    if (!silent) showToast('Tempo modulation stopped');
+}
+
+function advanceSongModulation() {
+    const sm = state.songMod;
+    const sec = sm.sections[sm.index];
+    if (!sec || sec.bars == null) return; // final section plays indefinitely
+    sm.barsElapsed++;
+    if (sm.barsElapsed >= sec.bars) {
+        sm.barsElapsed = 0;
+        let nextIndex = sm.index + 1;
+        if (nextIndex >= sm.sections.length) {
+            if (sm.loop) nextIndex = 0;
+            else { sm.active = false; updateSongModUI(); return; }
+        }
+        sm.index = nextIndex;
+        const next = sm.sections[nextIndex];
+        const tsChanged = next.timeSig !== state.timeSig;
+        state.bpm = next.bpm; state.timeSig = next.timeSig;
+        document.getElementById('timeSigSelect').value = state.timeSig;
+        state.currentClick = 0; state.visualClick = -1;
+        if (state.isPlaying) state.nextNoteTime = state.audioCtx.currentTime + 0.03;
+        showToast(`Section ${nextIndex + 1}/${sm.sections.length} · ${next.bpm} BPM${tsChanged ? ' · ' + next.timeSig : ''}`);
+    }
+    updateSongModUI();
+}
+
+function updateSongModUI() {
+    const el = document.getElementById('songModStatus');
+    const text = document.getElementById('songModStatusText');
+    if (!el || !text) return;
+    const sm = state.songMod;
+    if (!sm.sections.length || sm.sections.length < 2) { el.classList.add('hidden'); el.classList.remove('flex'); return; }
+    el.classList.remove('hidden'); el.classList.add('flex');
+    const sec = sm.sections[sm.index];
+    if (!sm.active) {
+        text.textContent = `Section ${sm.index + 1}/${sm.sections.length} · ${sec.bpm} BPM · ${sec.timeSig} (final)`;
+    } else {
+        const barsToGo = sec.bars - sm.barsElapsed;
+        text.textContent = `Section ${sm.index + 1}/${sm.sections.length} · ${sec.bpm} BPM · ${sec.timeSig} · next in ${barsToGo} bar${barsToGo !== 1 ? 's' : ''}`;
+    }
+}
+
 
 // ===== CANVAS =====
 function setupCanvas() {
@@ -951,6 +1040,7 @@ function loadAndPlaySong(song) {
     document.getElementById('timeSigSelect').value = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     if (state.practice.active) stopPractice(true);
+    initSongModulation(song);
     if (state.isPlaying) {
         state.bpm = tb; state.currentClick = 0; state.visualClick = -1;
         state.nextNoteTime = state.audioCtx.currentTime + 0.03;
@@ -1035,6 +1125,25 @@ function renderSearchResults(query) {
     container.innerHTML = html;
 }
 
+function openSongEditModal(id) {
+    const sl = getActiveSetlist();
+    const song = sl?.songs.find(s => s.id === id);
+    if (!song) return;
+    document.getElementById('songModalTitle').textContent = 'Edit Song';
+    document.getElementById('songEditId').value = song.id;
+    document.getElementById('songNameInput').value = song.name;
+    document.getElementById('songBpmInput').value = song.bpm;
+    document.getElementById('songTimeSigInput').value = song.timeSig;
+    document.getElementById('songSubdivInput').value = song.subdivision || 'quarter';
+    document.getElementById('songNotesInput').value = song.notes || '';
+    document.getElementById('songNameSuggestions').classList.add('hidden');
+    document.getElementById('songNameSuggestions').innerHTML = '';
+    editingModulations = (song.modulations || []).map(m => ({ ...m }));
+    document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
+    renderModulationRows();
+    showModal('songModal');
+}
+
 function openSearchModal() {
     document.getElementById('searchInput').value = '';
     renderSearchResults('');
@@ -1073,7 +1182,65 @@ function renderSongSuggestions(query) {
     box.classList.remove('hidden');
 }
 
-// ===== UI RENDERING =====
+// ===== SONG MODULATION EDITOR (in Add/Edit Song modal) =====
+let editingModulations = [];
+
+function renderModulationRows() {
+    const list = document.getElementById('modulationList');
+    const loopRow = document.getElementById('modulationLoopRow');
+    const hint = document.getElementById('modulationHint');
+    if (!editingModulations.length) {
+        list.innerHTML = '';
+        loopRow.style.display = 'none';
+        hint.textContent = 'The song starts at the BPM / time sig above. Add a change to switch tempo or time signature after a set number of bars.';
+        return;
+    }
+    loopRow.style.display = 'flex';
+    hint.textContent = 'Each change applies after the given number of bars of the section before it.';
+    const tsOpts = TS_OPTIONS.map(t => `<option value="${t}">${t}</option>`).join('');
+    list.innerHTML = editingModulations.map((m, i) => `
+        <div class="flex items-center gap-1.5 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" data-mod-idx="${i}">
+            <span class="text-[10px] text-zinc-600 flex-shrink-0">Sec ${i + 2}</span>
+            <span class="text-[10px] text-zinc-600 flex-shrink-0">after</span>
+            <input type="number" class="edit-input mod-bars" style="width:44px" min="1" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}">
+            <span class="text-[10px] text-zinc-600 flex-shrink-0">bars →</span>
+            <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
+            <select class="edit-select mod-timesig" data-mod-field="timeSig" data-mod-idx="${i}">
+                ${tsOpts.replace(`value="${m.timeSig}"`, `value="${m.timeSig}" selected`)}
+            </select>
+            <button type="button" class="edit-btn edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
+                <i class="fas fa-trash-can"></i>
+            </button>
+        </div>`).join('');
+}
+
+function addModulationRow() {
+    const last = editingModulations[editingModulations.length - 1];
+    const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
+    const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').value;
+    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm + 10)), timeSig: baseTimeSig });
+    renderModulationRows();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('addModulationBtn').addEventListener('click', addModulationRow);
+    document.getElementById('modulationList').addEventListener('click', e => {
+        const btn = e.target.closest('.mod-remove');
+        if (!btn) return;
+        editingModulations.splice(parseInt(btn.dataset.modIdx, 10), 1);
+        renderModulationRows();
+    });
+    document.getElementById('modulationList').addEventListener('change', e => {
+        const el = e.target.closest('[data-mod-field]');
+        if (!el) return;
+        const idx = parseInt(el.dataset.modIdx, 10), field = el.dataset.modField;
+        if (!editingModulations[idx]) return;
+        if (field === 'bars') editingModulations[idx].bars = Math.max(1, Math.min(999, parseInt(el.value, 10) || 1));
+        else if (field === 'bpm') editingModulations[idx].bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(el.value, 10) || MIN_BPM));
+        else if (field === 'timeSig') editingModulations[idx].timeSig = el.value;
+    });
+});
+
 function renderSetlistSelect() {
     const sel = document.getElementById('setlistSelect'); sel.innerHTML = '';
     state.setlists.forEach(sl => {
@@ -1099,13 +1266,17 @@ function renderPlayMode(container, sl) {
     container.innerHTML = sl.songs.map((song, idx) => {
         const isA = state.activeSongId === song.id;
         const sub = song.subdivision && song.subdivision !== 'quarter';
+        const hasMod = song.modulations && song.modulations.length;
         return `
         <div class="song-play-row ${isA ? 'song-active' : ''} flex items-center gap-3 px-4 py-3 border-l-2 border-transparent" data-song-id="${song.id}">
             <div class="w-6 text-center flex-shrink-0">
                 <span class="text-[11px] font-mono ${isA ? 'text-gold' : 'text-zinc-600'}">${String(idx + 1).padStart(2, '0')}</span>
             </div>
             <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium ${isA ? 'text-gold' : 'text-zinc-200'} truncate">${escHtml(song.name)}</div>
+                <div class="text-sm font-medium ${isA ? 'text-gold' : 'text-zinc-200'} truncate flex items-center gap-1.5">
+                    <span class="truncate">${escHtml(song.name)}</span>
+                    ${hasMod ? `<i class="fas fa-wave-square text-[#2dd4bf] text-[10px] flex-shrink-0" title="Has tempo/time-sig changes"></i>` : ''}
+                </div>
                 ${song.notes ? `<div class="text-[11px] text-[#2dd4bf]/70 truncate mt-0.5">${escHtml(song.notes)}</div>` : ''}
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
@@ -1138,6 +1309,9 @@ function renderEditMode(container, sl) {
             <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
                 ${subOpts.replace(`value="${song.subdivision || 'quarter'}"`, `value="${song.subdivision || 'quarter'}" selected`)}
             </select>
+            <button class="edit-btn edit-btn-move flex-shrink-0" data-action="edit-advanced" data-song-id="${song.id}" title="Tempo / time-sig modulation &amp; notes" style="${song.modulations && song.modulations.length ? 'color:#2dd4bf;' : ''}">
+                <i class="fas fa-wave-square"></i>
+            </button>
             <div class="flex flex-col gap-0.5 flex-shrink-0">
                 <button class="edit-btn edit-btn-move" data-action="move-up" data-song-id="${song.id}" title="Move up" ${idx === 0 ? 'disabled' : ''}>
                     <i class="fas fa-chevron-up"></i>
@@ -1406,6 +1580,9 @@ function setupEvents() {
         document.getElementById('songNotesInput').value = '';
         document.getElementById('songNameSuggestions').classList.add('hidden');
         document.getElementById('songNameSuggestions').innerHTML = '';
+        editingModulations = [];
+        document.getElementById('modulationLoopInput').checked = false;
+        renderModulationRows();
         showModal('songModal');
         setTimeout(() => document.getElementById('songNameInput').focus(), 200);
     });
@@ -1448,6 +1625,8 @@ function setupEvents() {
             timeSig: document.getElementById('songTimeSigInput').value,
             subdivision: document.getElementById('songSubdivInput').value,
             notes: document.getElementById('songNotesInput').value.trim(),
+            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig })),
+            modulationLoop: document.getElementById('modulationLoopInput').checked,
         };
         if (!d.name || isNaN(d.bpm)) return;
         d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
@@ -1467,6 +1646,7 @@ function setupEvents() {
             const a = ab.dataset.action, sid = ab.dataset.songId;
             if (a === 'move-up') moveSong(sid, -1);
             else if (a === 'move-down') moveSong(sid, 1);
+            else if (a === 'edit-advanced') openSongEditModal(sid);
             else if (a === 'delete') {
                 const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === sid); if (!song) return;
                 document.getElementById('deleteTitle').textContent = `Remove "${song.name}"?`;
