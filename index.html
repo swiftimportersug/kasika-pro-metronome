@@ -4,7 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Kasika Pro Metronome</title>
+<meta name="theme-color" content="#0e0e10">
+<meta name="description" content="A pro metronome with tempo/time-sig modulation, custom beat tones, and set-list management.">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <script>
@@ -229,12 +236,26 @@ tailwind.config = {
             <p class="text-[10px] text-zinc-500 tracking-widest uppercase">Metronome</p>
         </div>
     </div>
-    <div class="flex items-center gap-2 text-[11px] text-zinc-600">
-        <span class="hidden sm:inline">Space: Play</span>
-        <span class="hidden sm:inline text-zinc-700">|</span>
-        <span class="hidden sm:inline">T: Tap</span>
-        <span class="hidden sm:inline text-zinc-700">|</span>
-        <span class="hidden sm:inline">Arrows: BPM</span>
+    <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 text-[11px] text-zinc-600">
+            <span class="hidden sm:inline">Space: Play</span>
+            <span class="hidden sm:inline text-zinc-700">|</span>
+            <span class="hidden sm:inline">T: Tap</span>
+            <span class="hidden sm:inline text-zinc-700">|</span>
+            <span class="hidden sm:inline">Arrows: BPM</span>
+        </div>
+        <div class="w-px h-4 bg-brd hidden sm:block"></div>
+        <button id="syncSignInBtn" class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
+            <i class="fas fa-cloud-arrow-up text-[10px]"></i>
+            <span class="hidden sm:inline">Sync</span>
+        </button>
+        <div id="syncStatus" class="hidden items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-[#2dd4bf]/10 border border-[#2dd4bf]/25 text-[#2dd4bf]" title="">
+            <i class="fas fa-check-circle text-[10px]" id="syncStatusIcon"></i>
+            <span class="hidden sm:inline" id="syncStatusLabel">Synced</span>
+            <button id="syncSignOutBtn" class="ml-1 text-zinc-500 hover:text-red-400 transition-colors" title="Sign out">
+                <i class="fas fa-xmark text-[10px]"></i>
+            </button>
+        </div>
     </div>
 </header>
 
@@ -531,6 +552,122 @@ tailwind.config = {
 </div>
 
 <script>
+// =====================================================================
+// FIREBASE SYNC (optional) — fill in your own project's config below.
+// Get this from: Firebase Console → Project Settings → General → Your apps → SDK setup and config
+// Leave apiKey as "PASTE_YOUR_KEY_HERE" to keep sync disabled (app works fully offline via localStorage either way).
+// =====================================================================
+const firebaseConfig = {
+    apiKey: "PASTE_YOUR_KEY_HERE",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+};
+
+let fbApp = null, fbAuth = null, fbDb = null, fbUnsub = null;
+let syncEnabled = false, applyingRemoteUpdate = false, saveDebounceTimer = null;
+
+function initFirebase() {
+    if (firebaseConfig.apiKey === "PASTE_YOUR_KEY_HERE") return; // sync disabled until configured
+    try {
+        fbApp = firebase.initializeApp(firebaseConfig);
+        fbAuth = firebase.auth();
+        fbDb = firebase.firestore();
+        syncEnabled = true;
+        fbAuth.onAuthStateChanged(user => {
+            if (user) {
+                startRemoteSync(user.uid);
+                updateSyncUI(true, user.email || user.displayName || 'Signed in');
+            } else {
+                stopRemoteSync();
+                updateSyncUI(false);
+            }
+        });
+    } catch (err) {
+        console.warn('Firebase init failed:', err);
+        syncEnabled = false;
+    }
+}
+
+function updateSyncUI(signedIn, label) {
+    const signInBtn = document.getElementById('syncSignInBtn');
+    const statusEl = document.getElementById('syncStatus');
+    const statusLabel = document.getElementById('syncStatusLabel');
+    if (!signInBtn || !statusEl) return;
+    if (signedIn) {
+        signInBtn.classList.add('hidden');
+        statusEl.classList.remove('hidden'); statusEl.classList.add('flex');
+        statusEl.title = label || '';
+        if (statusLabel) statusLabel.textContent = 'Synced';
+    } else {
+        signInBtn.classList.remove('hidden');
+        statusEl.classList.add('hidden'); statusEl.classList.remove('flex');
+    }
+}
+
+function startRemoteSync(uid) {
+    if (!fbDb) return;
+    if (fbUnsub) fbUnsub();
+    const docRef = fbDb.collection('kasikaUsers').doc(uid);
+    fbUnsub = docRef.onSnapshot(snap => {
+        if (!snap.exists) {
+            // First time this account has synced: push whatever is currently local up to the cloud.
+            docRef.set({
+                setlists: state.setlists, activeSetlistId: state.activeSetlistId,
+                soundKit: state.soundKit, beatTones: state.beatTones,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            });
+            return;
+        }
+        if (snap.metadata.hasPendingWrites) return; // this is an echo of our own write, ignore
+        const d = snap.data();
+        applyingRemoteUpdate = true;
+        if (d.setlists) state.setlists = d.setlists;
+        if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
+        if (d.soundKit) state.soundKit = d.soundKit;
+        if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones }));
+        renderSetlistSelect(); renderSongs();
+        document.getElementById('soundKitSelect').value = state.soundKit;
+        renderBeatBlocks();
+        applyingRemoteUpdate = false;
+    }, err => console.warn('Sync listener error:', err));
+}
+
+function stopRemoteSync() {
+    if (fbUnsub) { fbUnsub(); fbUnsub = null; }
+}
+
+function pushToCloud() {
+    if (!syncEnabled || !fbAuth || !fbAuth.currentUser || applyingRemoteUpdate) return;
+    clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = setTimeout(() => {
+        fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).set({
+            setlists: state.setlists, activeSetlistId: state.activeSetlistId,
+            soundKit: state.soundKit, beatTones: state.beatTones,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true }).catch(err => console.warn('Cloud save failed:', err));
+    }, 600);
+}
+
+function signInForSync() {
+    if (!syncEnabled) {
+        showToast('Cloud sync is not configured yet — see setup instructions');
+        return;
+    }
+    const provider = new firebase.auth.GoogleAuthProvider();
+    fbAuth.signInWithPopup(provider).catch(err => {
+        console.warn('Sign-in failed:', err);
+        showToast('Sign-in failed — check the console for details');
+    });
+}
+
+function signOutOfSync() {
+    if (fbAuth) fbAuth.signOut();
+}
+
 const state = {
     bpm: 120, timeSig: '4/4', subdivision: 'quarter',
     isPlaying: false, visualClick: -1, volume: 0.8,
@@ -574,6 +711,11 @@ function getSubdivMult() { return (SUBDIVISIONS[state.subdivision] || SUBDIVISIO
 function getClicksPerMeasure() { return getBeatsPerMeasure() * getSubdivMult(); }
 function bpmToAngle(bpm) { return START_RAD + ((bpm - MIN_BPM) / (MAX_BPM - MIN_BPM)) * SWEEP_RAD; }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function hexToRgba(hex, alpha) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+}
 
 // ===== BEAT TONE BLOCKS =====
 const TONE_COLORS = { 1: '#2dd4bf', 2: '#F472B6', 3: '#F0C96E' };
@@ -993,24 +1135,25 @@ function drawWheel() {
         const a = -Math.PI / 2 + (i / total) * Math.PI * 2;
         const dx = cx + dR * Math.cos(a), dy = cy + dR * Math.sin(a);
         const isMain = i % mult === 0, mi = Math.floor(i / mult);
-        const isAcc = isMain && mi === 0, isAct = state.visualClick === i;
+        const isAct = state.visualClick === i;
 
         if (isMain) {
+            const toneColor = TONE_COLORS[state.beatTones[mi] || 2];
             if (isAct && p > 0) {
                 const gr = ms * (2.5 + p * 1.5);
                 const gg = c.createRadialGradient(dx, dy, 0, dx, dy, gr);
-                gg.addColorStop(0, `rgba(212,168,83,${0.35 * p})`); gg.addColorStop(1, 'rgba(212,168,83,0)');
+                gg.addColorStop(0, hexToRgba(toneColor, 0.35 * p)); gg.addColorStop(1, hexToRgba(toneColor, 0));
                 c.fillStyle = gg; c.beginPath(); c.arc(dx, dy, gr, 0, Math.PI * 2); c.fill();
                 c.beginPath(); c.arc(dx, dy, ms * (1 + p * 0.25), 0, Math.PI * 2);
-                c.fillStyle = isAcc ? '#F0C96E' : '#D4A853'; c.fill();
+                c.fillStyle = toneColor; c.fill();
             } else {
                 c.beginPath(); c.arc(dx, dy, ms, 0, Math.PI * 2);
-                c.fillStyle = isAcc ? '#2a2218' : '#1c1c20'; c.fill();
+                c.fillStyle = hexToRgba(toneColor, 0.12); c.fill();
                 c.beginPath(); c.arc(dx, dy, ms, 0, Math.PI * 2);
-                c.strokeStyle = isAcc ? 'rgba(212,168,83,0.35)' : 'rgba(113,113,122,0.3)';
+                c.strokeStyle = hexToRgba(toneColor, 0.4);
                 c.lineWidth = 1.2; c.stroke();
                 c.beginPath(); c.arc(dx, dy, ms * 0.45, 0, Math.PI * 2);
-                c.fillStyle = isAcc ? '#8a6d30' : '#52525b'; c.fill();
+                c.fillStyle = hexToRgba(toneColor, 0.75); c.fill();
             }
         } else {
             if (isAct && p > 0) {
@@ -1126,7 +1269,10 @@ function loadData() {
     } catch { state.setlists = getDefaultData(); state.activeSetlistId = state.setlists[0]?.id; }
 }
 
-function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones })); }
+function saveData() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones }));
+    pushToCloud();
+}
 function getActiveSetlist() { return state.setlists.find(s => s.id === state.activeSetlistId) || null; }
 
 function createSetlist(name) {
@@ -2013,12 +2159,21 @@ function init() {
     renderBeatBlocks();
     updatePracticeUI();
     initTsPickerColumns();
+    initFirebase();
+    document.getElementById('syncSignInBtn').addEventListener('click', signInForSync);
+    document.getElementById('syncSignOutBtn').addEventListener('click', signOutOfSync);
     setupEvents(); setupCustomDrag();
     if (window.speechSynthesis) window.speechSynthesis.getVoices();
     requestAnimationFrame(animationLoop);
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed:', err));
+    });
+}
 </script>
 </body>
 </html>
