@@ -100,11 +100,13 @@ tailwind.config = {
         position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
         z-index: 500; display: flex; align-items: center; justify-content: center;
         opacity: 0; pointer-events: none; transition: opacity 0.2s;
+        overflow-y: auto; padding: 24px 0;
     }
     .modal-overlay.active { opacity: 1; pointer-events: auto; }
     .modal-box {
         background: #17171b; border: 1px solid #2a2a30; border-radius: 14px;
         padding: 28px; width: 90%; max-width: 420px;
+        max-height: 88vh; overflow-y: auto;
         transform: translateY(20px); transition: transform 0.25s ease-out;
     }
     .modal-overlay.active .modal-box { transform: translateY(0); }
@@ -306,6 +308,14 @@ tailwind.config = {
                 <div class="text-[10px] text-zinc-600 uppercase tracking-wider mt-0.5">BPM</div>
             </div>
             <button id="tempoPlusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Increase tempo">+</button>
+        </div>
+
+        <div id="activeSongNotesPanel" class="hidden w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-4 py-3 mt-3">
+            <div class="flex items-center gap-2 mb-1.5">
+                <i class="fas fa-note-sticky text-[#2dd4bf] text-xs"></i>
+                <span class="text-[10px] text-zinc-600 uppercase tracking-wider">Song Notes</span>
+            </div>
+            <div class="text-sm text-zinc-300 leading-relaxed" id="activeSongNotesContent" style="white-space:pre-wrap;"></div>
         </div>
 
         <div class="flex flex-wrap items-center justify-center gap-3 mt-5 w-full max-w-md">
@@ -1536,6 +1546,19 @@ function moveSong(id, dir) {
     saveData(); renderSongs();
 }
 
+function updateActiveSongNotesPanel(song) {
+    const panel = document.getElementById('activeSongNotesPanel');
+    const content = document.getElementById('activeSongNotesContent');
+    if (!panel || !content) return;
+    if (song && song.notes && song.notes.trim()) {
+        content.textContent = song.notes;
+        panel.classList.remove('hidden');
+    } else {
+        panel.classList.add('hidden');
+        content.textContent = '';
+    }
+}
+
 function loadAndPlaySong(song) {
     state.activeSongId = song.id;
     const tb = Math.max(MIN_BPM, Math.min(MAX_BPM, song.bpm));
@@ -1547,6 +1570,7 @@ function loadAndPlaySong(song) {
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     renderBeatBlocks();
+    updateActiveSongNotesPanel(song);
     if (state.practice.active) stopPractice(true);
     initSongModulation(song);
     if (state.isPlaying) {
@@ -1623,6 +1647,7 @@ function renderSearchResults(query) {
                 <div class="mb-1.5">
                     <div class="text-sm text-zinc-200 truncate">${escHtml(song.name)}</div>
                     <div class="text-[11px] text-zinc-600 truncate">from "${escHtml(setlistName)}" · ${song.bpm} BPM · ${song.timeSig}</div>
+                    ${song.notes && song.notes.trim() ? `<div class="text-[11px] text-[#2dd4bf]/70 truncate mt-0.5"><i class="fas fa-note-sticky mr-1"></i>${escHtml(song.notes.trim().slice(0, 80))}</div>` : ''}
                 </div>
                 <div class="flex items-center gap-2">
                     <button class="play-existing-btn w-8 h-8 flex-shrink-0 rounded-lg bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 transition-colors flex items-center justify-center" title="Play now">
@@ -2603,8 +2628,16 @@ function setupEvents() {
     textColorBtn.addEventListener('mousedown', e => e.preventDefault());
     textColorBtn.addEventListener('click', () => {
         const isOpen = textColorDropdown.classList.contains('flex');
-        textColorDropdown.classList.toggle('hidden', isOpen);
-        textColorDropdown.classList.toggle('flex', !isOpen);
+        if (isOpen) {
+            textColorDropdown.classList.add('hidden'); textColorDropdown.classList.remove('flex');
+        } else {
+            const rect = textColorBtn.getBoundingClientRect();
+            textColorDropdown.style.position = 'fixed';
+            textColorDropdown.style.top = (rect.bottom + 6) + 'px';
+            textColorDropdown.style.right = (window.innerWidth - rect.right) + 'px';
+            textColorDropdown.style.left = 'auto';
+            textColorDropdown.classList.remove('hidden'); textColorDropdown.classList.add('flex');
+        }
     });
     document.addEventListener('click', e => {
         if (!textColorDropdown.classList.contains('flex')) return;
