@@ -118,9 +118,13 @@ tailwind.config = {
     .song-play-row { transition: background 0.15s; cursor: pointer; }
     .song-play-row:hover { background: rgba(212,168,83,0.06); }
     .song-active { border-left: 2px solid #D4A853 !important; background: rgba(212,168,83,0.06) !important; }
-    .edit-row { transition: background 0.15s; }
+    .edit-row { transition: background 0.15s, transform 0.15s ease; }
     .edit-row:hover { background: rgba(255,255,255,0.015); }
-    .edit-row.dragging-row { opacity: 0.35; }
+    .edit-row.dragging-row { opacity: 0.45; }
+    .edit-row.edit-row-active { background: rgba(212,168,83,0.16); border-left: 2px solid #D4A853; }
+    @media (max-width: 640px) {
+        .move-updown-group { display: none !important; }
+    }
     .edit-input {
         background: #0e0e10; border: 1px solid #2a2a30; color: #fafafa;
         padding: 5px 8px; border-radius: 6px; font-family: 'Space Grotesk', sans-serif;
@@ -488,13 +492,23 @@ tailwind.config = {
         <div id="textTools" class="flex items-center gap-1.5 flex-shrink-0">
             <button type="button" id="boldBtn" class="text-fmt-btn" title="Bold"><i class="fas fa-bold"></i></button>
             <div class="w-px h-4 bg-brd mx-0.5"></div>
-            <button type="button" class="color-swatch active" data-text-color="#fafafa" style="background:#fafafa" title="White"></button>
-            <button type="button" class="color-swatch" data-text-color="#D4A853" style="background:#D4A853" title="Gold"></button>
-            <button type="button" class="color-swatch" data-text-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
-            <button type="button" class="color-swatch" data-text-color="#F472B6" style="background:#F472B6" title="Pink"></button>
-            <button type="button" class="color-swatch" data-text-color="#f87171" style="background:#f87171" title="Red"></button>
+            <div class="relative flex-shrink-0">
+                <button type="button" id="textColorBtn" class="text-fmt-btn" title="Text color">
+                    <i class="fas fa-palette" id="textColorIcon" style="color:#fafafa;"></i>
+                </button>
+                <div id="textColorDropdown" class="hidden absolute right-0 top-full mt-1.5 p-2 rounded-lg bg-s2 border border-brd/50 shadow-lg grid grid-cols-4 gap-1.5" style="width:126px; z-index:20;">
+                    <button type="button" class="color-swatch active" data-text-color="#fafafa" style="background:#fafafa" title="White"></button>
+                    <button type="button" class="color-swatch" data-text-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+                    <button type="button" class="color-swatch" data-text-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+                    <button type="button" class="color-swatch" data-text-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+                    <button type="button" class="color-swatch" data-text-color="#f87171" style="background:#f87171" title="Red"></button>
+                    <button type="button" class="color-swatch" data-text-color="#32CD32" style="background:#32CD32" title="Lime Green"></button>
+                    <button type="button" class="color-swatch" data-text-color="#ff0000" style="background:#ff0000" title="Pure Red"></button>
+                </div>
+            </div>
         </div>
         <div id="drawTools" class="hidden items-center gap-1.5 flex-shrink-0">
+            <button type="button" id="drawUndoBtn" class="text-fmt-btn" title="Undo last stroke"><i class="fas fa-rotate-left"></i></button>
             <button type="button" id="drawPencilBtn" class="text-fmt-btn active" title="Pencil"><i class="fas fa-pencil"></i></button>
             <button type="button" id="drawEraserBtn" class="text-fmt-btn" title="Eraser — erases where you drag"><i class="fas fa-eraser"></i></button>
             <div class="w-px h-4 bg-brd mx-0.5"></div>
@@ -835,6 +849,7 @@ const state = {
     noteTool: 'pencil',
     noteCanvas: null, noteCtx: null, noteDrawing: false, noteLastX: 0, noteLastY: 0,
     noteSaveTimer: null,
+    noteUndoStack: [],
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -1741,8 +1756,12 @@ function openNoteEditor(id) {
     document.getElementById('noteTitleInput').value = note.title || '';
     document.getElementById('noteTextArea').innerHTML = note.content || '';
     document.getElementById('boldBtn').classList.remove('active');
-    document.querySelectorAll('#textTools .color-swatch').forEach(s => s.classList.remove('active'));
-    document.querySelector('#textTools .color-swatch[data-text-color="#fafafa"]').classList.add('active');
+    document.querySelectorAll('#textColorDropdown .color-swatch').forEach(s => s.classList.remove('active'));
+    document.querySelector('#textColorDropdown .color-swatch[data-text-color="#fafafa"]').classList.add('active');
+    document.getElementById('textColorIcon').style.color = '#fafafa';
+    document.getElementById('textColorDropdown').classList.add('hidden');
+    document.getElementById('textColorDropdown').classList.remove('flex');
+    state.noteUndoStack = [];
     setDrawTool('pencil');
     setNoteMode('text');
     pushView('note-editor');
@@ -1848,6 +1867,7 @@ function noteDrawStart(e) {
     if (state.noteMode !== 'draw') return;
     e.preventDefault();
     state.noteDrawing = true;
+    pushDrawUndoSnapshot();
     const p = getCanvasPoint(e);
     state.noteLastX = p.x; state.noteLastY = p.y;
     const ctx = state.noteCtx;
@@ -1896,9 +1916,38 @@ function setDrawTool(tool) {
 function clearNoteDrawing() {
     const ctx = state.noteCtx, canvas = state.noteCanvas;
     if (!ctx || !canvas) return;
+    pushDrawUndoSnapshot();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const note = getActiveNote();
     if (note) { note.drawingDataUrl = null; note.updatedAt = Date.now(); saveData(); }
+}
+
+function pushDrawUndoSnapshot() {
+    const canvas = state.noteCanvas;
+    if (!canvas) return;
+    state.noteUndoStack.push(canvas.toDataURL('image/png'));
+    if (state.noteUndoStack.length > 20) state.noteUndoStack.shift();
+}
+
+function undoNoteDrawing() {
+    if (!state.noteUndoStack.length) { showToast('Nothing to undo'); return; }
+    const prev = state.noteUndoStack.pop();
+    const ctx = state.noteCtx, canvas = state.noteCanvas;
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const dpr = window.devicePixelRatio || 1;
+    if (prev) {
+        const img = new Image();
+        img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width / dpr, canvas.height / dpr);
+            const note = getActiveNote();
+            if (note) { note.drawingDataUrl = prev; note.updatedAt = Date.now(); saveData(); }
+        };
+        img.src = prev;
+    } else {
+        const note = getActiveNote();
+        if (note) { note.drawingDataUrl = null; note.updatedAt = Date.now(); saveData(); }
+    }
 }
 
 function renderSongSuggestions(query) {
@@ -2117,36 +2166,41 @@ function renderPlayMode(container, sl) {
 function renderEditMode(container, sl) {
     const subOpts = SUBDIV_OPTIONS.map(s => `<option value="${s}">${SUBDIVISIONS[s].short}</option>`).join('');
 
-    container.innerHTML = sl.songs.map((song, idx) => `
-        <div class="edit-row flex items-center gap-2 px-3 py-2.5 border-b border-brd/20" data-song-id="${song.id}">
-            <div class="drag-handle flex flex-col items-center gap-0.5 py-1 px-0.5" data-grip="${song.id}" title="Drag to reorder">
-                <i class="fas fa-grip-vertical text-[10px]"></i>
-            </div>
-            <div class="w-5 text-center flex-shrink-0">
-                <span class="text-[11px] font-mono text-zinc-600">${String(idx + 1).padStart(2, '0')}</span>
-            </div>
-            <input type="text" class="edit-input flex-1 min-w-0" value="${escHtml(song.name)}" data-field="name" data-song-id="${song.id}" placeholder="Song name">
-            <input type="number" class="edit-input edit-input-bpm" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
-            <button type="button" class="edit-select ts-inline-btn flex-shrink-0" data-song-id="${song.id}" style="width:44px;">${song.timeSig}</button>
-            <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
-                ${subOpts.replace(`value="${song.subdivision || 'quarter'}"`, `value="${song.subdivision || 'quarter'}" selected`)}
-            </select>
-            <button class="edit-btn edit-btn-move flex-shrink-0" data-action="edit-advanced" data-song-id="${song.id}" title="Tempo / time-sig modulation &amp; notes" style="${song.modulations && song.modulations.length ? 'color:#2dd4bf;' : ''}">
-                <i class="fas fa-wave-square"></i>
-            </button>
-            <div class="flex flex-col gap-0.5 flex-shrink-0">
-                <button class="edit-btn edit-btn-move" data-action="move-up" data-song-id="${song.id}" title="Move up" ${idx === 0 ? 'disabled' : ''}>
-                    <i class="fas fa-chevron-up"></i>
-                </button>
-                <button class="edit-btn edit-btn-move" data-action="move-down" data-song-id="${song.id}" title="Move down" ${idx === sl.songs.length - 1 ? 'disabled' : ''}>
-                    <i class="fas fa-chevron-down"></i>
+    container.innerHTML = sl.songs.map((song, idx) => {
+        const isActive = state.activeSongId === song.id;
+        return `
+        <div class="edit-row flex flex-col gap-2 px-3 py-2.5 border-b border-brd/20 ${isActive ? 'edit-row-active' : ''}" data-song-id="${song.id}">
+            <div class="flex items-center gap-2">
+                <div class="drag-handle flex-shrink-0" data-grip="${song.id}" title="Drag to reorder">
+                    <i class="fas fa-grip-vertical text-[10px]"></i>
+                </div>
+                <span class="text-[11px] font-mono text-zinc-600 flex-shrink-0 w-5 text-center">${String(idx + 1).padStart(2, '0')}</span>
+                <input type="text" class="edit-input flex-1 min-w-0" value="${escHtml(song.name)}" data-field="name" data-song-id="${song.id}" placeholder="Song name">
+                <button class="edit-btn edit-btn-del flex-shrink-0" data-action="delete" data-song-id="${song.id}" title="Remove song">
+                    <i class="fas fa-trash-can"></i>
                 </button>
             </div>
-            <button class="edit-btn edit-btn-del" data-action="delete" data-song-id="${song.id}" title="Remove song">
-                <i class="fas fa-trash-can"></i>
-            </button>
+            <div class="flex items-center gap-2 pl-7">
+                <input type="number" class="edit-input edit-input-bpm" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
+                <button type="button" class="edit-select ts-inline-btn flex-shrink-0" data-song-id="${song.id}" style="width:44px;">${song.timeSig}</button>
+                <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
+                    ${subOpts.replace(`value="${song.subdivision || 'quarter'}"`, `value="${song.subdivision || 'quarter'}" selected`)}
+                </select>
+                <button class="edit-btn edit-btn-move flex-shrink-0" data-action="edit-advanced" data-song-id="${song.id}" title="Tempo / time-sig modulation &amp; notes" style="${song.modulations && song.modulations.length ? 'color:#2dd4bf;' : ''}">
+                    <i class="fas fa-wave-square"></i>
+                </button>
+                <div class="move-updown-group flex flex-col gap-0.5 flex-shrink-0 ml-auto">
+                    <button class="edit-btn edit-btn-move" data-action="move-up" data-song-id="${song.id}" title="Move up" ${idx === 0 ? 'disabled' : ''}>
+                        <i class="fas fa-chevron-up"></i>
+                    </button>
+                    <button class="edit-btn edit-btn-move" data-action="move-down" data-song-id="${song.id}" title="Move down" ${idx === sl.songs.length - 1 ? 'disabled' : ''}>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                </div>
+            </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     // Inline edit events
     container.querySelectorAll('.edit-input, .edit-select').forEach(el => {
@@ -2226,6 +2280,8 @@ function showToast(msg) {
 function setupCustomDrag() {
     const list = document.getElementById('songList');
     let dragClone = null, dragOffsetY = 0, dragStartY = 0, hasMoved = false;
+    let dragOriginalRects = []; // snapshot of {id, top, height} taken at drag start, used for stable hit-testing
+    let dragOriginalIndex = -1, dragTargetIndex = -1;
 
     function getGrip(e) {
         const target = e.target.closest('[data-grip]');
@@ -2234,29 +2290,6 @@ function setupCustomDrag() {
     }
 
     function getY(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
-
-    function clearDrop() {
-        if (state.dropLineEl) { state.dropLineEl.remove(); state.dropLineEl = null; }
-    }
-
-    function showDrop(beforeEl) {
-        if (state.dropLineEl && state.dropLineEl.nextSibling === beforeEl) return;
-        if (!beforeEl && state.dropLineEl && state.dropLineEl === list.lastElementChild) return;
-        clearDrop();
-        const line = document.createElement('div');
-        line.className = 'drop-line'; line.id = 'activeDropLine';
-        if (beforeEl) beforeEl.before(line); else list.appendChild(line);
-        state.dropLineEl = line;
-    }
-
-    function getRowAtY(y) {
-        const rows = list.querySelectorAll('.edit-row:not(.dragging-row)');
-        for (const row of rows) {
-            const r = row.getBoundingClientRect();
-            if (y >= r.top && y <= r.bottom) return row;
-        }
-        return null;
-    }
 
     function makeClone(row) {
         const rect = row.getBoundingClientRect();
@@ -2289,8 +2322,31 @@ function setupCustomDrag() {
         hasMoved = false;
         row.classList.add('dragging-row');
         dragClone = makeClone(row);
+
+        const rows = Array.from(list.querySelectorAll('.edit-row'));
+        dragOriginalRects = rows.map(r => {
+            const rr = r.getBoundingClientRect();
+            return { id: r.dataset.songId, top: rr.top, height: rr.height };
+        });
+        dragOriginalIndex = dragOriginalRects.findIndex(r => r.id === state.customDragId);
+        dragTargetIndex = dragOriginalIndex;
+
         document.body.style.userSelect = 'none';
         document.body.style.webkitUserSelect = 'none';
+    }
+
+    function applyLiveShift() {
+        const rows = list.querySelectorAll('.edit-row');
+        rows.forEach(row => {
+            if (row.dataset.songId === state.customDragId) { row.style.transform = ''; return; }
+            const origIdx = dragOriginalRects.findIndex(r => r.id === row.dataset.songId);
+            if (origIdx === -1) return;
+            const rowHeight = dragOriginalRects[origIdx].height;
+            let shift = 0;
+            if (dragOriginalIndex < dragTargetIndex && origIdx > dragOriginalIndex && origIdx < dragTargetIndex) shift = -rowHeight;
+            else if (dragOriginalIndex > dragTargetIndex && origIdx < dragOriginalIndex && origIdx >= dragTargetIndex) shift = rowHeight;
+            row.style.transform = shift ? `translateY(${shift}px)` : '';
+        });
     }
 
     function onMove(e) {
@@ -2304,19 +2360,17 @@ function setupCustomDrag() {
         if (y < listRect.top + 12) list.scrollTop -= 8;
         else if (y > listRect.bottom - 12) list.scrollTop += 8;
 
-        const row = getRowAtY(y);
-        if (!row) {
-            const rows = list.querySelectorAll('.edit-row:not(.dragging-row)');
-            if (rows.length === 0) return;
-            const firstRect = rows[0].getBoundingClientRect();
-            const lastRect = rows[rows.length - 1].getBoundingClientRect();
-            if (y <= firstRect.top) showDrop(rows[0]);
-            else if (y >= lastRect.bottom) showDrop(null);
-            return;
+        // Find target index using the ORIGINAL (pre-drag) row positions, not live/shifted
+        // ones — hit-testing against already-transformed rows would create feedback loops.
+        let targetIndex = dragOriginalRects.length;
+        for (let i = 0; i < dragOriginalRects.length; i++) {
+            const r = dragOriginalRects[i];
+            if (y < r.top + r.height / 2) { targetIndex = i; break; }
         }
-        const r = row.getBoundingClientRect();
-        const before = y < r.top + r.height / 2;
-        showDrop(before ? row : row.nextElementSibling);
+        if (targetIndex !== dragTargetIndex) {
+            dragTargetIndex = targetIndex;
+            applyLiveShift();
+        }
     }
 
     function onUp() {
@@ -2325,22 +2379,12 @@ function setupCustomDrag() {
         document.body.style.webkitUserSelect = '';
 
         const sl = getActiveSetlist();
-        if (sl && hasMoved) {
-            const dropLine = document.getElementById('activeDropLine');
-            if (dropLine) {
-                // Insert index = count of .edit-row elements that appear before the drop line in the DOM
-                let insertIdx = 0;
-                for (const child of list.children) {
-                    if (child === dropLine) break;
-                    if (child.classList.contains('edit-row')) insertIdx++;
-                }
-                const fromIdx = sl.songs.findIndex(s => s.id === state.customDragId);
-                if (fromIdx >= 0 && fromIdx !== insertIdx && fromIdx !== insertIdx - 1) {
-                    const [moved] = sl.songs.splice(fromIdx, 1);
-                    if (fromIdx < insertIdx) insertIdx--;
-                    sl.songs.splice(insertIdx, 0, moved);
-                    saveData();
-                }
+        if (sl && hasMoved && dragOriginalIndex !== -1 && dragTargetIndex !== -1) {
+            let finalIdx = dragTargetIndex > dragOriginalIndex ? dragTargetIndex - 1 : dragTargetIndex;
+            if (finalIdx !== dragOriginalIndex) {
+                const [moved] = sl.songs.splice(dragOriginalIndex, 1);
+                sl.songs.splice(finalIdx, 0, moved);
+                saveData();
             }
         }
 
@@ -2349,11 +2393,12 @@ function setupCustomDrag() {
     }
 
     function cleanup() {
-        clearDrop();
+        list.querySelectorAll('.edit-row').forEach(r => { r.style.transform = ''; r.classList.remove('dragging-row'); });
         if (dragClone) { dragClone.remove(); dragClone = null; }
-        list.querySelectorAll('.dragging-row').forEach(r => r.classList.remove('dragging-row'));
         state.customDragId = null;
         hasMoved = false;
+        dragOriginalRects = [];
+        dragOriginalIndex = -1; dragTargetIndex = -1;
     }
 
     list.addEventListener('mousedown', onDown);
@@ -2530,6 +2575,10 @@ function setupEvents() {
     document.getElementById('noteTextArea').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteModeTextBtn').addEventListener('click', () => setNoteMode('text'));
     document.getElementById('noteModeDrawBtn').addEventListener('click', () => setNoteMode('draw'));
+    document.getElementById('drawPencilBtn').addEventListener('click', () => setDrawTool('pencil'));
+    document.getElementById('drawEraserBtn').addEventListener('click', () => setDrawTool('eraser'));
+    document.getElementById('drawClearBtn').addEventListener('click', clearNoteDrawing);
+    document.getElementById('drawUndoBtn').addEventListener('click', undoNoteDrawing);
     document.querySelectorAll('#drawTools .color-swatch').forEach(sw => {
         sw.addEventListener('click', () => {
             state.drawColor = sw.dataset.color;
@@ -2537,9 +2586,6 @@ function setupEvents() {
             sw.classList.add('active');
         });
     });
-    document.getElementById('drawPencilBtn').addEventListener('click', () => setDrawTool('pencil'));
-    document.getElementById('drawEraserBtn').addEventListener('click', () => setDrawTool('eraser'));
-    document.getElementById('drawClearBtn').addEventListener('click', clearNoteDrawing);
 
     // Text formatting (bold + color). mousedown preventDefault keeps the text
     // selection intact — otherwise clicking a toolbar button blurs the editor first.
@@ -2551,13 +2597,29 @@ function setupEvents() {
         boldBtn.classList.toggle('active', document.queryCommandState('bold'));
         saveActiveNote(false);
     });
-    document.querySelectorAll('#textTools .color-swatch').forEach(sw => {
+
+    const textColorBtn = document.getElementById('textColorBtn');
+    const textColorDropdown = document.getElementById('textColorDropdown');
+    textColorBtn.addEventListener('mousedown', e => e.preventDefault());
+    textColorBtn.addEventListener('click', () => {
+        const isOpen = textColorDropdown.classList.contains('flex');
+        textColorDropdown.classList.toggle('hidden', isOpen);
+        textColorDropdown.classList.toggle('flex', !isOpen);
+    });
+    document.addEventListener('click', e => {
+        if (!textColorDropdown.classList.contains('flex')) return;
+        if (e.target === textColorBtn || textColorBtn.contains(e.target) || textColorDropdown.contains(e.target)) return;
+        textColorDropdown.classList.add('hidden'); textColorDropdown.classList.remove('flex');
+    });
+    document.querySelectorAll('#textColorDropdown .color-swatch').forEach(sw => {
         sw.addEventListener('mousedown', e => e.preventDefault());
         sw.addEventListener('click', () => {
             document.getElementById('noteTextArea').focus();
             document.execCommand('foreColor', false, sw.dataset.textColor);
-            document.querySelectorAll('#textTools .color-swatch').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('#textColorDropdown .color-swatch').forEach(s => s.classList.remove('active'));
             sw.classList.add('active');
+            document.getElementById('textColorIcon').style.color = sw.dataset.textColor;
+            textColorDropdown.classList.add('hidden'); textColorDropdown.classList.remove('flex');
             saveActiveNote(false);
         });
     });
