@@ -12,6 +12,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-storage-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <script>
@@ -280,6 +281,9 @@ tailwind.config = {
         <button id="openNotesBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all font-medium" title="Open notes">
             <i class="fas fa-note-sticky text-[10px]"></i><span class="hidden sm:inline">Notes</span>
         </button>
+        <button id="openCueBankBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#F472B6] hover:border-[#F472B6]/30 transition-all font-medium" title="Open voice cue bank">
+            <i class="fas fa-microphone text-[10px]"></i><span class="hidden sm:inline">Cues</span>
+        </button>
         <div class="w-px h-4 bg-brd hidden sm:block"></div>
         <button id="syncSignInBtn" class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
             <i class="fas fa-cloud-arrow-up text-[10px]"></i>
@@ -481,6 +485,67 @@ tailwind.config = {
             <i class="fas fa-note-sticky text-zinc-700 text-3xl mb-3"></i>
             <p class="text-zinc-600 text-sm">No notes yet</p>
             <p class="text-zinc-700 text-xs mt-1">Tap + to write or sketch something</p>
+        </div>
+    </div>
+</div>
+
+<div id="cueBankView" class="fixed inset-0 z-[200] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50">
+        <div class="flex items-center gap-3 px-4 pt-3 pb-3">
+            <button id="closeCueBankBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-[#F472B6] hover:border-[#F472B6]/30 transition-all" aria-label="Back to metronome" title="Back to metronome">
+                <i class="fas fa-arrow-left text-xs"></i>
+            </button>
+            <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-200 uppercase flex-1">Voice Cue Bank</h2>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto px-4 py-4" id="cueBankScrollArea">
+        <div class="mb-6">
+            <div class="flex items-center justify-between mb-2">
+                <label class="text-xs text-[#F472B6] uppercase tracking-wider font-semibold">Count-in Numbers</label>
+                <span class="text-[10px] text-zinc-700">tap a slot to import "1" through "7"</span>
+            </div>
+            <div class="grid grid-cols-4 sm:grid-cols-7 gap-2" id="cueNumbersGrid"></div>
+            <input type="file" id="cueNumberFileInput" accept="audio/*" class="hidden">
+        </div>
+
+        <div class="mb-6">
+            <div class="flex items-center justify-between mb-2">
+                <label class="text-xs text-[#F472B6] uppercase tracking-wider font-semibold">Reminder Phrases</label>
+                <button type="button" id="addReminderBtn" class="text-[11px] px-2.5 py-1 rounded-md bg-[#F472B6]/15 text-[#F472B6] border border-[#F472B6]/30 hover:bg-[#F472B6]/25 transition-colors">
+                    <i class="fas fa-plus mr-1"></i>Add Phrase
+                </button>
+                <input type="file" id="cueReminderFileInput" accept="audio/*" class="hidden">
+            </div>
+            <div class="flex flex-col gap-1.5" id="cueRemindersList"></div>
+            <div id="cueRemindersEmpty" class="hidden text-center py-6 text-zinc-700 text-xs">No reminder phrases yet</div>
+        </div>
+
+        <div class="rounded-xl bg-s2/60 border border-brd/50 p-4">
+            <label class="text-xs text-zinc-500 uppercase tracking-wider mb-3 block font-semibold">Cue Mix</label>
+            <div class="mb-4">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-[11px] text-zinc-500">Volume</span>
+                    <span class="text-[11px] text-zinc-500" id="cueVolumeLabel">100%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-volume-low text-zinc-600 text-xs"></i>
+                    <input type="range" id="cueVolumeInput" class="vol-slider flex-1" min="0" max="100" value="100" step="1">
+                    <i class="fas fa-volume-high text-zinc-600 text-xs"></i>
+                </div>
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-[11px] text-zinc-500">Pan</span>
+                    <span class="text-[11px] text-zinc-500" id="cuePanLabel">Center</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-zinc-600 flex-shrink-0 w-3">L</span>
+                    <input type="range" id="cuePanInput" class="vol-slider flex-1" min="-100" max="100" value="0" step="1">
+                    <span class="text-[10px] text-zinc-600 flex-shrink-0 w-3 text-right">R</span>
+                </div>
+            </div>
+            <p class="text-[11px] text-zinc-600 mt-3">Cue volume and pan are independent of the main click volume.</p>
         </div>
     </div>
 </div>
@@ -732,7 +797,7 @@ const firebaseConfig = {
     appId: "YOUR_APP_ID"
 };
 
-let fbApp = null, fbAuth = null, fbDb = null, fbUnsub = null;
+let fbApp = null, fbAuth = null, fbDb = null, fbStorage = null, fbUnsub = null;
 let syncEnabled = false, applyingRemoteUpdate = false, saveDebounceTimer = null;
 
 function initFirebase() {
@@ -741,6 +806,7 @@ function initFirebase() {
         fbApp = firebase.initializeApp(firebaseConfig);
         fbAuth = firebase.auth();
         fbDb = firebase.firestore();
+        fbStorage = firebase.storage ? firebase.storage() : null; // used for voice cue audio files
         syncEnabled = true;
         fbAuth.onAuthStateChanged(user => {
             if (user) {
@@ -783,6 +849,7 @@ function startRemoteSync(uid) {
             docRef.set({
                 setlists: state.setlists, activeSetlistId: state.activeSetlistId,
                 soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
+                cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
             return;
@@ -795,11 +862,16 @@ function startRemoteSync(uid) {
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
         if (Array.isArray(d.notes)) state.notes = d.notes;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes }));
+        if (d.cueBank) state.cueBank = d.cueBank;
+        if (d.cueVolume != null) state.cueVolume = d.cueVolume;
+        if (d.cuePan != null) state.cuePan = d.cuePan;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan }));
         renderSetlistSelect(); renderSongs();
         document.getElementById('soundKitSelect').value = state.soundKit;
         renderBeatBlocks();
         renderNotesList();
+        renderCueBankUI();
+        syncAllCueAudioLocally(); // fetch any clip bytes we don't have locally yet
         applyingRemoteUpdate = false;
     }, err => console.warn('Sync listener error:', err));
 }
@@ -815,6 +887,7 @@ function pushToCloud() {
         fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).set({
             setlists: state.setlists, activeSetlistId: state.activeSetlistId,
             soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
+            cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         }, { merge: true }).catch(err => console.warn('Cloud save failed:', err));
     }, 600);
@@ -834,6 +907,48 @@ function signInForSync() {
 
 function signOutOfSync() {
     if (fbAuth) fbAuth.signOut();
+}
+
+// ===== LOCAL AUDIO STORAGE (IndexedDB) — holds the actual cue audio blobs on-device =====
+const CUE_DB_NAME = 'kasika-cue-audio', CUE_DB_STORE = 'clips';
+let cueDbPromise = null;
+
+function openCueDB() {
+    if (cueDbPromise) return cueDbPromise;
+    cueDbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(CUE_DB_NAME, 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore(CUE_DB_STORE); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+    return cueDbPromise;
+}
+async function cueDbPut(key, blob) {
+    const db = await openCueDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(CUE_DB_STORE, 'readwrite');
+        tx.objectStore(CUE_DB_STORE).put(blob, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+async function cueDbGet(key) {
+    const db = await openCueDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(CUE_DB_STORE, 'readonly');
+        const req = tx.objectStore(CUE_DB_STORE).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+    });
+}
+async function cueDbDelete(key) {
+    const db = await openCueDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(CUE_DB_STORE, 'readwrite');
+        tx.objectStore(CUE_DB_STORE).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
 }
 
 const state = {
@@ -860,6 +975,11 @@ const state = {
     noteCanvas: null, noteCtx: null, noteDrawing: false, noteLastX: 0, noteLastY: 0,
     noteSaveTimer: null,
     noteUndoStack: [],
+    cueBank: { numbers: [null,null,null,null,null,null,null], reminders: [] },
+    cueVolume: 100,
+    cuePan: 0,
+    cueBufferCache: {},
+    cueDuck: null,
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -1061,6 +1181,91 @@ function speakBeat(n) {
     window.speechSynthesis.speak(u);
 }
 
+// ===== VOICE CUES: buffer loading + playback =====
+async function loadCueBuffer(key) {
+    if (!key) return null;
+    if (state.cueBufferCache[key]) return state.cueBufferCache[key];
+    try {
+        const blob = await cueDbGet(key);
+        if (!blob) return null;
+        const arrayBuf = await blob.arrayBuffer();
+        ensureAudio();
+        const decoded = await state.audioCtx.decodeAudioData(arrayBuf);
+        state.cueBufferCache[key] = decoded;
+        return decoded;
+    } catch (err) {
+        console.warn('Failed to load cue audio:', err);
+        return null;
+    }
+}
+
+function playCueClip(buffer, time, volumePct, pan) {
+    if (!buffer) return;
+    const c = state.audioCtx;
+    const src = c.createBufferSource();
+    src.buffer = buffer;
+    const g = c.createGain();
+    g.gain.value = Math.max(0, Math.min(1, (volumePct != null ? volumePct : 100) / 100));
+    const p = c.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan || 0));
+    src.connect(g); g.connect(p); p.connect(c.destination);
+    const t = Math.max(time, c.currentTime);
+    src.start(t);
+    return src;
+}
+
+// Imports a user-picked audio file: stores the raw blob in IndexedDB (source of truth on
+// this device), decodes it once for immediate playback/duration, and — if signed in — kicks
+// off an upload to Firebase Storage so other devices can fetch the same clip.
+async function importCueFile(file, displayName) {
+    ensureAudio();
+    const arrayBuf = await file.arrayBuffer();
+    const blob = new Blob([arrayBuf], { type: file.type || 'audio/mpeg' });
+    const key = genId();
+    await cueDbPut(key, blob);
+    let duration = 0;
+    try {
+        const decoded = await state.audioCtx.decodeAudioData(arrayBuf.slice(0));
+        state.cueBufferCache[key] = decoded;
+        duration = decoded.duration;
+    } catch (err) {
+        console.warn('Could not decode cue audio (still saved locally):', err);
+    }
+    const entry = { id: genId(), name: displayName || file.name.replace(/\.[^.]+$/, ''), key, duration, url: null };
+    uploadCueToCloud(entry, blob);
+    return entry;
+}
+
+function uploadCueToCloud(entry, blob) {
+    if (!syncEnabled || !fbStorage || !fbAuth || !fbAuth.currentUser) return;
+    const path = `cueAudio/${fbAuth.currentUser.uid}/${entry.id}.dat`;
+    fbStorage.ref(path).put(blob).then(snap => snap.ref.getDownloadURL()).then(url => {
+        entry.url = url;
+        saveData();
+    }).catch(err => console.warn('Cue upload failed (clip still works locally):', err));
+}
+
+// When a cue reference arrives from another device (via Firestore sync) that we don't have
+// the audio bytes for yet, fetch it from Storage and cache it locally so playback works offline.
+async function ensureCueCachedLocally(entry) {
+    if (!entry || !entry.key) return;
+    const existing = await cueDbGet(entry.key);
+    if (existing) return;
+    if (!entry.url) return;
+    try {
+        const res = await fetch(entry.url);
+        const blob = await res.blob();
+        await cueDbPut(entry.key, blob);
+    } catch (err) {
+        console.warn('Could not download synced cue audio yet:', err);
+    }
+}
+
+function syncAllCueAudioLocally() {
+    const all = [...state.cueBank.numbers.filter(Boolean), ...state.cueBank.reminders];
+    all.forEach(ensureCueCachedLocally);
+}
+
 function getSubdivisionPanValue() {
     return normalizePanValue(state.subdivisionPan);
 }
@@ -1075,17 +1280,18 @@ function playClick(type, time, beatNum) {
     if (time < c.currentTime - 0.05) return;
     const pan = type === 'sub' ? getSubdivisionPanValue() : 0;
     const subMult = type === 'sub' ? Math.max(0, Math.min(1, (state.subdivisionVolume != null ? state.subdivisionVolume : 100) / 100)) : 1;
+    const duck = state.cueDuck && time >= state.cueDuck.start && time <= state.cueDuck.end ? 0.4 : 1;
     if (kit === 'voice') {
         if (type === 'sub') {
             const t = Math.max(time, c.currentTime);
-            playBeep(c, t, 'sub', state.volume * 0.6 * subMult, pan);
+            playBeep(c, t, 'sub', state.volume * 0.6 * subMult * duck, pan);
         } else {
             const delay = Math.max(0, (time - c.currentTime) * 1000);
             setTimeout(() => speakBeat(beatNum), delay);
         }
         return;
     }
-    const t = Math.max(time, c.currentTime), v = state.volume * subMult;
+    const t = Math.max(time, c.currentTime), v = state.volume * subMult * duck;
     if (kit === 'woodblock') { playWoodblock(c, t, type, v, pan); return; }
     if (kit === 'cowbell') { playCowbell(c, t, type, v, pan); return; }
     playBeep(c, t, type, v, pan);
@@ -1100,7 +1306,7 @@ function startMetronome() {
 
 function stopMetronome() {
     state.isPlaying = false; clearTimeout(state.schedulerTimer);
-    state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; updatePlayBtn();
+    state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
@@ -1212,26 +1418,80 @@ function updatePracticeUI() {
 
 // ===== SONG MODULATION (per-song tempo / time-sig changes) =====
 function buildSongModSections(song) {
-    const sections = [{ bpm: song.bpm, timeSig: song.timeSig, bars: null, beatTones: (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray() }];
+    const sections = [{ bpm: song.bpm, timeSig: song.timeSig, bars: null, beatTones: (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray(), cue: null }];
     const mods = song.modulations || [];
     mods.forEach((m, i) => {
         sections[i].bars = m.bars; // duration of the section this modulation follows
-        sections.push({ bpm: m.bpm, timeSig: m.timeSig, bars: null, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray() });
+        sections.push({ bpm: m.bpm, timeSig: m.timeSig, bars: null, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue || null });
     });
     return sections;
 }
 
 function initSongModulation(song) {
     const sections = buildSongModSections(song);
-    state.songMod = { active: sections.length > 1, sections, index: 0, barsElapsed: 0, loop: !!song.modulationLoop };
+    state.songMod = { active: sections.length > 1, sections, index: 0, barsElapsed: 0, loop: !!song.modulationLoop, cueFiredForIndex: -1 };
     updateSongModUI();
+    // Handle a 1-bar first-into-second section transition, where "entering the final bar"
+    // and "section start" are the same moment (no separate mid-section tick to catch it on).
+    if (sections.length > 1 && sections[0].bars === 1) {
+        maybeFireCueForSection(0);
+    }
 }
 
 function stopSongModulation(silent) {
     if (!state.songMod.sections.length && !state.songMod.active) return;
-    state.songMod = { active: false, sections: [], index: 0, barsElapsed: 0, loop: false };
+    state.songMod = { active: false, sections: [], index: 0, barsElapsed: 0, loop: false, cueFiredForIndex: -1 };
+    state.cueDuck = null;
     updateSongModUI();
     if (!silent) showToast('Tempo modulation stopped');
+}
+
+// Fires the voice cue (reminder + count-in) attached to the transition LEAVING section
+// `fromIndex`, scheduled precisely against the exact audio-clock time of that transition.
+function maybeFireCueForSection(fromIndex) {
+    const sm = state.songMod;
+    if (sm.cueFiredForIndex === fromIndex) return; // already fired for this transition
+    let nextIndex = fromIndex + 1;
+    if (nextIndex >= sm.sections.length) { if (sm.loop) nextIndex = 0; else return; }
+    const next = sm.sections[nextIndex];
+    if (!next || !next.cue || (!next.cue.reminderId && !next.cue.countIn)) return;
+    sm.cueFiredForIndex = fromIndex;
+    const oldBeatsPerBar = getBeatsPerMeasure();
+    const transitionTime = state.nextNoteTime + oldBeatsPerBar * (60 / state.bpm);
+    fireVoiceCue(next, transitionTime);
+}
+
+function fireVoiceCue(next, transitionTime) {
+    const newBpm = next.bpm;
+    const newBeatsPerBar = parseInt(String(next.timeSig).split('/')[0], 10) || 4;
+    const newBeatDur = 60 / newBpm;
+    let firstNumberTime = null;
+
+    if (next.cue.countIn) {
+        firstNumberTime = transitionTime - newBeatsPerBar * newBeatDur;
+        for (let b = 1; b <= newBeatsPerBar; b++) {
+            const t = transitionTime - (newBeatsPerBar - b + 1) * newBeatDur;
+            const bank = state.cueBank.numbers[b - 1];
+            if (bank) loadCueBuffer(bank.key).then(buf => { if (buf) playCueClip(buf, t, state.cueVolume, state.cuePan); });
+        }
+    }
+
+    if (next.cue.reminderId) {
+        const rem = state.cueBank.reminders.find(r => r.id === next.cue.reminderId);
+        if (rem) {
+            const targetEnd = (firstNumberTime != null ? firstNumberTime : transitionTime) - 0.12;
+            loadCueBuffer(rem.key).then(buf => {
+                if (!buf) return;
+                const startTime = Math.max(state.audioCtx.currentTime + 0.02, targetEnd - buf.duration);
+                playCueClip(buf, startTime, state.cueVolume, state.cuePan);
+            });
+        }
+    }
+
+    // Duck the main click under the cue for the overlay window (ducking is estimated
+    // generously since clip durations resolve asynchronously above).
+    const duckLead = (next.cue.countIn ? newBeatsPerBar * newBeatDur : 0) + (next.cue.reminderId ? 1.6 : 0.3);
+    state.cueDuck = { start: transitionTime - duckLead, end: transitionTime + 0.1 };
 }
 
 function advanceSongModulation() {
@@ -1239,6 +1499,13 @@ function advanceSongModulation() {
     const sec = sm.sections[sm.index];
     if (!sec || sec.bars == null) return; // final section plays indefinitely
     sm.barsElapsed++;
+
+    // We've just entered what will be the LAST bar of this section — fire any voice cue
+    // attached to the upcoming transition now, so it has a full bar to play out.
+    if (sm.barsElapsed === sec.bars - 1) {
+        maybeFireCueForSection(sm.index);
+    }
+
     if (sm.barsElapsed >= sec.bars) {
         sm.barsElapsed = 0;
         let nextIndex = sm.index + 1;
@@ -1247,6 +1514,7 @@ function advanceSongModulation() {
             else { sm.active = false; updateSongModUI(); return; }
         }
         sm.index = nextIndex;
+        sm.cueFiredForIndex = -1;
         const next = sm.sections[nextIndex];
         const tsChanged = next.timeSig !== state.timeSig;
         state.bpm = next.bpm; state.timeSig = next.timeSig;
@@ -1258,6 +1526,9 @@ function advanceSongModulation() {
         // tempo's beat duration (correct: the interval INTO beat 1 belongs to the old tempo,
         // the interval FROM beat 1 onward uses the new one). Overwriting it with "now" would
         // snap the beat to the wrong moment and produce an audible jump/glitch.
+        // If the new section is itself only 1 bar long, its own cue (for the transition
+        // after it) needs firing immediately, since there's no separate mid-section tick.
+        if (sm.active && next.bars === 1) maybeFireCueForSection(nextIndex);
         showToast(`Section ${nextIndex + 1}/${sm.sections.length} · ${next.bpm} BPM${tsChanged ? ' · ' + next.timeSig : ''}`);
     }
     updateSongModUI();
@@ -1486,6 +1757,9 @@ function loadData() {
             if (d.soundKit) state.soundKit = d.soundKit;
             if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
             if (Array.isArray(d.notes)) state.notes = d.notes;
+            if (d.cueBank) state.cueBank = d.cueBank;
+            if (d.cueVolume != null) state.cueVolume = d.cueVolume;
+            if (d.cuePan != null) state.cuePan = d.cuePan;
             // Migrate old songs missing subdivision, or using the old 'triplet' key
             state.setlists.forEach(sl => sl.songs.forEach(song => {
                 if (!song.subdivision) song.subdivision = 'quarter';
@@ -1499,7 +1773,7 @@ function loadData() {
 }
 
 function saveData() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan }));
     pushToCloud();
 }
 function getActiveSetlist() { return state.setlists.find(s => s.id === state.activeSetlistId) || null; }
@@ -1567,6 +1841,7 @@ function loadAndPlaySong(song) {
     state.subdivisionPan = normalizePanValue(song.subdivisionPan);
     state.subdivisionVolume = song.subdivisionVolume != null ? song.subdivisionVolume : 100;
     state.beatTones = (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray();
+    state.cueDuck = null;
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     renderBeatBlocks();
@@ -1705,11 +1980,121 @@ function openSongEditModal(id) {
     renderSongBeatTonesBlocks();
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
-    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray() }));
+    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue || { reminderId: null, countIn: false } }));
     expandedModTones = new Set();
+    expandedModCues = new Set();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
     showModal('songModal');
+}
+
+// ===== VOICE CUE BANK UI =====
+let pendingCueImportSlot = null; // number slot index (0-6) while a file picker is open for a number
+let pendingCueRemove = null; // {type:'number'|'reminder', index or id} awaiting confirmation
+
+function renderCueBankUI() {
+    // Numbers grid
+    const grid = document.getElementById('cueNumbersGrid');
+    if (grid) {
+        grid.innerHTML = state.cueBank.numbers.map((entry, i) => {
+            if (entry) {
+                return `
+                <div class="rounded-lg bg-s3/60 border border-[#F472B6]/30 p-2 flex flex-col items-center gap-1.5" data-slot="${i}">
+                    <span class="text-[11px] font-mono text-zinc-400">${i + 1}</span>
+                    <div class="flex items-center gap-1">
+                        <button type="button" class="cue-play-number w-7 h-7 rounded-md bg-[#F472B6]/15 text-[#F472B6] border border-[#F472B6]/25 hover:bg-[#F472B6]/25 flex items-center justify-center" data-slot="${i}" title="Preview"><i class="fas fa-play text-[10px] ml-0.5"></i></button>
+                        <button type="button" class="cue-remove-number w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex items-center justify-center" data-slot="${i}" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
+                    </div>
+                </div>`;
+            }
+            return `
+                <button type="button" class="cue-import-number rounded-lg border border-dashed border-brd bg-s3/30 p-2 flex flex-col items-center gap-1.5 hover:border-[#F472B6]/40 transition-all" data-slot="${i}">
+                    <span class="text-[11px] font-mono text-zinc-600">${i + 1}</span>
+                    <i class="fas fa-plus text-zinc-600 text-xs"></i>
+                </button>`;
+        }).join('');
+    }
+
+    // Reminders list
+    const list = document.getElementById('cueRemindersList');
+    const empty = document.getElementById('cueRemindersEmpty');
+    if (list) {
+        if (!state.cueBank.reminders.length) {
+            list.innerHTML = ''; if (empty) empty.classList.remove('hidden');
+        } else {
+            if (empty) empty.classList.add('hidden');
+            list.innerHTML = state.cueBank.reminders.map(r => `
+                <div class="flex items-center gap-2 bg-s3/50 border border-brd/40 rounded-lg px-3 py-2" data-reminder-id="${r.id}">
+                    <span class="flex-1 min-w-0 text-sm text-zinc-200 truncate">${escHtml(r.name)}</span>
+                    <button type="button" class="cue-play-reminder w-7 h-7 rounded-md bg-[#F472B6]/15 text-[#F472B6] border border-[#F472B6]/25 hover:bg-[#F472B6]/25 flex items-center justify-center flex-shrink-0" data-reminder-id="${r.id}" title="Preview"><i class="fas fa-play text-[10px] ml-0.5"></i></button>
+                    <button type="button" class="cue-remove-reminder w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex items-center justify-center flex-shrink-0" data-reminder-id="${r.id}" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
+                </div>`).join('');
+        }
+    }
+
+    setCueVolumeUI(state.cueVolume);
+    setCuePanUI(state.cuePan);
+}
+
+function setCueVolumeUI(val) {
+    const v = Math.max(0, Math.min(100, val));
+    document.getElementById('cueVolumeInput').value = v;
+    document.getElementById('cueVolumeLabel').textContent = v + '%';
+}
+function setCuePanUI(val) {
+    const v = Math.max(-1, Math.min(1, val));
+    document.getElementById('cuePanInput').value = Math.round(v * 100);
+    const label = document.getElementById('cuePanLabel');
+    if (Math.abs(v) < 0.03) label.textContent = 'Center';
+    else if (v < 0) label.textContent = `Left ${Math.round(Math.abs(v) * 100)}%`;
+    else label.textContent = `Right ${Math.round(v * 100)}%`;
+}
+
+async function previewCueEntry(entry) {
+    if (!entry) return;
+    ensureAudio();
+    const buf = await loadCueBuffer(entry.key);
+    if (!buf) { showToast('Could not load this clip'); return; }
+    playCueClip(buf, state.audioCtx.currentTime + 0.02, state.cueVolume, state.cuePan);
+}
+
+async function handleCueNumberImport(file, slot) {
+    const entry = await importCueFile(file, String(slot + 1));
+    state.cueBank.numbers[slot] = entry;
+    saveData();
+    renderCueBankUI();
+    showToast(`Number ${slot + 1} imported`);
+}
+
+async function handleCueReminderImport(file) {
+    const name = window.prompt('Name this reminder phrase (e.g. "Chorus", "Signature change"):', file.name.replace(/\.[^.]+$/, ''));
+    if (name === null) return; // cancelled
+    const entry = await importCueFile(file, name.trim() || file.name);
+    state.cueBank.reminders.push(entry);
+    saveData();
+    renderCueBankUI();
+    showToast(`"${entry.name}" added`);
+}
+
+function removeCueNumber(slot) {
+    const entry = state.cueBank.numbers[slot];
+    if (!entry) return;
+    cueDbDelete(entry.key).catch(() => {});
+    delete state.cueBufferCache[entry.key];
+    state.cueBank.numbers[slot] = null;
+    saveData();
+    renderCueBankUI();
+}
+
+function removeCueReminder(id) {
+    const entry = state.cueBank.reminders.find(r => r.id === id);
+    if (!entry) return;
+    cueDbDelete(entry.key).catch(() => {});
+    delete state.cueBufferCache[entry.key];
+    state.cueBank.reminders = state.cueBank.reminders.filter(r => r.id !== id);
+    saveData();
+    renderCueBankUI();
+    renderModulationRows(); // a cue row may have referenced this reminder
 }
 
 function openSearchModal() {
@@ -2031,6 +2416,7 @@ function cycleSongBeatTone(idx) {
 }
 
 let expandedModTones = new Set();
+let expandedModCues = new Set();
 
 function defaultBeatTonesArray() { return [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]; }
 
@@ -2047,6 +2433,24 @@ function renderModBeatTonesHtml(i) {
     return html;
 }
 
+function renderModCueHtml(i) {
+    const m = editingModulations[i];
+    if (!m.cue) m.cue = { reminderId: null, countIn: false };
+    const opts = ['<option value="">No reminder</option>'].concat(
+        state.cueBank.reminders.map(r => `<option value="${r.id}" ${m.cue.reminderId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
+    ).join('');
+    const n = parseInt(String(m.timeSig).split('/')[0], 10) || 4;
+    return `
+        <div class="flex-1 min-w-[140px]">
+            <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
+            <select class="edit-select mod-cue-reminder w-full" data-mod-idx="${i}" style="width:100%;">${opts}</select>
+        </div>
+        <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
+            <input type="checkbox" class="mod-cue-countin" data-mod-idx="${i}" ${m.cue.countIn ? 'checked' : ''} style="accent-color:#F472B6;">
+            Count-in (${n}-count)
+        </label>`;
+}
+
 function renderModulationRows() {
     const list = document.getElementById('modulationList');
     const loopRow = document.getElementById('modulationLoopRow');
@@ -2059,7 +2463,9 @@ function renderModulationRows() {
     }
     loopRow.style.display = 'flex';
     hint.textContent = 'Each change applies after the given number of bars of the section before it.';
-    list.innerHTML = editingModulations.map((m, i) => `
+    list.innerHTML = editingModulations.map((m, i) => {
+        const hasCue = m.cue && (m.cue.reminderId || m.cue.countIn);
+        return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" data-mod-idx="${i}">
             <div class="flex items-center gap-1.5">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">Sec ${i + 2}</span>
@@ -2068,8 +2474,11 @@ function renderModulationRows() {
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">bars →</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
-                <button type="button" class="edit-btn edit-btn-move mod-tones-toggle flex-shrink-0 ${expandedModTones.has(i) ? '' : ''}" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
+                <button type="button" class="edit-btn edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
                     <i class="fas fa-drum"></i>
+                </button>
+                <button type="button" class="edit-btn edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
+                    <i class="fas fa-microphone"></i>
                 </button>
                 <button type="button" class="edit-btn edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                     <i class="fas fa-trash-can"></i>
@@ -2078,7 +2487,11 @@ function renderModulationRows() {
             <div class="mod-tones-row ${expandedModTones.has(i) ? 'flex' : 'hidden'} flex-wrap items-center gap-1.5 pt-2 border-t border-brd/30" data-mod-idx="${i}">
                 ${renderModBeatTonesHtml(i)}
             </div>
-        </div>`).join('');
+            <div class="mod-cue-row ${expandedModCues.has(i) ? 'flex' : 'hidden'} flex-wrap items-end gap-2 pt-2 border-t border-brd/30" data-mod-idx="${i}">
+                ${renderModCueHtml(i)}
+            </div>
+        </div>`;
+    }).join('');
 }
 
 function addModulationRow() {
@@ -2086,7 +2499,7 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
-    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm + 10)), timeSig: baseTimeSig, beatTones: baseTones });
+    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm + 10)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: true } });
     renderModulationRows();
 }
 
@@ -2098,6 +2511,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const idx = parseInt(removeBtn.dataset.modIdx, 10);
             editingModulations.splice(idx, 1);
             expandedModTones = new Set(Array.from(expandedModTones).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
+            expandedModCues = new Set(Array.from(expandedModCues).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
             renderModulationRows();
             return;
         }
@@ -2105,6 +2519,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tonesToggle) {
             const idx = parseInt(tonesToggle.dataset.modIdx, 10);
             if (expandedModTones.has(idx)) expandedModTones.delete(idx); else expandedModTones.add(idx);
+            renderModulationRows();
+            return;
+        }
+        const cueToggle = e.target.closest('.mod-cue-toggle');
+        if (cueToggle) {
+            const idx = parseInt(cueToggle.dataset.modIdx, 10);
+            if (expandedModCues.has(idx)) expandedModCues.delete(idx); else expandedModCues.add(idx);
             renderModulationRows();
             return;
         }
@@ -2130,13 +2551,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     document.getElementById('modulationList').addEventListener('change', e => {
-        const el = e.target.closest('[data-mod-field]');
-        if (!el) return;
-        const idx = parseInt(el.dataset.modIdx, 10), field = el.dataset.modField;
-        if (!editingModulations[idx]) return;
-        if (field === 'bars') editingModulations[idx].bars = Math.max(1, Math.min(999, parseInt(el.value, 10) || 1));
-        else if (field === 'bpm') editingModulations[idx].bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(el.value, 10) || MIN_BPM));
-        else if (field === 'timeSig') editingModulations[idx].timeSig = el.value;
+        const field = e.target.closest('[data-mod-field]');
+        if (field) {
+            const idx = parseInt(field.dataset.modIdx, 10);
+            if (!editingModulations[idx]) return;
+            const f = field.dataset.modField;
+            if (f === 'bars') editingModulations[idx].bars = Math.max(1, Math.min(999, parseInt(field.value, 10) || 1));
+            else if (f === 'bpm') editingModulations[idx].bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(field.value, 10) || MIN_BPM));
+            else if (f === 'timeSig') editingModulations[idx].timeSig = field.value;
+            return;
+        }
+        const reminderSel = e.target.closest('.mod-cue-reminder');
+        if (reminderSel) {
+            const idx = parseInt(reminderSel.dataset.modIdx, 10);
+            if (!editingModulations[idx]) return;
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false };
+            editingModulations[idx].cue.reminderId = reminderSel.value || null;
+            return;
+        }
+        const countInBox = e.target.closest('.mod-cue-countin');
+        if (countInBox) {
+            const idx = parseInt(countInBox.dataset.modIdx, 10);
+            if (!editingModulations[idx]) return;
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false };
+            editingModulations[idx].cue.countIn = countInBox.checked;
+            return;
+        }
     });
 });
 
@@ -2540,6 +2980,7 @@ function applyViewState(view) {
     const setlistsEl = document.getElementById('setlistsView');
     const notesEl = document.getElementById('notesView');
     const editorEl = document.getElementById('noteEditorView');
+    const cueBankEl = document.getElementById('cueBankView');
 
     if (target === 'setlists') { setlistsEl.classList.remove('hidden'); setlistsEl.classList.add('flex'); }
     else { setlistsEl.classList.add('hidden'); setlistsEl.classList.remove('flex'); }
@@ -2550,6 +2991,9 @@ function applyViewState(view) {
 
     if (target === 'note-editor') { editorEl.classList.remove('hidden'); editorEl.classList.add('flex'); }
     else { editorEl.classList.add('hidden'); editorEl.classList.remove('flex'); }
+
+    if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); }
+    else { cueBankEl.classList.add('hidden'); cueBankEl.classList.remove('flex'); }
 }
 
 window.addEventListener('popstate', e => {
@@ -2558,6 +3002,8 @@ window.addEventListener('popstate', e => {
 
 function openSetlistsView() { pushView('setlists'); applyViewState('setlists'); }
 function closeSetlistsView() { history.back(); }
+function openCueBankView() { pushView('cuebank'); applyViewState('cuebank'); }
+function closeCueBankView() { history.back(); }
 
 function adjustTempo(delta) {
     state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + delta));
@@ -2583,6 +3029,52 @@ function setupEvents() {
     document.getElementById('openSetlistsBtn').addEventListener('click', openSetlistsView);
     document.getElementById('closeSetlistsBtn').addEventListener('click', closeSetlistsView);
     document.getElementById('mainSearchBtn').addEventListener('click', openSearchModal);
+
+    // ---- Voice Cue Bank ----
+    document.getElementById('openCueBankBtn').addEventListener('click', openCueBankView);
+    document.getElementById('closeCueBankBtn').addEventListener('click', closeCueBankView);
+
+    document.getElementById('cueNumbersGrid').addEventListener('click', e => {
+        const importBtn = e.target.closest('.cue-import-number');
+        if (importBtn) {
+            pendingCueImportSlot = parseInt(importBtn.dataset.slot, 10);
+            document.getElementById('cueNumberFileInput').click();
+            return;
+        }
+        const playBtn = e.target.closest('.cue-play-number');
+        if (playBtn) { previewCueEntry(state.cueBank.numbers[parseInt(playBtn.dataset.slot, 10)]); return; }
+        const removeBtn = e.target.closest('.cue-remove-number');
+        if (removeBtn) { removeCueNumber(parseInt(removeBtn.dataset.slot, 10)); return; }
+    });
+    document.getElementById('cueNumberFileInput').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (file && pendingCueImportSlot !== null) handleCueNumberImport(file, pendingCueImportSlot);
+        e.target.value = ''; pendingCueImportSlot = null;
+    });
+
+    document.getElementById('addReminderBtn').addEventListener('click', () => document.getElementById('cueReminderFileInput').click());
+    document.getElementById('cueReminderFileInput').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (file) handleCueReminderImport(file);
+        e.target.value = '';
+    });
+    document.getElementById('cueRemindersList').addEventListener('click', e => {
+        const playBtn = e.target.closest('.cue-play-reminder');
+        if (playBtn) { previewCueEntry(state.cueBank.reminders.find(r => r.id === playBtn.dataset.reminderId)); return; }
+        const removeBtn = e.target.closest('.cue-remove-reminder');
+        if (removeBtn) { removeCueReminder(removeBtn.dataset.reminderId); return; }
+    });
+
+    document.getElementById('cueVolumeInput').addEventListener('input', e => {
+        state.cueVolume = parseInt(e.target.value, 10);
+        setCueVolumeUI(state.cueVolume);
+        saveData();
+    });
+    document.getElementById('cuePanInput').addEventListener('input', e => {
+        state.cuePan = parseInt(e.target.value, 10) / 100;
+        setCuePanUI(state.cuePan);
+        saveData();
+    });
 
     // ---- Notes ----
     document.getElementById('openNotesBtn').addEventListener('click', openNotesView);
@@ -2729,6 +3221,7 @@ function setupEvents() {
         document.getElementById('songNameSuggestions').innerHTML = '';
         editingModulations = [];
         expandedModTones = new Set();
+        expandedModCues = new Set();
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
         showModal('songModal');
@@ -2792,7 +3285,7 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice() })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn } : { reminderId: null, countIn: false } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
         };
         if (!d.name || isNaN(d.bpm)) return;
