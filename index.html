@@ -506,7 +506,7 @@ tailwind.config = {
                 <span class="text-[10px] text-zinc-700">tap a slot to import "1" through "7"</span>
             </div>
             <div class="grid grid-cols-4 sm:grid-cols-7 gap-2" id="cueNumbersGrid"></div>
-            <input type="file" id="cueNumberFileInput" accept="audio/*" class="hidden">
+            <input type="file" id="cueNumberFileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg" class="hidden">
         </div>
 
         <div class="mb-6">
@@ -515,7 +515,7 @@ tailwind.config = {
                 <button type="button" id="addReminderBtn" class="text-[11px] px-2.5 py-1 rounded-md bg-[#F472B6]/15 text-[#F472B6] border border-[#F472B6]/30 hover:bg-[#F472B6]/25 transition-colors">
                     <i class="fas fa-plus mr-1"></i>Add Phrase
                 </button>
-                <input type="file" id="cueReminderFileInput" accept="audio/*" class="hidden">
+                <input type="file" id="cueReminderFileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg" class="hidden">
             </div>
             <div class="flex flex-col gap-1.5" id="cueRemindersList"></div>
             <div id="cueRemindersEmpty" class="hidden text-center py-6 text-zinc-700 text-xs">No reminder phrases yet</div>
@@ -1217,10 +1217,21 @@ function playCueClip(buffer, time, volumePct, pan) {
 // Imports a user-picked audio file: stores the raw blob in IndexedDB (source of truth on
 // this device), decodes it once for immediate playback/duration, and — if signed in — kicks
 // off an upload to Firebase Storage so other devices can fetch the same clip.
+function guessAudioMime(file) {
+    if (file.type) return file.type;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (ext === 'm4a') return 'audio/mp4';
+    if (ext === 'mp3') return 'audio/mpeg';
+    if (ext === 'wav') return 'audio/wav';
+    if (ext === 'ogg') return 'audio/ogg';
+    if (ext === 'aac') return 'audio/aac';
+    return 'audio/mp4';
+}
+
 async function importCueFile(file, displayName) {
     ensureAudio();
     const arrayBuf = await file.arrayBuffer();
-    const blob = new Blob([arrayBuf], { type: file.type || 'audio/mpeg' });
+    const blob = new Blob([arrayBuf], { type: guessAudioMime(file) });
     const key = genId();
     await cueDbPut(key, blob);
     let duration = 0;
