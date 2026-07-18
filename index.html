@@ -2170,6 +2170,19 @@ function parseNoteIntoSongs(text) {
         if (m) {
             if (current) raw.push(current);
             let rest = m[2].trim();
+
+            // Time signature first (e.g. "3/4", "7/8") — distinctive format, extract before
+            // BPM so the two patterns don't collide with each other.
+            let timeSig = '4/4';
+            const tsMatch = rest.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/);
+            if (tsMatch) {
+                const num = parseInt(tsMatch[1], 10), den = parseInt(tsMatch[2], 10);
+                if (num >= 1 && num <= 16 && TS_DENS.includes(den)) {
+                    timeSig = `${num}/${den}`;
+                    rest = (rest.slice(0, tsMatch.index) + rest.slice(tsMatch.index + tsMatch[0].length)).trim();
+                }
+            }
+
             let bpm = null;
             const bpmMatch = rest.match(/(\d{2,3})\s*bpm/i) || rest.match(/@\s*(\d{2,3})\b/) || rest.match(/[-–—]\s*(\d{2,3})\s*$/);
             if (bpmMatch) {
@@ -2177,7 +2190,7 @@ function parseNoteIntoSongs(text) {
                 rest = (rest.slice(0, bpmMatch.index) + rest.slice(bpmMatch.index + bpmMatch[0].length)).trim();
             }
             rest = rest.replace(/[-–—|,]\s*$/, '').trim();
-            current = { number: parseInt(m[1], 10), title: rest || `Song ${m[1]}`, bpm, notesLines: [] };
+            current = { number: parseInt(m[1], 10), title: rest || `Song ${m[1]}`, bpm, timeSig, notesLines: [] };
         } else if (current) {
             current.notesLines.push(line);
         }
@@ -2187,7 +2200,7 @@ function parseNoteIntoSongs(text) {
     return raw.map(s => ({
         name: s.title,
         bpm: (s.bpm && s.bpm >= MIN_BPM && s.bpm <= MAX_BPM) ? s.bpm : 120,
-        timeSig: '4/4',
+        timeSig: s.timeSig || '4/4',
         subdivision: 'quarter',
         notes: s.notesLines.join('\n').replace(/^\n+|\n+$/g, ''),
     }));
@@ -3267,6 +3280,11 @@ function setupEvents() {
     });
     document.getElementById('noteTitleInput').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteTextArea').addEventListener('input', () => saveActiveNote(false));
+    document.getElementById('noteTextArea').addEventListener('paste', e => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+        document.execCommand('insertText', false, text);
+    });
     document.getElementById('noteModeTextBtn').addEventListener('click', () => setNoteMode('text'));
     document.getElementById('noteModeDrawBtn').addEventListener('click', () => setNoteMode('draw'));
     document.getElementById('drawPencilBtn').addEventListener('click', () => setDrawTool('pencil'));
