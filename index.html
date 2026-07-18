@@ -556,6 +556,9 @@ tailwind.config = {
             <i class="fas fa-arrow-left text-xs"></i>
         </button>
         <input type="text" id="noteTitleInput" class="flex-1 min-w-0 bg-transparent text-zinc-100 font-display font-semibold text-base outline-none placeholder:text-zinc-600" placeholder="Untitled note">
+        <button id="convertNoteToSetlistBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-500 hover:text-gold hover:border-gold/30 transition-all" aria-label="Convert to set-list" title="Convert numbered songs in this note into a set-list">
+            <i class="fas fa-list-ul text-xs"></i>
+        </button>
         <button id="deleteNoteBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all" aria-label="Delete note" title="Delete note">
             <i class="fas fa-trash-can text-xs"></i>
         </button>
@@ -1477,6 +1480,8 @@ function fireVoiceCue(next, transitionTime) {
     const newBeatsPerBar = parseInt(String(next.timeSig).split('/')[0], 10) || 4;
     const newBeatDur = 60 / newBpm;
     let firstNumberTime = null;
+    const countInVol = next.cue.countInVolume != null ? next.cue.countInVolume : state.cueVolume;
+    const reminderVol = next.cue.reminderVolume != null ? next.cue.reminderVolume : state.cueVolume;
 
     if (next.cue.countIn) {
         const length = Math.max(1, next.cue.countInLength != null ? next.cue.countInLength : newBeatsPerBar);
@@ -1486,7 +1491,7 @@ function fireVoiceCue(next, transitionTime) {
             const beatNumber = startBeat + i; // the number actually spoken — e.g. start=3,length=2 speaks "3, 4"
             const t = transitionTime - (length - i) * newBeatDur;
             const bank = state.cueBank.numbers[beatNumber - 1];
-            if (bank) loadCueBuffer(bank.key).then(buf => { if (buf) playCueClip(buf, t, state.cueVolume, state.cuePan); });
+            if (bank) loadCueBuffer(bank.key).then(buf => { if (buf) playCueClip(buf, t, countInVol, state.cuePan); });
         }
     }
 
@@ -1497,7 +1502,7 @@ function fireVoiceCue(next, transitionTime) {
             loadCueBuffer(rem.key).then(buf => {
                 if (!buf) return;
                 const startTime = Math.max(state.audioCtx.currentTime + 0.02, targetEnd - buf.duration);
-                playCueClip(buf, startTime, state.cueVolume, state.cuePan);
+                playCueClip(buf, startTime, reminderVol, state.cuePan);
             });
         }
     }
@@ -1995,7 +2000,7 @@ function openSongEditModal(id) {
     renderSongBeatTonesBlocks();
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
-    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1 } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1 } }));
+    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume } }));
     expandedModTones = new Set();
     expandedModCues = new Set();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
@@ -2131,6 +2136,83 @@ function stripHtml(html) {
     const d = document.createElement('div');
     d.innerHTML = html || '';
     return d.textContent || '';
+}
+
+// Converts a note's rich-text HTML into plain text while preserving line breaks — plain
+// .textContent would collapse everything onto one line, which breaks the song-by-song parser.
+function htmlToTextWithBreaks(html) {
+    if (!html) return '';
+    const withBreaks = html
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<div[^>]*>/gi, '')
+        .replace(/<p[^>]*>/gi, '');
+    const d = document.createElement('div');
+    d.innerHTML = withBreaks;
+    return d.textContent || '';
+}
+
+// Parses a note formatted like:
+//   1. Song Title - 120bpm
+//   any notes for this song...
+//   2. Next Song @95
+//   ...
+// into an ordered array of song objects ready to drop into a set-list.
+function parseNoteIntoSongs(text) {
+    const lines = text.split('\n');
+    const headerRe = /^\s*(\d{1,3})[\.\)\:]\s*(.+)$/;
+    const raw = [];
+    let current = null;
+    lines.forEach(line => {
+        const trimmed = line.trim();
+        const m = trimmed.match(headerRe);
+        if (m) {
+            if (current) raw.push(current);
+            let rest = m[2].trim();
+            let bpm = null;
+            const bpmMatch = rest.match(/(\d{2,3})\s*bpm/i) || rest.match(/@\s*(\d{2,3})\b/) || rest.match(/[-–—]\s*(\d{2,3})\s*$/);
+            if (bpmMatch) {
+                bpm = parseInt(bpmMatch[1], 10);
+                rest = (rest.slice(0, bpmMatch.index) + rest.slice(bpmMatch.index + bpmMatch[0].length)).trim();
+            }
+            rest = rest.replace(/[-–—|,]\s*$/, '').trim();
+            current = { number: parseInt(m[1], 10), title: rest || `Song ${m[1]}`, bpm, notesLines: [] };
+        } else if (current) {
+            current.notesLines.push(line);
+        }
+    });
+    if (current) raw.push(current);
+    raw.sort((a, b) => a.number - b.number);
+    return raw.map(s => ({
+        name: s.title,
+        bpm: (s.bpm && s.bpm >= MIN_BPM && s.bpm <= MAX_BPM) ? s.bpm : 120,
+        timeSig: '4/4',
+        subdivision: 'quarter',
+        notes: s.notesLines.join('\n').replace(/^\n+|\n+$/g, ''),
+    }));
+}
+
+function convertNoteToSetlist(note) {
+    const plainText = htmlToTextWithBreaks(note.content);
+    const songs = parseNoteIntoSongs(plainText);
+    if (!songs.length) {
+        showToast('No numbered songs found — format each as "1. Song Title - 120bpm"');
+        return;
+    }
+    const defaultName = (note.title && note.title.trim()) || 'Imported Set-list';
+    const name = window.prompt(`Create a set-list from ${songs.length} song${songs.length !== 1 ? 's' : ''} found in this note. Name it:`, defaultName);
+    if (name === null) return; // cancelled
+    const sl = { id: genId(), name: name.trim() || defaultName, songs: songs.map(s => ({ id: genId(), ...s })) };
+    state.setlists.push(sl);
+    state.activeSetlistId = sl.id;
+    saveData();
+    renderSetlistSelect();
+    renderSongs();
+    showToast(`Created "${sl.name}" with ${songs.length} song${songs.length !== 1 ? 's' : ''}`);
+    currentAppView = 'setlists';
+    history.replaceState({ view: 'setlists' }, '', '#setlists');
+    applyViewState('setlists');
 }
 
 function renderNotesList(query) {
@@ -2450,7 +2532,9 @@ function renderModBeatTonesHtml(i) {
 
 function renderModCueHtml(i) {
     const m = editingModulations[i];
-    if (!m.cue) m.cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1 };
+    if (!m.cue) m.cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume };
+    if (m.cue.reminderVolume == null) m.cue.reminderVolume = state.cueVolume;
+    if (m.cue.countInVolume == null) m.cue.countInVolume = state.cueVolume;
     const opts = ['<option value="">No reminder</option>'].concat(
         state.cueBank.reminders.map(r => `<option value="${r.id}" ${m.cue.reminderId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
     ).join('');
@@ -2462,12 +2546,17 @@ function renderModCueHtml(i) {
             <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
             <select class="edit-select mod-cue-reminder w-full" data-mod-idx="${i}" style="width:100%;">${opts}</select>
         </div>
+        <div class="mod-cue-reminder-vol w-full flex items-center gap-2 ${m.cue.reminderId ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
+            <input type="range" class="vol-slider mod-cue-reminder-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.reminderVolume}" data-mod-idx="${i}">
+            <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-reminder-vol-label">${m.cue.reminderVolume}%</span>
+        </div>
         <div class="w-full flex items-end gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
                 <input type="checkbox" class="mod-cue-countin" data-mod-idx="${i}" ${m.cue.countIn ? 'checked' : ''} style="accent-color:#F472B6;">
                 Count-in
             </label>
-            <div class="mod-cue-countin-detail flex items-end gap-3 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <div class="mod-cue-countin-detail flex items-end gap-3 flex-wrap ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
                 <div>
                     <label class="text-[10px] text-zinc-600 block mb-1">Beats to count</label>
                     <input type="number" class="edit-input mod-cue-length" style="width:52px" min="1" max="16" value="${length}" data-mod-idx="${i}">
@@ -2478,6 +2567,11 @@ function renderModCueHtml(i) {
                 </div>
                 <span class="text-[10px] text-zinc-600 pb-1.5">→ speaks ${Array.from({length}, (_, k) => start + k).join(', ')}</span>
             </div>
+        </div>
+        <div class="mod-cue-countin-vol w-full flex items-center gap-2 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
+            <input type="range" class="vol-slider mod-cue-countin-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.countInVolume}" data-mod-idx="${i}">
+            <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-countin-vol-label">${m.cue.countInVolume}%</span>
         </div>`;
 }
 
@@ -2529,7 +2623,7 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
-    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1 } });
+    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume } });
     renderModulationRows();
 }
 
@@ -2595,21 +2689,25 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reminderSel) {
             const idx = parseInt(reminderSel.dataset.modIdx, 10);
             if (!editingModulations[idx]) return;
-            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1 };
-            editingModulations[idx].cue.reminderId = reminderSel.value || null;
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume };
+            const cue = editingModulations[idx].cue;
+            cue.reminderId = reminderSel.value || null;
+            if (cue.reminderId && cue.reminderVolume == null) cue.reminderVolume = state.cueVolume;
+            renderModulationRows();
             return;
         }
         const countInBox = e.target.closest('.mod-cue-countin');
         if (countInBox) {
             const idx = parseInt(countInBox.dataset.modIdx, 10);
             if (!editingModulations[idx]) return;
-            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1 };
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume };
             const cue = editingModulations[idx].cue;
             cue.countIn = countInBox.checked;
             if (cue.countIn && cue.countInLength == null) {
                 cue.countInLength = parseInt(String(editingModulations[idx].timeSig).split('/')[0], 10) || 4;
             }
             if (cue.countInStart == null) cue.countInStart = 1;
+            if (cue.countIn && cue.countInVolume == null) cue.countInVolume = state.cueVolume;
             renderModulationRows();
             return;
         }
@@ -2627,6 +2725,28 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!editingModulations[idx] || !editingModulations[idx].cue) return;
             editingModulations[idx].cue.countInStart = Math.max(1, Math.min(16, parseInt(startInput.value, 10) || 1));
             renderModulationRows();
+            return;
+        }
+    });
+    document.getElementById('modulationList').addEventListener('input', e => {
+        const remVol = e.target.closest('.mod-cue-reminder-vol-input');
+        if (remVol) {
+            const idx = parseInt(remVol.dataset.modIdx, 10);
+            if (!editingModulations[idx] || !editingModulations[idx].cue) return;
+            const v = Math.max(0, Math.min(100, parseInt(remVol.value, 10) || 0));
+            editingModulations[idx].cue.reminderVolume = v;
+            const row = remVol.closest('.mod-cue-reminder-vol');
+            if (row) { const label = row.querySelector('.mod-cue-reminder-vol-label'); if (label) label.textContent = v + '%'; }
+            return;
+        }
+        const ciVol = e.target.closest('.mod-cue-countin-vol-input');
+        if (ciVol) {
+            const idx = parseInt(ciVol.dataset.modIdx, 10);
+            if (!editingModulations[idx] || !editingModulations[idx].cue) return;
+            const v = Math.max(0, Math.min(100, parseInt(ciVol.value, 10) || 0));
+            editingModulations[idx].cue.countInVolume = v;
+            const row = ciVol.closest('.mod-cue-countin-vol');
+            if (row) { const label = row.querySelector('.mod-cue-countin-vol-label'); if (label) label.textContent = v + '%'; }
             return;
         }
     });
@@ -3140,6 +3260,11 @@ function setupEvents() {
     });
     document.getElementById('closeNoteEditorBtn').addEventListener('click', closeNoteEditor);
     document.getElementById('deleteNoteBtn').addEventListener('click', deleteActiveNote);
+    document.getElementById('convertNoteToSetlistBtn').addEventListener('click', () => {
+        saveActiveNote(true);
+        const note = getActiveNote();
+        if (note) convertNoteToSetlist(note);
+    });
     document.getElementById('noteTitleInput').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteTextArea').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteModeTextBtn').addEventListener('click', () => setNoteMode('text'));
@@ -3337,7 +3462,7 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1 } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1 } })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
         };
         if (!d.name || isNaN(d.bpm)) return;
