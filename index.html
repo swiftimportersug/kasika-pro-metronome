@@ -721,6 +721,20 @@ tailwind.config = {
     </div>
 </div>
 
+<div class="modal-overlay" id="songConflictModal">
+    <div class="modal-box text-center">
+        <i class="fas fa-clone text-gold text-2xl mb-3"></i>
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-2">Song Already Exists</h3>
+        <p class="text-zinc-400 text-sm mb-1" id="songConflictMessage"></p>
+        <p class="text-zinc-600 text-xs mb-5">Add the existing song, import this as a separate copy, or skip it.</p>
+        <div class="flex flex-col gap-2">
+            <button id="songConflictUseExisting" class="w-full py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Add the Existing Song</button>
+            <button id="songConflictImportNew" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-300 text-sm hover:text-zinc-100 transition-colors">Import as New Copy</button>
+            <button id="songConflictSkip" class="w-full py-2.5 rounded-xl bg-s3/50 border border-brd/50 text-zinc-500 text-sm hover:text-zinc-300 transition-colors">Skip This Song</button>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay" id="practiceModal">
     <div class="modal-box">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1.5">Practice Mode</h3>
@@ -1482,6 +1496,8 @@ function fireVoiceCue(next, transitionTime) {
     let firstNumberTime = null;
     const countInVol = next.cue.countInVolume != null ? next.cue.countInVolume : state.cueVolume;
     const reminderVol = next.cue.reminderVolume != null ? next.cue.reminderVolume : state.cueVolume;
+    const countInPan = next.cue.countInPan != null ? next.cue.countInPan : state.cuePan;
+    const reminderPan = next.cue.reminderPan != null ? next.cue.reminderPan : state.cuePan;
 
     if (next.cue.countIn) {
         const length = Math.max(1, next.cue.countInLength != null ? next.cue.countInLength : newBeatsPerBar);
@@ -1491,7 +1507,7 @@ function fireVoiceCue(next, transitionTime) {
             const beatNumber = startBeat + i; // the number actually spoken — e.g. start=3,length=2 speaks "3, 4"
             const t = transitionTime - (length - i) * newBeatDur;
             const bank = state.cueBank.numbers[beatNumber - 1];
-            if (bank) loadCueBuffer(bank.key).then(buf => { if (buf) playCueClip(buf, t, countInVol, state.cuePan); });
+            if (bank) loadCueBuffer(bank.key).then(buf => { if (buf) playCueClip(buf, t, countInVol, countInPan); });
         }
     }
 
@@ -1502,7 +1518,7 @@ function fireVoiceCue(next, transitionTime) {
             loadCueBuffer(rem.key).then(buf => {
                 if (!buf) return;
                 const startTime = Math.max(state.audioCtx.currentTime + 0.02, targetEnd - buf.duration);
-                playCueClip(buf, startTime, reminderVol, state.cuePan);
+                playCueClip(buf, startTime, reminderVol, reminderPan);
             });
         }
     }
@@ -2000,7 +2016,7 @@ function openSongEditModal(id) {
     renderSongBeatTonesBlocks();
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
-    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume } }));
+    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } }));
     expandedModTones = new Set();
     expandedModCues = new Set();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
@@ -2206,23 +2222,83 @@ function parseNoteIntoSongs(text) {
     }));
 }
 
-function convertNoteToSetlist(note) {
+let currentConflictResolve = null;
+
+function promptSongConflict(name, setlistName) {
+    return new Promise(resolve => {
+        document.getElementById('songConflictMessage').textContent = `"${name}" already exists in "${setlistName}".`;
+        currentConflictResolve = resolve;
+        showModal('songConflictModal');
+    });
+}
+
+function findSongByNameAnywhere(name, excludeSetlistId) {
+    const norm = name.trim().toLowerCase();
+    for (const sl of state.setlists) {
+        if (sl.id === excludeSetlistId) continue;
+        const found = sl.songs.find(s => s.name.trim().toLowerCase() === norm);
+        if (found) return { song: found, setlistName: sl.name };
+    }
+    return null;
+}
+
+async function resolveAndAddSongs(songsToAdd, targetSetlist) {
+    let addedCount = 0;
+    for (const parsed of songsToAdd) {
+        const conflict = findSongByNameAnywhere(parsed.name, targetSetlist.id);
+        if (!conflict) {
+            targetSetlist.songs.push({ id: genId(), ...parsed });
+            addedCount++;
+            continue;
+        }
+        const choice = await promptSongConflict(parsed.name, conflict.setlistName);
+        if (choice === 'existing') {
+            const { id, ...rest } = conflict.song;
+            targetSetlist.songs.push({ id: genId(), ...rest });
+            addedCount++;
+        } else if (choice === 'new') {
+            targetSetlist.songs.push({ id: genId(), ...parsed });
+            addedCount++;
+        } // 'skip' — do nothing
+    }
+    return addedCount;
+}
+
+async function convertNoteToSetlist(note) {
     const plainText = htmlToTextWithBreaks(note.content);
-    const songs = parseNoteIntoSongs(plainText);
-    if (!songs.length) {
+    const parsedSongs = parseNoteIntoSongs(plainText);
+    if (!parsedSongs.length) {
         showToast('No numbered songs found — format each as "1. Song Title - 120bpm"');
         return;
     }
-    const defaultName = (note.title && note.title.trim()) || 'Imported Set-list';
-    const name = window.prompt(`Create a set-list from ${songs.length} song${songs.length !== 1 ? 's' : ''} found in this note. Name it:`, defaultName);
-    if (name === null) return; // cancelled
-    const sl = { id: genId(), name: name.trim() || defaultName, songs: songs.map(s => ({ id: genId(), ...s })) };
-    state.setlists.push(sl);
-    state.activeSetlistId = sl.id;
-    saveData();
-    renderSetlistSelect();
-    renderSongs();
-    showToast(`Created "${sl.name}" with ${songs.length} song${songs.length !== 1 ? 's' : ''}`);
+
+    let targetSetlist = note.linkedSetlistId ? state.setlists.find(sl => sl.id === note.linkedSetlistId) : null;
+
+    if (targetSetlist) {
+        // Already converted before — only add songs that aren't in the set-list yet,
+        // and leave every existing song completely untouched.
+        const existingNames = new Set(targetSetlist.songs.map(s => s.name.trim().toLowerCase()));
+        const newOnes = parsedSongs.filter(s => !existingNames.has(s.name.trim().toLowerCase()));
+        if (!newOnes.length) {
+            showToast(`"${targetSetlist.name}" is already up to date — no new songs found`);
+            return;
+        }
+        const added = await resolveAndAddSongs(newOnes, targetSetlist);
+        state.activeSetlistId = targetSetlist.id;
+        saveData(); renderSetlistSelect(); renderSongs();
+        if (added) showToast(`Added ${added} new song${added !== 1 ? 's' : ''} to "${targetSetlist.name}"`);
+    } else {
+        const defaultName = (note.title && note.title.trim()) || 'Imported Set-list';
+        const name = window.prompt(`Create a set-list from ${parsedSongs.length} song${parsedSongs.length !== 1 ? 's' : ''} found in this note. Name it:`, defaultName);
+        if (name === null) return; // cancelled
+        const sl = { id: genId(), name: name.trim() || defaultName, songs: [] };
+        state.setlists.push(sl);
+        state.activeSetlistId = sl.id;
+        note.linkedSetlistId = sl.id;
+        const added = await resolveAndAddSongs(parsedSongs, sl);
+        saveData(); renderSetlistSelect(); renderSongs();
+        showToast(`Created "${sl.name}" with ${added} song${added !== 1 ? 's' : ''}`);
+    }
     currentAppView = 'setlists';
     history.replaceState({ view: 'setlists' }, '', '#setlists');
     applyViewState('setlists');
@@ -2543,11 +2619,20 @@ function renderModBeatTonesHtml(i) {
     return html;
 }
 
+function formatPanLabel(v) {
+    const clamped = Math.max(-1, Math.min(1, v));
+    if (Math.abs(clamped) < 0.03) return 'Center';
+    if (clamped < 0) return `Left ${Math.round(Math.abs(clamped) * 100)}%`;
+    return `Right ${Math.round(clamped * 100)}%`;
+}
+
 function renderModCueHtml(i) {
     const m = editingModulations[i];
-    if (!m.cue) m.cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume };
+    if (!m.cue) m.cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
     if (m.cue.reminderVolume == null) m.cue.reminderVolume = state.cueVolume;
     if (m.cue.countInVolume == null) m.cue.countInVolume = state.cueVolume;
+    if (m.cue.reminderPan == null) m.cue.reminderPan = state.cuePan;
+    if (m.cue.countInPan == null) m.cue.countInPan = state.cuePan;
     const opts = ['<option value="">No reminder</option>'].concat(
         state.cueBank.reminders.map(r => `<option value="${r.id}" ${m.cue.reminderId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
     ).join('');
@@ -2563,6 +2648,12 @@ function renderModCueHtml(i) {
             <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
             <input type="range" class="vol-slider mod-cue-reminder-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.reminderVolume}" data-mod-idx="${i}">
             <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-reminder-vol-label">${m.cue.reminderVolume}%</span>
+        </div>
+        <div class="mod-cue-reminder-pan w-full flex items-center gap-2 ${m.cue.reminderId ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
+            <input type="range" class="vol-slider mod-cue-reminder-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(m.cue.reminderPan * 100)}" data-mod-idx="${i}">
+            <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
+            <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 mod-cue-reminder-pan-label">${formatPanLabel(m.cue.reminderPan)}</span>
         </div>
         <div class="w-full flex items-end gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
@@ -2585,6 +2676,12 @@ function renderModCueHtml(i) {
             <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
             <input type="range" class="vol-slider mod-cue-countin-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.countInVolume}" data-mod-idx="${i}">
             <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-countin-vol-label">${m.cue.countInVolume}%</span>
+        </div>
+        <div class="mod-cue-countin-pan w-full flex items-center gap-2 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
+            <input type="range" class="vol-slider mod-cue-countin-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(m.cue.countInPan * 100)}" data-mod-idx="${i}">
+            <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
+            <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 mod-cue-countin-pan-label">${formatPanLabel(m.cue.countInPan)}</span>
         </div>`;
 }
 
@@ -2636,7 +2733,7 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
-    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume } });
+    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
     renderModulationRows();
 }
 
@@ -2702,10 +2799,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reminderSel) {
             const idx = parseInt(reminderSel.dataset.modIdx, 10);
             if (!editingModulations[idx]) return;
-            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume };
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
             const cue = editingModulations[idx].cue;
             cue.reminderId = reminderSel.value || null;
             if (cue.reminderId && cue.reminderVolume == null) cue.reminderVolume = state.cueVolume;
+            if (cue.reminderId && cue.reminderPan == null) cue.reminderPan = state.cuePan;
             renderModulationRows();
             return;
         }
@@ -2713,7 +2811,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (countInBox) {
             const idx = parseInt(countInBox.dataset.modIdx, 10);
             if (!editingModulations[idx]) return;
-            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume };
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
             const cue = editingModulations[idx].cue;
             cue.countIn = countInBox.checked;
             if (cue.countIn && cue.countInLength == null) {
@@ -2721,6 +2819,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (cue.countInStart == null) cue.countInStart = 1;
             if (cue.countIn && cue.countInVolume == null) cue.countInVolume = state.cueVolume;
+            if (cue.countIn && cue.countInPan == null) cue.countInPan = state.cuePan;
             renderModulationRows();
             return;
         }
@@ -2760,6 +2859,26 @@ document.addEventListener('DOMContentLoaded', () => {
             editingModulations[idx].cue.countInVolume = v;
             const row = ciVol.closest('.mod-cue-countin-vol');
             if (row) { const label = row.querySelector('.mod-cue-countin-vol-label'); if (label) label.textContent = v + '%'; }
+            return;
+        }
+        const remPan = e.target.closest('.mod-cue-reminder-pan-input');
+        if (remPan) {
+            const idx = parseInt(remPan.dataset.modIdx, 10);
+            if (!editingModulations[idx] || !editingModulations[idx].cue) return;
+            const v = Math.max(-1, Math.min(1, parseInt(remPan.value, 10) / 100));
+            editingModulations[idx].cue.reminderPan = v;
+            const row = remPan.closest('.mod-cue-reminder-pan');
+            if (row) { const label = row.querySelector('.mod-cue-reminder-pan-label'); if (label) label.textContent = formatPanLabel(v); }
+            return;
+        }
+        const ciPan = e.target.closest('.mod-cue-countin-pan-input');
+        if (ciPan) {
+            const idx = parseInt(ciPan.dataset.modIdx, 10);
+            if (!editingModulations[idx] || !editingModulations[idx].cue) return;
+            const v = Math.max(-1, Math.min(1, parseInt(ciPan.value, 10) / 100));
+            editingModulations[idx].cue.countInPan = v;
+            const row = ciPan.closest('.mod-cue-countin-pan');
+            if (row) { const label = row.querySelector('.mod-cue-countin-pan-label'); if (label) label.textContent = formatPanLabel(v); }
             return;
         }
     });
@@ -3278,6 +3397,18 @@ function setupEvents() {
         const note = getActiveNote();
         if (note) convertNoteToSetlist(note);
     });
+    document.getElementById('songConflictUseExisting').addEventListener('click', () => {
+        hideModal('songConflictModal');
+        if (currentConflictResolve) { currentConflictResolve('existing'); currentConflictResolve = null; }
+    });
+    document.getElementById('songConflictImportNew').addEventListener('click', () => {
+        hideModal('songConflictModal');
+        if (currentConflictResolve) { currentConflictResolve('new'); currentConflictResolve = null; }
+    });
+    document.getElementById('songConflictSkip').addEventListener('click', () => {
+        hideModal('songConflictModal');
+        if (currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
+    });
     document.getElementById('noteTitleInput').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteTextArea').addEventListener('input', () => saveActiveNote(false));
     document.getElementById('noteTextArea').addEventListener('paste', e => {
@@ -3480,7 +3611,7 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume } })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
         };
         if (!d.name || isNaN(d.bpm)) return;
@@ -3587,8 +3718,20 @@ function setupEvents() {
         else if (e.code === 'ArrowLeft') { e.preventDefault(); state.bpm = Math.max(MIN_BPM, state.bpm - (e.shiftKey ? 10 : 5)); }
     });
 
-    document.querySelectorAll('.modal-overlay').forEach(o => { o.addEventListener('click', e => { if (e.target === o) hideModal(o.id); }); });
-    document.addEventListener('keydown', e => { if (e.code === 'Escape') document.querySelectorAll('.modal-overlay.active').forEach(m => hideModal(m.id)); });
+    document.querySelectorAll('.modal-overlay').forEach(o => {
+        o.addEventListener('click', e => {
+            if (e.target !== o) return;
+            hideModal(o.id);
+            if (o.id === 'songConflictModal' && currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
+        });
+    });
+    document.addEventListener('keydown', e => {
+        if (e.code !== 'Escape') return;
+        document.querySelectorAll('.modal-overlay.active').forEach(m => {
+            hideModal(m.id);
+            if (m.id === 'songConflictModal' && currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
+        });
+    });
 
     let rt;
     window.addEventListener('resize', () => {
