@@ -210,7 +210,7 @@ tailwind.config = {
     .beat-block.lit {
         background: var(--tone-color) !important;
         color: #0e0e10 !important;
-        box-shadow: 0 0 14px 3px var(--tone-color);
+        transform: scale(1.08);
     }
     .note-mode-btn {
         flex-shrink: 0; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
@@ -342,6 +342,9 @@ tailwind.config = {
                 <option value="beep" selected>Beep</option>
                 <option value="woodblock">Woodblock</option>
                 <option value="cowbell">Cowbell</option>
+                <option value="rimshot">Rimshot</option>
+                <option value="hihat">Hi-Hat</option>
+                <option value="digital">Digital</option>
                 <option value="voice">Voice Count</option>
             </select>
             <div class="flex items-center gap-2 ml-1">
@@ -980,7 +983,7 @@ const state = {
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
     audioCtx: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
     canvas: null, ctx: null, canvasSize: 0,
-    lastBeatTimestamp: 0, beatPulse: 0, currentBeatDurationMs: 500,
+    lastBeatTimestamp: 0, beatPulse: 0, currentBeatDurationMs: 500, voiceLatencyEstimateMs: 120,
     customDragId: null, dropLineEl: null,
     soundKit: 'beep',
     practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
@@ -1050,6 +1053,7 @@ function renderBeatBlocks() {
     BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
         const container = document.getElementById(id);
         if (container) container.innerHTML = html;
+        lastLitBeatIdx[id] = -1;
     });
 }
 
@@ -1061,24 +1065,31 @@ function cycleBeatTone(idx) {
     saveData();
 }
 
+const lastLitBeatIdx = {};
+
 function updateBeatBlocksVisual() {
     if (currentAppView !== 'setlists') return;
-    const mult = getSubdivMult(), p = state.beatPulse;
+    const mult = getSubdivMult();
+    // Independent hard on/off, decoupled from the wheel's smoothed pulse — lit for exactly
+    // the beat's duration, nothing more, and only ever a main beat (not a subdivision tick).
+    const elapsed = performance.now() - state.lastBeatTimestamp;
+    const isMainBeatActive = elapsed < state.currentBeatDurationMs && state.visualClick % mult === 0;
+    const activeIdx = isMainBeatActive ? state.visualClick / mult : -1;
+
     BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
         const container = document.getElementById(id);
         if (!container) return;
-        container.querySelectorAll('.beat-block').forEach(btn => {
-            const idx = parseInt(btn.dataset.beatIdx, 10);
-            if (state.visualClick === idx * mult && p > 0) {
-                btn.classList.add('lit');
-                btn.style.opacity = String(0.6 + p * 0.4);
-                btn.style.transform = `scale(${1 + p * 0.12})`;
-            } else {
-                btn.classList.remove('lit');
-                btn.style.opacity = '';
-                btn.style.transform = '';
-            }
-        });
+        const prevIdx = lastLitBeatIdx[id] != null ? lastLitBeatIdx[id] : -1;
+        if (prevIdx === activeIdx) return; // nothing changed — skip all DOM work this frame
+        if (prevIdx !== -1) {
+            const prevBtn = container.querySelector(`.beat-block[data-beat-idx="${prevIdx}"]`);
+            if (prevBtn) prevBtn.classList.remove('lit');
+        }
+        if (activeIdx !== -1) {
+            const curBtn = container.querySelector(`.beat-block[data-beat-idx="${activeIdx}"]`);
+            if (curBtn) curBtn.classList.add('lit');
+        }
+        lastLitBeatIdx[id] = activeIdx;
     });
 }
 
@@ -1175,6 +1186,81 @@ function playCowbell(c, t, type, v, pan) {
     o1.onended = () => { o1.disconnect(); o2.disconnect(); f.disconnect(); g.disconnect(); if (p) p.disconnect(); };
 }
 
+let noiseBufferCache = null;
+function getNoiseBuffer(c) {
+    if (noiseBufferCache) return noiseBufferCache;
+    const len = Math.floor(c.sampleRate * 0.3);
+    const buffer = c.createBuffer(1, len, c.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    noiseBufferCache = buffer;
+    return buffer;
+}
+
+function playRimshot(c, t, type, v, pan) {
+    const noise = c.createBufferSource();
+    noise.buffer = getNoiseBuffer(c);
+    const noiseFilter = c.createBiquadFilter();
+    noiseFilter.type = 'highpass'; noiseFilter.frequency.value = 2200;
+    const noiseGain = c.createGain();
+    const tone = c.createOscillator();
+    tone.type = 'triangle';
+    tone.frequency.value = type === 'tone1' ? 1400 : type === 'tone3' ? 750 : type === 'sub' ? 1000 : 1100;
+    const toneGain = c.createGain();
+    noise.connect(noiseFilter); noiseFilter.connect(noiseGain);
+    tone.connect(toneGain);
+    const mix = c.createGain();
+    noiseGain.connect(mix); toneGain.connect(mix);
+    const p = connectOut(c, mix, pan);
+    const peak = (type === 'tone1' ? 0.9 : type === 'tone3' ? 0.5 : type === 'sub' ? 0.28 : 0.65) * v;
+    noiseGain.gain.setValueAtTime(peak * 0.6, t);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+    toneGain.gain.setValueAtTime(peak * 0.7, t);
+    toneGain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    noise.start(t); noise.stop(t + 0.05);
+    tone.start(t); tone.stop(t + 0.05);
+    noise.onended = () => { noise.disconnect(); noiseFilter.disconnect(); noiseGain.disconnect(); };
+    tone.onended = () => { tone.disconnect(); toneGain.disconnect(); mix.disconnect(); if (p) p.disconnect(); };
+}
+
+function playHihat(c, t, type, v, pan) {
+    const noise = c.createBufferSource();
+    noise.buffer = getNoiseBuffer(c);
+    const filter = c.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = type === 'tone1' ? 8000 : type === 'tone3' ? 5000 : type === 'sub' ? 7000 : 6500;
+    const gain = c.createGain();
+    noise.connect(filter); filter.connect(gain);
+    const p = connectOut(c, gain, pan);
+    const peak = (type === 'tone1' ? 0.5 : type === 'tone3' ? 0.28 : type === 'sub' ? 0.15 : 0.36) * v;
+    const dur = type === 'sub' ? 0.02 : 0.035;
+    gain.gain.setValueAtTime(peak, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    noise.start(t); noise.stop(t + dur + 0.01);
+    noise.onended = () => { noise.disconnect(); filter.disconnect(); gain.disconnect(); if (p) p.disconnect(); };
+}
+
+function playDigital(c, t, type, v, pan) {
+    const o1 = c.createOscillator(), o2 = c.createOscillator();
+    o1.type = 'sine'; o2.type = 'sine';
+    const baseFreq = type === 'tone1' ? 1800 : type === 'tone3' ? 900 : type === 'sub' ? 1400 : 1500;
+    o1.frequency.value = baseFreq; o2.frequency.value = baseFreq * 2;
+    const g1 = c.createGain(), g2 = c.createGain();
+    o1.connect(g1); o2.connect(g2);
+    const mix = c.createGain();
+    g1.connect(mix); g2.connect(mix);
+    const p = connectOut(c, mix, pan);
+    const peak = (type === 'tone1' ? 0.85 : type === 'tone3' ? 0.45 : type === 'sub' ? 0.25 : 0.6) * v;
+    g1.gain.setValueAtTime(peak, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
+    g2.gain.setValueAtTime(peak * 0.35, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + 0.015);
+    o1.start(t); o1.stop(t + 0.03);
+    o2.start(t); o2.stop(t + 0.02);
+    o1.onended = () => { o1.disconnect(); g1.disconnect(); };
+    o2.onended = () => { o2.disconnect(); g2.disconnect(); mix.disconnect(); if (p) p.disconnect(); };
+}
+
 let cachedVoice = null;
 function pickFemaleVoice() {
     if (!window.speechSynthesis) return null;
@@ -1199,6 +1285,14 @@ function speakBeat(n) {
     const v = pickFemaleVoice();
     if (v) u.voice = v;
     u.rate = 1.15; u.pitch = 1.05; u.volume = Math.max(0.4, state.volume);
+    // The Web Speech API has no sample-accurate scheduling — there's real, variable startup
+    // latency between calling speak() and audio actually beginning. We can't eliminate it,
+    // but we can measure it and compensate by firing earlier next time.
+    const calledAt = performance.now();
+    u.onstart = () => {
+        const observed = performance.now() - calledAt;
+        state.voiceLatencyEstimateMs = state.voiceLatencyEstimateMs * 0.7 + observed * 0.3;
+    };
     window.speechSynthesis.speak(u);
 }
 
@@ -1318,7 +1412,8 @@ function playClick(type, time, beatNum) {
             const t = Math.max(time, c.currentTime);
             playBeep(c, t, 'sub', state.volume * 0.6 * subMult * duck, pan);
         } else {
-            const delay = Math.max(0, (time - c.currentTime) * 1000);
+            const leadMs = state.voiceLatencyEstimateMs || 120;
+            const delay = Math.max(0, (time - c.currentTime) * 1000 - leadMs);
             setTimeout(() => speakBeat(beatNum), delay);
         }
         return;
@@ -1326,6 +1421,9 @@ function playClick(type, time, beatNum) {
     const t = Math.max(time, c.currentTime), v = state.volume * subMult * duck;
     if (kit === 'woodblock') { playWoodblock(c, t, type, v, pan); return; }
     if (kit === 'cowbell') { playCowbell(c, t, type, v, pan); return; }
+    if (kit === 'rimshot') { playRimshot(c, t, type, v, pan); return; }
+    if (kit === 'hihat') { playHihat(c, t, type, v, pan); return; }
+    if (kit === 'digital') { playDigital(c, t, type, v, pan); return; }
     playBeep(c, t, type, v, pan);
 }
 
