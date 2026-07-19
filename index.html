@@ -315,6 +315,10 @@ tailwind.config = {
         </div>
 
         <div id="activeSongNotesPanel" class="hidden w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-4 py-3 mt-3">
+            <div class="flex items-center gap-2 mb-1">
+                <i class="fas fa-music text-gold text-xs"></i>
+                <span class="text-sm font-medium text-zinc-100" id="activeSongNotesTitle"></span>
+            </div>
             <div class="flex items-center gap-2 mb-1.5">
                 <i class="fas fa-note-sticky text-[#2dd4bf] text-xs"></i>
                 <span class="text-[10px] text-zinc-600 uppercase tracking-wider">Song Notes</span>
@@ -976,7 +980,7 @@ const state = {
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
     audioCtx: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
     canvas: null, ctx: null, canvasSize: 0,
-    lastBeatTimestamp: 0, beatPulse: 0,
+    lastBeatTimestamp: 0, beatPulse: 0, currentBeatDurationMs: 500,
     customDragId: null, dropLineEl: null,
     soundKit: 'beep',
     practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
@@ -1368,7 +1372,12 @@ function scheduleNote(ci, time) {
     playClick(clickType, time, mb + 1);
     const delay = Math.max(0, (time - state.audioCtx.currentTime) * 1000);
     const cap = ci;
-    setTimeout(() => { state.visualClick = cap; state.lastBeatTimestamp = performance.now(); }, delay);
+    const beatDurMs = (60000 / state.bpm) / (isSub ? m : 1);
+    setTimeout(() => {
+        state.visualClick = cap;
+        state.lastBeatTimestamp = performance.now();
+        state.currentBeatDurationMs = beatDurMs;
+    }, delay);
 }
 
 function advanceClick() {
@@ -1858,14 +1867,20 @@ function moveSong(id, dir) {
 
 function updateActiveSongNotesPanel(song) {
     const panel = document.getElementById('activeSongNotesPanel');
+    const titleEl = document.getElementById('activeSongNotesTitle');
     const content = document.getElementById('activeSongNotesContent');
-    if (!panel || !content) return;
-    if (song && song.notes && song.notes.trim()) {
-        content.textContent = song.notes;
+    if (!panel || !content || !titleEl) return;
+    if (song) {
+        titleEl.textContent = song.name;
+        const hasNotes = song.notes && song.notes.trim();
+        content.textContent = hasNotes ? song.notes : '';
+        content.previousElementSibling.classList.toggle('hidden', !hasNotes);
+        content.classList.toggle('hidden', !hasNotes);
         panel.classList.remove('hidden');
     } else {
         panel.classList.add('hidden');
         content.textContent = '';
+        titleEl.textContent = '';
     }
 }
 
@@ -3251,7 +3266,12 @@ function openTimeSigPicker(current, onApply) {
 
 // ===== ANIMATION LOOP =====
 function animationLoop() {
-    state.beatPulse = Math.max(0, 1 - (performance.now() - state.lastBeatTimestamp) / 220);
+    const dur = state.currentBeatDurationMs || 220;
+    const elapsed = performance.now() - state.lastBeatTimestamp;
+    const fadeStart = dur * 0.75;
+    if (elapsed >= dur) state.beatPulse = 0;
+    else if (elapsed < fadeStart) state.beatPulse = 1;
+    else state.beatPulse = 1 - (elapsed - fadeStart) / (dur - fadeStart);
     drawWheel();
     updateBeatBlocksVisual();
     updateSetlistBpmDisplay();
@@ -3505,7 +3525,17 @@ function setupEvents() {
             cycleBeatTone(parseInt(btn.dataset.beatIdx, 10));
         });
     });
-    document.getElementById('subdivSelect').addEventListener('change', e => { state.subdivision = e.target.value; if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; } });
+    document.getElementById('subdivSelect').addEventListener('change', e => {
+        const oldMult = getSubdivMult();
+        const mainBeatIndex = Math.floor(state.currentClick / oldMult);
+        state.subdivision = e.target.value;
+        if (state.isPlaying) {
+            // Stay on the same main beat we were already on — just re-subdivide it going
+            // forward — instead of snapping back to beat 1 of the measure.
+            const newMult = getSubdivMult();
+            state.currentClick = mainBeatIndex * newMult;
+        }
+    });
     document.getElementById('soundKitSelect').addEventListener('change', e => { state.soundKit = e.target.value; saveData(); if (e.target.value === 'voice' && window.speechSynthesis) { window.speechSynthesis.getVoices(); } });
     document.getElementById('volumeSlider').addEventListener('input', e => { state.volume = parseInt(e.target.value) / 100; });
     document.getElementById('timerToggle').addEventListener('click', toggleTimer);
