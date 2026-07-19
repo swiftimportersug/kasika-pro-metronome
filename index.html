@@ -204,7 +204,7 @@ tailwind.config = {
         display: flex; align-items: center; justify-content: center;
         font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700;
         cursor: pointer; user-select: none; flex-shrink: 0;
-        transition: background-color 0.08s ease-out, box-shadow 0.08s ease-out, transform 0.08s ease-out, color 0.08s ease-out;
+        transition: transform 0.05s ease-out;
     }
     .beat-block:hover { filter: brightness(1.2); }
     .beat-block.lit {
@@ -314,16 +314,16 @@ tailwind.config = {
             <button id="tempoPlusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Increase tempo">+</button>
         </div>
 
-        <div id="activeSongNotesPanel" class="hidden w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-4 py-3 mt-3">
-            <div class="flex items-center gap-2 mb-1">
-                <i class="fas fa-music text-gold text-xs"></i>
-                <span class="text-sm font-medium text-zinc-100" id="activeSongNotesTitle"></span>
+        <div id="activeSongNotesPanel" class="hidden w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-3.5 py-2.5 mt-2.5">
+            <div class="flex items-center gap-1.5 mb-1">
+                <i class="fas fa-music text-gold text-[10px] flex-shrink-0"></i>
+                <span class="text-xs font-medium text-zinc-100 truncate" id="activeSongNotesTitle"></span>
             </div>
-            <div class="flex items-center gap-2 mb-1.5">
-                <i class="fas fa-note-sticky text-[#2dd4bf] text-xs"></i>
-                <span class="text-[10px] text-zinc-600 uppercase tracking-wider">Song Notes</span>
+            <div class="flex items-center gap-1.5 mb-1">
+                <i class="fas fa-note-sticky text-[#2dd4bf] text-[9px] flex-shrink-0"></i>
+                <span class="text-[9px] text-zinc-600 uppercase tracking-wider">Song Notes</span>
             </div>
-            <div class="text-sm text-zinc-300 leading-relaxed" id="activeSongNotesContent" style="white-space:pre-wrap;"></div>
+            <div class="text-xs text-[#2dd4bf] leading-snug max-h-20 overflow-y-auto" id="activeSongNotesContent" style="white-space:pre-wrap;"></div>
         </div>
 
         <div class="flex flex-wrap items-center justify-center gap-3 mt-5 w-full max-w-md">
