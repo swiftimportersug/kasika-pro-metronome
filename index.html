@@ -1412,9 +1412,20 @@ function playClick(type, time, beatNum) {
             const t = Math.max(time, c.currentTime);
             playBeep(c, t, 'sub', state.volume * 0.6 * subMult * duck, pan);
         } else {
-            const leadMs = state.voiceLatencyEstimateMs || 120;
-            const delay = Math.max(0, (time - c.currentTime) * 1000 - leadMs);
-            setTimeout(() => speakBeat(beatNum), delay);
+            const clip = state.cueBank.numbers[beatNum - 1];
+            if (clip) {
+                // Play your recorded clip through the same sample-accurate Web Audio
+                // scheduling every other click sound uses — genuinely locked to the beat,
+                // not subject to speech-engine startup latency.
+                const t = Math.max(time, c.currentTime);
+                loadCueBuffer(clip.key).then(buf => { if (buf) playCueClip(buf, t, state.volume * 100 * duck, 0); });
+            } else {
+                // No recorded clip for this beat number yet — fall back to TTS so nothing
+                // goes silent, though this beat won't be as tightly synced as the others.
+                const leadMs = state.voiceLatencyEstimateMs || 120;
+                const delay = Math.max(0, (time - c.currentTime) * 1000 - leadMs);
+                setTimeout(() => speakBeat(beatNum), delay);
+            }
         }
         return;
     }
@@ -3634,7 +3645,15 @@ function setupEvents() {
             state.currentClick = mainBeatIndex * newMult;
         }
     });
-    document.getElementById('soundKitSelect').addEventListener('change', e => { state.soundKit = e.target.value; saveData(); if (e.target.value === 'voice' && window.speechSynthesis) { window.speechSynthesis.getVoices(); } });
+    document.getElementById('soundKitSelect').addEventListener('change', e => {
+        state.soundKit = e.target.value;
+        saveData();
+        if (e.target.value === 'voice') {
+            if (window.speechSynthesis) window.speechSynthesis.getVoices();
+            const hasAnyNumberClips = state.cueBank.numbers.some(Boolean);
+            if (!hasAnyNumberClips) showToast('Tip: import your counting clips in the Cue Bank for sample-accurate sync');
+        }
+    });
     document.getElementById('volumeSlider').addEventListener('input', e => { state.volume = parseInt(e.target.value) / 100; });
     document.getElementById('timerToggle').addEventListener('click', toggleTimer);
     document.getElementById('timerReset').addEventListener('click', resetTimer);
