@@ -1053,8 +1053,8 @@ function renderBeatBlocks() {
     BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
         const container = document.getElementById(id);
         if (container) container.innerHTML = html;
-        lastLitBeatIdx[id] = -1;
     });
+    clearAllBeatBlockFlashes();
 }
 
 function cycleBeatTone(idx) {
@@ -1065,31 +1065,29 @@ function cycleBeatTone(idx) {
     saveData();
 }
 
-const lastLitBeatIdx = {};
+const blockFlashTimers = {};
+const BLOCK_FLASH_MS = 100;
 
-function updateBeatBlocksVisual() {
+function flashBeatBlock(mainBeatIdx) {
     if (currentAppView !== 'setlists') return;
-    const mult = getSubdivMult();
-    // Independent hard on/off, decoupled from the wheel's smoothed pulse — lit for exactly
-    // the beat's duration, nothing more, and only ever a main beat (not a subdivision tick).
-    const elapsed = performance.now() - state.lastBeatTimestamp;
-    const isMainBeatActive = elapsed < state.currentBeatDurationMs && state.visualClick % mult === 0;
-    const activeIdx = isMainBeatActive ? state.visualClick / mult : -1;
-
     BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
         const container = document.getElementById(id);
         if (!container) return;
-        const prevIdx = lastLitBeatIdx[id] != null ? lastLitBeatIdx[id] : -1;
-        if (prevIdx === activeIdx) return; // nothing changed — skip all DOM work this frame
-        if (prevIdx !== -1) {
-            const prevBtn = container.querySelector(`.beat-block[data-beat-idx="${prevIdx}"]`);
-            if (prevBtn) prevBtn.classList.remove('lit');
-        }
-        if (activeIdx !== -1) {
-            const curBtn = container.querySelector(`.beat-block[data-beat-idx="${activeIdx}"]`);
-            if (curBtn) curBtn.classList.add('lit');
-        }
-        lastLitBeatIdx[id] = activeIdx;
+        const btn = container.querySelector(`.beat-block[data-beat-idx="${mainBeatIdx}"]`);
+        if (!btn) return;
+        btn.classList.add('lit');
+        const key = id + '-' + mainBeatIdx;
+        clearTimeout(blockFlashTimers[key]);
+        blockFlashTimers[key] = setTimeout(() => { btn.classList.remove('lit'); }, BLOCK_FLASH_MS);
+    });
+}
+
+function clearAllBeatBlockFlashes() {
+    Object.keys(blockFlashTimers).forEach(key => clearTimeout(blockFlashTimers[key]));
+    BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
+        const container = document.getElementById(id);
+        if (!container) return;
+        container.querySelectorAll('.beat-block.lit').forEach(btn => btn.classList.remove('lit'));
     });
 }
 
@@ -1449,6 +1447,7 @@ function stopMetronome() {
     state.isPlaying = false; clearTimeout(state.schedulerTimer);
     state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
+    clearAllBeatBlockFlashes();
 }
 
 function scheduler() {
@@ -1486,6 +1485,7 @@ function scheduleNote(ci, time) {
         state.visualClick = cap;
         state.lastBeatTimestamp = performance.now();
         state.currentBeatDurationMs = beatDurMs;
+        if (!isSub) flashBeatBlock(mb);
     }, delay);
 }
 
@@ -3382,7 +3382,6 @@ function animationLoop() {
     else if (elapsed < fadeStart) state.beatPulse = 1;
     else state.beatPulse = 1 - (elapsed - fadeStart) / (dur - fadeStart);
     drawWheel();
-    updateBeatBlocksVisual();
     updateSetlistBpmDisplay();
     requestAnimationFrame(animationLoop);
 }
