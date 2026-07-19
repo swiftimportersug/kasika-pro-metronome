@@ -1066,10 +1066,11 @@ function cycleBeatTone(idx) {
 }
 
 const blockFlashTimers = {};
-const BLOCK_FLASH_MS = 100;
+const BLOCK_GAP_BEFORE_NEXT_MS = 40; // small dark gap before the next beat so consecutive lights stay visually distinct
+const BLOCK_MIN_FLASH_MS = 30; // floor so extremely fast tempos never collapse to ~0
 const BLOCK_VISUAL_LEAD_MS = 30;
 
-function flashBeatBlock(mainBeatIdx) {
+function flashBeatBlock(mainBeatIdx, durationMs) {
     if (currentAppView !== 'setlists') return;
     BEAT_BLOCK_CONTAINER_IDS.forEach(id => {
         const container = document.getElementById(id);
@@ -1079,7 +1080,7 @@ function flashBeatBlock(mainBeatIdx) {
         btn.classList.add('lit');
         const key = id + '-' + mainBeatIdx;
         clearTimeout(blockFlashTimers[key]);
-        blockFlashTimers[key] = setTimeout(() => { btn.classList.remove('lit'); }, BLOCK_FLASH_MS);
+        blockFlashTimers[key] = setTimeout(() => { btn.classList.remove('lit'); }, durationMs);
     });
 }
 
@@ -1492,7 +1493,9 @@ function scheduleNote(ci, time) {
         // has its own small latency, so triggering slightly early lands it feeling on-time by
         // the moment it's actually visible. The wheel's timing above is untouched.
         const blockDelay = Math.max(0, delay - BLOCK_VISUAL_LEAD_MS);
-        setTimeout(() => flashBeatBlock(mb), blockDelay);
+        const mainBeatDurMs = 60000 / state.bpm;
+        const flashDur = Math.max(BLOCK_MIN_FLASH_MS, mainBeatDurMs - BLOCK_GAP_BEFORE_NEXT_MS);
+        setTimeout(() => flashBeatBlock(mb, flashDur), blockDelay);
     }
 }
 
