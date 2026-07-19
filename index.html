@@ -1067,6 +1067,7 @@ function cycleBeatTone(idx) {
 
 const blockFlashTimers = {};
 const BLOCK_FLASH_MS = 100;
+const BLOCK_VISUAL_LEAD_MS = 30;
 
 function flashBeatBlock(mainBeatIdx) {
     if (currentAppView !== 'setlists') return;
@@ -1485,8 +1486,14 @@ function scheduleNote(ci, time) {
         state.visualClick = cap;
         state.lastBeatTimestamp = performance.now();
         state.currentBeatDurationMs = beatDurMs;
-        if (!isSub) flashBeatBlock(mb);
     }, delay);
+    if (!isSub) {
+        // Fire the block's visual flash a touch ahead of the audio — screen paint/compositing
+        // has its own small latency, so triggering slightly early lands it feeling on-time by
+        // the moment it's actually visible. The wheel's timing above is untouched.
+        const blockDelay = Math.max(0, delay - BLOCK_VISUAL_LEAD_MS);
+        setTimeout(() => flashBeatBlock(mb), blockDelay);
+    }
 }
 
 function advanceClick() {
