@@ -988,7 +988,7 @@ const state = {
     customDragId: null, dropLineEl: null,
     soundKit: 'beep',
     practice: { active: false, startBpm: 80, targetBpm: 120, increment: 4, barsPerStep: 4, barsElapsed: 0 },
-    songMod: { active: false, sections: [], index: 0, barsElapsed: 0, loop: false },
+    songMod: { active: false, sections: [], index: 0, beatsElapsed: 0, loop: false },
     beatTones: [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
     subdivisionPan: 0,
     subdivisionVolume: 100,
@@ -1526,9 +1526,13 @@ function scheduleNote(ci, time) {
 
 function advanceClick() {
     state.nextNoteTime += (60.0 / state.bpm) / getSubdivMult();
-    const total = getClicksPerMeasure();
+    const mult = getSubdivMult();
+    const total = getBeatsPerMeasure() * mult;
     state.currentClick = (state.currentClick + 1) % total;
-    if (state.currentClick === 0) onMeasureComplete();
+    if (state.currentClick % mult === 0) {
+        if (state.songMod.active) advanceSongModulationByBeat();
+        if (state.currentClick === 0) onMeasureComplete();
+    }
 }
 
 // ===== PRACTICE MODE (tempo ramp) =====
@@ -1577,7 +1581,6 @@ function onMeasureComplete() {
         }
         updatePracticeUI();
     }
-    if (state.songMod.active) advanceSongModulation();
 }
 
 function updatePracticeUI() {
@@ -1599,37 +1602,52 @@ function updatePracticeUI() {
 
 // ===== SONG MODULATION (per-song tempo / time-sig changes) =====
 function buildSongModSections(song) {
-    const sections = [{ bpm: song.bpm, timeSig: song.timeSig, bars: null, beatTones: (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray(), cue: null }];
+    const sections = [{ bpm: song.bpm, timeSig: song.timeSig, totalBeats: null, beatTones: (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray(), cue: null }];
     const mods = song.modulations || [];
     mods.forEach((m, i) => {
-        sections[i].bars = m.bars; // duration of the section this modulation follows
-        sections.push({ bpm: m.bpm, timeSig: m.timeSig, bars: null, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue || null });
+        // Duration of the section this modulation follows, in the SECTION'S OWN time
+        // signature — supports fractional bars (e.g. "9 bars + 2 beats") via extraBeats.
+        const beatsPerBar = parseInt(String(sections[i].timeSig).split('/')[0], 10) || 4;
+        sections[i].totalBeats = Math.max(1, (m.bars || 0) * beatsPerBar + (m.extraBeats || 0));
+        sections.push({ bpm: m.bpm, timeSig: m.timeSig, totalBeats: null, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue || null });
     });
     return sections;
 }
 
 function initSongModulation(song) {
     const sections = buildSongModSections(song);
-    state.songMod = { active: sections.length > 1, sections, index: 0, barsElapsed: 0, loop: !!song.modulationLoop, cueFiredForIndex: -1 };
+    state.songMod = { active: sections.length > 1, sections, index: 0, beatsElapsed: 0, loop: !!song.modulationLoop, cueFiredForIndex: -1 };
     updateSongModUI();
-    // Handle a 1-bar first-into-second section transition, where "entering the final bar"
-    // and "section start" are the same moment (no separate mid-section tick to catch it on).
-    if (sections.length > 1 && sections[0].bars === 1) {
-        maybeFireCueForSection(0);
-    }
+    // Handle a very short first section, where "within lead time of the transition" and
+    // "section start" are the same moment (no separate mid-section tick to catch it on).
+    checkCueLeadTime();
 }
 
 function stopSongModulation(silent) {
     if (!state.songMod.sections.length && !state.songMod.active) return;
-    state.songMod = { active: false, sections: [], index: 0, barsElapsed: 0, loop: false, cueFiredForIndex: -1 };
+    state.songMod = { active: false, sections: [], index: 0, beatsElapsed: 0, loop: false, cueFiredForIndex: -1 };
     state.cueDuck = null;
     updateSongModUI();
     if (!silent) showToast('Tempo modulation stopped');
 }
 
+// Checks whether we're now within one new-tempo-bar's worth of beats from the end of the
+// current section, and fires the attached cue if so. Beat-based (not bar-based) so it works
+// correctly even for sections with fractional bar lengths.
+function checkCueLeadTime() {
+    const sm = state.songMod;
+    const sec = sm.sections[sm.index];
+    if (!sec || sec.totalBeats == null) return;
+    const beatsPerBar = parseInt(String(sec.timeSig).split('/')[0], 10) || 4;
+    const leadBeats = Math.min(beatsPerBar, sec.totalBeats);
+    const remaining = sec.totalBeats - sm.beatsElapsed;
+    if (remaining === leadBeats) maybeFireCueForSection(sm.index, remaining);
+}
+
 // Fires the voice cue (reminder + count-in) attached to the transition LEAVING section
-// `fromIndex`, scheduled precisely against the exact audio-clock time of that transition.
-function maybeFireCueForSection(fromIndex) {
+// `fromIndex`, scheduled precisely against the exact audio-clock time of that transition,
+// which is `remainingBeats` beats (at the CURRENT tempo) from right now.
+function maybeFireCueForSection(fromIndex, remainingBeats) {
     const sm = state.songMod;
     if (sm.cueFiredForIndex === fromIndex) return; // already fired for this transition
     let nextIndex = fromIndex + 1;
@@ -1637,8 +1655,7 @@ function maybeFireCueForSection(fromIndex) {
     const next = sm.sections[nextIndex];
     if (!next || !next.cue || (!next.cue.reminderId && !next.cue.countIn)) return;
     sm.cueFiredForIndex = fromIndex;
-    const oldBeatsPerBar = getBeatsPerMeasure();
-    const transitionTime = state.nextNoteTime + oldBeatsPerBar * (60 / state.bpm);
+    const transitionTime = state.nextNoteTime + remainingBeats * (60 / state.bpm);
     fireVoiceCue(next, transitionTime);
 }
 
@@ -1683,20 +1700,15 @@ function fireVoiceCue(next, transitionTime) {
     state.cueDuck = { start: transitionTime - duckLead, end: transitionTime + 0.1 };
 }
 
-function advanceSongModulation() {
+function advanceSongModulationByBeat() {
     const sm = state.songMod;
     const sec = sm.sections[sm.index];
-    if (!sec || sec.bars == null) return; // final section plays indefinitely
-    sm.barsElapsed++;
+    if (!sec || sec.totalBeats == null) return; // final section plays indefinitely
+    sm.beatsElapsed++;
+    checkCueLeadTime();
 
-    // We've just entered what will be the LAST bar of this section — fire any voice cue
-    // attached to the upcoming transition now, so it has a full bar to play out.
-    if (sm.barsElapsed === sec.bars - 1) {
-        maybeFireCueForSection(sm.index);
-    }
-
-    if (sm.barsElapsed >= sec.bars) {
-        sm.barsElapsed = 0;
+    if (sm.beatsElapsed >= sec.totalBeats) {
+        sm.beatsElapsed = 0;
         let nextIndex = sm.index + 1;
         if (nextIndex >= sm.sections.length) {
             if (sm.loop) nextIndex = 0;
@@ -1715,9 +1727,9 @@ function advanceSongModulation() {
         // tempo's beat duration (correct: the interval INTO beat 1 belongs to the old tempo,
         // the interval FROM beat 1 onward uses the new one). Overwriting it with "now" would
         // snap the beat to the wrong moment and produce an audible jump/glitch.
-        // If the new section is itself only 1 bar long, its own cue (for the transition
-        // after it) needs firing immediately, since there's no separate mid-section tick.
-        if (sm.active && next.bars === 1) maybeFireCueForSection(nextIndex);
+        // If the new section is itself short enough that we're already within lead time of
+        // ITS OWN transition, its cue needs firing immediately too.
+        if (sm.active) checkCueLeadTime();
         showToast(`Section ${nextIndex + 1}/${sm.sections.length} · ${next.bpm} BPM${tsChanged ? ' · ' + next.timeSig : ''}`);
     }
     updateSongModUI();
@@ -1734,8 +1746,11 @@ function updateSongModUI() {
     if (!sm.active) {
         text.textContent = `Section ${sm.index + 1}/${sm.sections.length} · ${sec.bpm} BPM · ${sec.timeSig} (final)`;
     } else {
-        const barsToGo = sec.bars - sm.barsElapsed;
-        text.textContent = `Section ${sm.index + 1}/${sm.sections.length} · ${sec.bpm} BPM · ${sec.timeSig} · next in ${barsToGo} bar${barsToGo !== 1 ? 's' : ''}`;
+        const beatsPerBar = parseInt(String(sec.timeSig).split('/')[0], 10) || 4;
+        const remaining = sec.totalBeats - sm.beatsElapsed;
+        const barsToGo = Math.floor(remaining / beatsPerBar), beatsToGo = remaining % beatsPerBar;
+        const remainderStr = beatsToGo ? ` ${beatsToGo} beat${beatsToGo !== 1 ? 's' : ''}` : '';
+        text.textContent = `Section ${sm.index + 1}/${sm.sections.length} · ${sec.bpm} BPM · ${sec.timeSig} · next in ${barsToGo} bar${barsToGo !== 1 ? 's' : ''}${remainderStr}`;
     }
 }
 
@@ -1882,13 +1897,13 @@ function handlePointerDown(e) {
     const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
     if (Math.abs(d - state.canvasSize * 0.42) < state.canvasSize * 0.08 || d < state.canvasSize * 0.36) {
         state.isDragging = true; state.canvas.classList.add('dragging');
-        let a = Math.atan2(y - cy, x - cx); if (isAngleInArc(a)) state.bpm = angleToBpm(a);
+        let a = Math.atan2(y - cy, x - cx); if (isAngleInArc(a)) setLiveBpm(angleToBpm(a));
     }
 }
 function handlePointerMove(e) {
     if (!state.isDragging && !e.touches) return;
     const { x, y } = getCanvasCoords(e);
-    if (state.isDragging) { e.preventDefault(); let a = Math.atan2(y - state.canvasSize / 2, x - state.canvasSize / 2); if (isAngleInArc(a)) state.bpm = angleToBpm(a); }
+    if (state.isDragging) { e.preventDefault(); let a = Math.atan2(y - state.canvasSize / 2, x - state.canvasSize / 2); if (isAngleInArc(a)) setLiveBpm(angleToBpm(a)); }
 }
 function handlePointerUp() { state.isDragging = false; state.canvas.classList.remove('dragging'); }
 
@@ -1902,7 +1917,7 @@ function handleTap() {
     btn.classList.remove('tap-flash'); void btn.offsetWidth; btn.classList.add('tap-flash');
     if (tapTimes.length >= 2) {
         let t = 0; for (let i = 1; i < tapTimes.length; i++) t += tapTimes[i] - tapTimes[i - 1];
-        state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(60000 / (t / (tapTimes.length - 1)))));
+        setLiveBpm(Math.round(60000 / (t / (tapTimes.length - 1))));
     }
 }
 
@@ -2860,11 +2875,13 @@ function renderModulationRows() {
         const hasCue = m.cue && (m.cue.reminderId || m.cue.countIn);
         return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" data-mod-idx="${i}">
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1.5 flex-wrap">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">Sec ${i + 2}</span>
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">after</span>
-                <input type="number" class="edit-input mod-bars" style="width:44px" min="1" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}">
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">bars →</span>
+                <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
+                <input type="number" class="edit-input mod-extra-beats" style="width:36px" min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats →</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
                 <button type="button" class="edit-btn edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
@@ -2892,7 +2909,7 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
-    editingModulations.push({ bars: 8, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
+    editingModulations.push({ bars: 8, extraBeats: 0, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
     renderModulationRows();
 }
 
@@ -2949,7 +2966,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const idx = parseInt(field.dataset.modIdx, 10);
             if (!editingModulations[idx]) return;
             const f = field.dataset.modField;
-            if (f === 'bars') editingModulations[idx].bars = Math.max(1, Math.min(999, parseInt(field.value, 10) || 1));
+            if (f === 'bars') editingModulations[idx].bars = Math.max(0, Math.min(999, parseInt(field.value, 10) || 0));
+            else if (f === 'extraBeats') editingModulations[idx].extraBeats = Math.max(0, Math.min(15, parseInt(field.value, 10) || 0));
             else if (f === 'bpm') editingModulations[idx].bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(field.value, 10) || MIN_BPM));
             else if (f === 'timeSig') editingModulations[idx].timeSig = field.value;
             return;
@@ -3472,8 +3490,25 @@ function closeSetlistsView() { history.back(); }
 function openCueBankView() { pushView('cuebank'); applyViewState('cuebank'); }
 function closeCueBankView() { history.back(); }
 
+// Routes every MANUAL tempo change (buttons, wheel drag/scroll, tap tempo, keyboard) through
+// here. If a song's modulation sections are actively playing, the change is applied
+// proportionally to the current AND all remaining sections' live tempo, so a live tempo
+// bump carries through the rest of the song instead of snapping back to each section's
+// originally-programmed BPM. This only rescales the in-memory playback copy — the saved
+// song data (and its section BPMs) is never touched.
+function setLiveBpm(newBpm) {
+    const clamped = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(newBpm)));
+    if (state.isPlaying && state.songMod.active && state.songMod.sections.length > 1 && state.bpm > 0 && clamped !== state.bpm) {
+        const ratio = clamped / state.bpm;
+        state.songMod.sections.forEach((sec, i) => {
+            sec.bpm = i === state.songMod.index ? clamped : Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(sec.bpm * ratio)));
+        });
+    }
+    state.bpm = clamped;
+}
+
 function adjustTempo(delta) {
-    state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + delta));
+    setLiveBpm(state.bpm + delta);
 }
 
 // ===== EVENT LISTENERS =====
@@ -3485,7 +3520,7 @@ function setupEvents() {
     canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
     window.addEventListener('touchmove', handlePointerMove, { passive: false });
     window.addEventListener('touchend', handlePointerUp);
-    canvas.addEventListener('wheel', e => { e.preventDefault(); state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, state.bpm + (e.deltaY > 0 ? -1 : 1))); }, { passive: false });
+    canvas.addEventListener('wheel', e => { e.preventDefault(); setLiveBpm(state.bpm + (e.deltaY > 0 ? -1 : 1)); }, { passive: false });
 
     document.getElementById('playBtn').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
     document.getElementById('playBtnSetlist').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
@@ -3792,7 +3827,7 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
         };
         if (!d.name || isNaN(d.bpm)) return;
@@ -3893,10 +3928,10 @@ function setupEvents() {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
         if (e.code === 'Space') { e.preventDefault(); state.isPlaying ? stopMetronome() : startMetronome(); }
         else if (e.code === 'KeyT') handleTap();
-        else if (e.code === 'ArrowUp') { e.preventDefault(); state.bpm = Math.min(MAX_BPM, state.bpm + (e.shiftKey ? 5 : 1)); }
-        else if (e.code === 'ArrowDown') { e.preventDefault(); state.bpm = Math.max(MIN_BPM, state.bpm - (e.shiftKey ? 5 : 1)); }
-        else if (e.code === 'ArrowRight') { e.preventDefault(); state.bpm = Math.min(MAX_BPM, state.bpm + (e.shiftKey ? 10 : 5)); }
-        else if (e.code === 'ArrowLeft') { e.preventDefault(); state.bpm = Math.max(MIN_BPM, state.bpm - (e.shiftKey ? 10 : 5)); }
+        else if (e.code === 'ArrowUp') { e.preventDefault(); setLiveBpm(state.bpm + (e.shiftKey ? 5 : 1)); }
+        else if (e.code === 'ArrowDown') { e.preventDefault(); setLiveBpm(state.bpm - (e.shiftKey ? 5 : 1)); }
+        else if (e.code === 'ArrowRight') { e.preventDefault(); setLiveBpm(state.bpm + (e.shiftKey ? 10 : 5)); }
+        else if (e.code === 'ArrowLeft') { e.preventDefault(); setLiveBpm(state.bpm - (e.shiftKey ? 10 : 5)); }
     });
 
     document.querySelectorAll('.modal-overlay').forEach(o => {
