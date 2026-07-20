@@ -1720,6 +1720,11 @@ function advanceSongModulationByBeat() {
         const tsChanged = next.timeSig !== state.timeSig;
         state.bpm = next.bpm; state.timeSig = next.timeSig;
         state.beatTones = (next.beatTones || defaultBeatTonesArray()).slice();
+        // Every new section starts fresh on beat 1 — without this, a fractional-bar section
+        // (e.g. 4 bars + 2 beats) would land the transition mid-cycle, and the new section
+        // would continue from wherever that old cycle left off instead of starting on the
+        // high-pitched "beat 1" tone.
+        state.currentClick = 0;
         document.getElementById('timeSigSelect').textContent = state.timeSig;
         renderBeatBlocks();
         // NOTE: nextNoteTime is intentionally left untouched here. advanceClick() already
