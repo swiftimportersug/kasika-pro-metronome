@@ -836,6 +836,7 @@ function initFirebase() {
             if (user) {
                 startRemoteSync(user.uid);
                 updateSyncUI(true, user.email || user.displayName || 'Signed in');
+                uploadMissingCueAudio();
             } else {
                 stopRemoteSync();
                 updateSyncUI(false);
@@ -1297,11 +1298,18 @@ function speakBeat(n) {
 }
 
 // ===== VOICE CUES: buffer loading + playback =====
-async function loadCueBuffer(key) {
+async function loadCueBuffer(key, url) {
     if (!key) return null;
     if (state.cueBufferCache[key]) return state.cueBufferCache[key];
     try {
-        const blob = await cueDbGet(key);
+        let blob = await cueDbGet(key);
+        if (!blob && url) {
+            // Not cached locally yet — fetch it live from Storage right now rather than
+            // waiting on background sync to eventually catch up.
+            const res = await fetch(url);
+            blob = await res.blob();
+            await cueDbPut(key, blob).catch(() => {});
+        }
         if (!blob) return null;
         const arrayBuf = await blob.arrayBuffer();
         ensureAudio();
@@ -1371,6 +1379,23 @@ function uploadCueToCloud(entry, blob) {
     }).catch(err => console.warn('Cue upload failed (clip still works locally):', err));
 }
 
+// Some clips may have been imported before sign-in ever succeeded, so they were never
+// uploaded to Storage and other devices have no way to fetch them. Called on sign-in to
+// catch those up retroactively.
+async function uploadMissingCueAudio() {
+    if (!syncEnabled || !fbStorage || !fbAuth || !fbAuth.currentUser) return;
+    const all = [...state.cueBank.numbers.filter(Boolean), ...state.cueBank.reminders];
+    for (const entry of all) {
+        if (entry.url) continue; // already uploaded
+        try {
+            const blob = await cueDbGet(entry.key);
+            if (blob) uploadCueToCloud(entry, blob);
+        } catch (err) {
+            console.warn('Could not re-upload cue audio for', entry.name, err);
+        }
+    }
+}
+
 // When a cue reference arrives from another device (via Firestore sync) that we don't have
 // the audio bytes for yet, fetch it from Storage and cache it locally so playback works offline.
 async function ensureCueCachedLocally(entry) {
@@ -1418,7 +1443,7 @@ function playClick(type, time, beatNum) {
                 // scheduling every other click sound uses — genuinely locked to the beat,
                 // not subject to speech-engine startup latency.
                 const t = Math.max(time, c.currentTime);
-                loadCueBuffer(clip.key).then(buf => { if (buf) playCueClip(buf, t, state.volume * 100 * duck, 0); });
+                loadCueBuffer(clip.key, clip.url).then(buf => { if (buf) playCueClip(buf, t, state.volume * 100 * duck, 0); });
             } else {
                 // No recorded clip for this beat number yet — fall back to TTS so nothing
                 // goes silent, though this beat won't be as tightly synced as the others.
@@ -1635,7 +1660,7 @@ function fireVoiceCue(next, transitionTime) {
             const beatNumber = startBeat + i; // the number actually spoken — e.g. start=3,length=2 speaks "3, 4"
             const t = transitionTime - (length - i) * newBeatDur;
             const bank = state.cueBank.numbers[beatNumber - 1];
-            if (bank) loadCueBuffer(bank.key).then(buf => { if (buf) playCueClip(buf, t, countInVol, countInPan); });
+            if (bank) loadCueBuffer(bank.key, bank.url).then(buf => { if (buf) playCueClip(buf, t, countInVol, countInPan); });
         }
     }
 
@@ -1643,7 +1668,7 @@ function fireVoiceCue(next, transitionTime) {
         const rem = state.cueBank.reminders.find(r => r.id === next.cue.reminderId);
         if (rem) {
             const targetEnd = (firstNumberTime != null ? firstNumberTime : transitionTime) - 0.12;
-            loadCueBuffer(rem.key).then(buf => {
+            loadCueBuffer(rem.key, rem.url).then(buf => {
                 if (!buf) return;
                 const startTime = Math.max(state.audioCtx.currentTime + 0.02, targetEnd - buf.duration);
                 playCueClip(buf, startTime, reminderVol, reminderPan);
@@ -2223,7 +2248,7 @@ function setCuePanUI(val) {
 async function previewCueEntry(entry) {
     if (!entry) return;
     ensureAudio();
-    const buf = await loadCueBuffer(entry.key);
+    const buf = await loadCueBuffer(entry.key, entry.url);
     if (!buf) { showToast('Could not load this clip'); return; }
     playCueClip(buf, state.audioCtx.currentTime + 0.02, state.cueVolume, state.cuePan);
 }
