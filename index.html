@@ -982,7 +982,7 @@ const state = {
     timerRunning: false, timerSeconds: 0, timerInterval: null,
     setlists: [], activeSetlistId: null, activeSongId: null,
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
-    audioCtx: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
+    audioCtx: null, masterBus: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
     canvas: null, ctx: null, canvasSize: 0,
     lastBeatTimestamp: 0, beatPulse: 0, currentBeatDurationMs: 500, voiceLatencyEstimateMs: 120,
     customDragId: null, dropLineEl: null,
@@ -1125,19 +1125,35 @@ function ensureAudio() {
                 state.audioCtx.resume();
             }
         };
+        // Master bus: every sound (clicks and voice cues alike) routes through this instead
+        // of straight to destination. The limiter catches peaks so the makeup gain can push
+        // overall loudness up meaningfully without the harsh digital clipping/distortion that
+        // would happen from just boosting raw gain past 1.0 with nothing to catch it.
+        const limiter = state.audioCtx.createDynamicsCompressor();
+        limiter.threshold.value = -10;
+        limiter.knee.value = 4;
+        limiter.ratio.value = 10;
+        limiter.attack.value = 0.002;
+        limiter.release.value = 0.12;
+        const makeup = state.audioCtx.createGain();
+        makeup.gain.value = 1.6; // overall loudness boost, safe because the limiter catches peaks
+        limiter.connect(makeup);
+        makeup.connect(state.audioCtx.destination);
+        state.masterBus = limiter;
     }
     if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
 }
 
 // ---- Sound kits ----
 function connectOut(c, g, pan) {
+    const dest = state.masterBus || c.destination;
     if (pan) {
         const p = c.createStereoPanner();
         p.pan.value = pan;
-        g.connect(p); p.connect(c.destination);
+        g.connect(p); p.connect(dest);
         return p;
     }
-    g.connect(c.destination);
+    g.connect(dest);
     return null;
 }
 
@@ -1331,7 +1347,7 @@ function playCueClip(buffer, time, volumePct, pan) {
     g.gain.value = Math.max(0, Math.min(1, (volumePct != null ? volumePct : 100) / 100));
     const p = c.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, pan || 0));
-    src.connect(g); g.connect(p); p.connect(c.destination);
+    src.connect(g); g.connect(p); p.connect(state.masterBus || c.destination);
     const t = Math.max(time, c.currentTime);
     src.start(t);
     return src;
