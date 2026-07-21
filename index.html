@@ -1491,6 +1491,31 @@ function stopMetronome() {
     state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     clearAllBeatBlockFlashes();
+    // Stopping resets the song back to its start — a paused/resumed mid-song state (still
+    // sitting mid-bridge, at whatever tempo the bridge was at) would be dangerous live, since
+    // the next Play needs to reliably start the song from the top, not wherever it left off.
+    resetToSongStart();
+}
+
+// Resets tempo/time-sig/beat-tones/modulation back to a song's original starting values.
+// Used on Stop (always reset) — if no song is currently armed, this just clears any leftover
+// modulation state harmlessly.
+function resetToSongStart() {
+    stopSongModulation(true);
+    const sl = getActiveSetlist();
+    const song = sl?.songs.find(s => s.id === state.activeSongId);
+    if (song) {
+        state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, song.bpm));
+        state.timeSig = song.timeSig;
+        state.subdivision = song.subdivision || 'quarter';
+        state.subdivisionPan = normalizePanValue(song.subdivisionPan);
+        state.subdivisionVolume = song.subdivisionVolume != null ? song.subdivisionVolume : 100;
+        state.beatTones = (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray();
+        document.getElementById('timeSigSelect').textContent = state.timeSig;
+        document.getElementById('subdivSelect').value = state.subdivision;
+        renderBeatBlocks();
+    }
+    updateSetlistBpmDisplay();
 }
 
 function scheduler() {
@@ -2086,6 +2111,49 @@ function loadAndPlaySong(song) {
         state.bpm = tb; startMetronome();
     }
     renderSongs(); showToast(`Now playing: ${song.name}`);
+}
+
+// Selects a song WITHOUT starting playback — highlights it in the list and preps the wheel
+// (tempo/time-sig/beat tones/notes panel) so hitting Play just works. Modulation sections are
+// deliberately NOT initialized here (deferred to togglePlayback) since doing so while stopped
+// could reference stale audio-clock timing and misfire an early cue.
+function armSong(song) {
+    state.activeSongId = song.id;
+    state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, song.bpm));
+    state.timeSig = song.timeSig;
+    state.subdivision = song.subdivision || 'quarter';
+    state.subdivisionPan = normalizePanValue(song.subdivisionPan);
+    state.subdivisionVolume = song.subdivisionVolume != null ? song.subdivisionVolume : 100;
+    state.beatTones = (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray();
+    state.cueDuck = null;
+    document.getElementById('timeSigSelect').textContent = state.timeSig;
+    document.getElementById('subdivSelect').value = state.subdivision;
+    renderBeatBlocks();
+    updateActiveSongNotesPanel(song);
+    if (state.practice.active) stopPractice(true);
+    stopSongModulation(true); // clear any leftover modulation status from a previous song
+    updateSetlistBpmDisplay();
+    renderSongs();
+    showToast(`Selected: ${song.name} — tap Play to start`);
+}
+
+// Tapping a song row: if the metronome is already running, switch to it immediately (matches
+// how a bandleader calls the next song live). If it's stopped, just arm/highlight it instead
+// of auto-starting — Play then begins that armed song from the top.
+function selectOrPlaySong(song) {
+    if (state.isPlaying) loadAndPlaySong(song);
+    else armSong(song);
+}
+
+// The single entry point for the Play/Stop button and spacebar. Starting fresh initializes
+// modulation for whichever song is currently armed, so a song selected via armSong() (which
+// deliberately skips modulation setup) gets it set up right before playback actually begins.
+function togglePlayback() {
+    if (state.isPlaying) { stopMetronome(); return; }
+    const sl = getActiveSetlist();
+    const song = sl?.songs.find(s => s.id === state.activeSongId);
+    if (song) initSongModulation(song);
+    startMetronome();
 }
 
 // ===== EXPORT =====
@@ -3543,8 +3611,8 @@ function setupEvents() {
     window.addEventListener('touchend', handlePointerUp);
     canvas.addEventListener('wheel', e => { e.preventDefault(); setLiveBpm(state.bpm + (e.deltaY > 0 ? -1 : 1)); }, { passive: false });
 
-    document.getElementById('playBtn').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
-    document.getElementById('playBtnSetlist').addEventListener('click', () => { state.isPlaying ? stopMetronome() : startMetronome(); });
+    document.getElementById('playBtn').addEventListener('click', togglePlayback);
+    document.getElementById('playBtnSetlist').addEventListener('click', togglePlayback);
     document.getElementById('tempoMinusBtn').addEventListener('click', () => adjustTempo(-1));
     document.getElementById('tempoPlusBtn').addEventListener('click', () => adjustTempo(1));
     document.getElementById('tempoMinusBtnMain').addEventListener('click', () => adjustTempo(-1));
@@ -3882,7 +3950,7 @@ function setupEvents() {
         const row = e.target.closest('.song-play-row');
         if (!row) return;
         const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === row.dataset.songId);
-        if (song) loadAndPlaySong(song);
+        if (song) selectOrPlaySong(song);
     });
 
     // ---- Practice mode ----
@@ -3947,7 +4015,7 @@ function setupEvents() {
 
     document.addEventListener('keydown', e => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-        if (e.code === 'Space') { e.preventDefault(); state.isPlaying ? stopMetronome() : startMetronome(); }
+        if (e.code === 'Space') { e.preventDefault(); togglePlayback(); }
         else if (e.code === 'KeyT') handleTap();
         else if (e.code === 'ArrowUp') { e.preventDefault(); setLiveBpm(state.bpm + (e.shiftKey ? 5 : 1)); }
         else if (e.code === 'ArrowDown') { e.preventDefault(); setLiveBpm(state.bpm - (e.shiftKey ? 5 : 1)); }
