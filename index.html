@@ -723,7 +723,7 @@ tailwind.config = {
                     Loop back to the start after the final section
                 </label>
 
-            <div class="flex gap-3 mt-2 sticky bottom-0 z-20 bg-s2" style="margin: 0 -28px -28px; padding: 12px 28px 20px;">
+            <div class="flex gap-3 mt-3 sticky bottom-0 z-20 bg-s2" style="margin: 0 -28px; padding: 14px 28px 20px; box-shadow: 0 -8px 12px -4px rgba(0,0,0,0.3);">
                 <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
                 <button type="button" onclick="hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
             </div>
@@ -1734,6 +1734,20 @@ function maybeFireCueForSection(fromIndex, remainingBeats) {
     fireVoiceCue(next, transitionTime);
 }
 
+// Looks up a cue's reminder by ID first (works on the device that created it), falling back
+// to matching by name (works on OTHER devices too — since the Cue Bank is local-only per
+// device, a reminder's random ID only ever means something on the device it was created on,
+// but its name is stable and can be matched against whatever that device imported locally).
+function findReminderForCue(cue) {
+    if (!cue || !cue.reminderId) return null;
+    let rem = state.cueBank.reminders.find(r => r.id === cue.reminderId);
+    if (!rem && cue.reminderName) {
+        const target = cue.reminderName.trim().toLowerCase();
+        rem = state.cueBank.reminders.find(r => r.name && r.name.trim().toLowerCase() === target);
+    }
+    return rem || null;
+}
+
 function fireVoiceCue(next, transitionTime) {
     const newBpm = next.bpm;
     const newBeatsPerBar = parseInt(String(next.timeSig).split('/')[0], 10) || 4;
@@ -1757,7 +1771,7 @@ function fireVoiceCue(next, transitionTime) {
     }
 
     if (next.cue.reminderId) {
-        const rem = state.cueBank.reminders.find(r => r.id === next.cue.reminderId);
+        const rem = findReminderForCue(next.cue);
         if (rem) {
             const anchor = firstNumberTime != null ? firstNumberTime : transitionTime;
             if (next.cue.reminderLeadBeats != null) {
@@ -2434,12 +2448,13 @@ function openSongEditModal(id) {
     renderSongBeatTonesBlocks();
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
-    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } }));
+    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, reminderName: m.cue.reminderName != null ? m.cue.reminderName : (m.cue.reminderId ? (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null : null), countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } }));
     expandedModTones = new Set();
     expandedModCues = new Set();
     expandedCountInSettings = new Set();
     editingIntroCue = song.introCue ? {
         reminderId: song.introCue.reminderId || null,
+        reminderName: song.introCue.reminderName != null ? song.introCue.reminderName : (song.introCue.reminderId ? (state.cueBank.reminders.find(r => r.id === song.introCue.reminderId) || {}).name || null : null),
         reminderLeadBeats: song.introCue.reminderLeadBeats != null ? song.introCue.reminderLeadBeats : 2,
         reminderVolume: song.introCue.reminderVolume != null ? song.introCue.reminderVolume : state.cueVolume,
         reminderPan: song.introCue.reminderPan != null ? song.introCue.reminderPan : state.cuePan,
@@ -3083,7 +3098,7 @@ function renderSongSuggestions(query) {
 // ===== SONG MODULATION EDITOR (in Add/Edit Song modal) =====
 let editingModulations = [];
 let editingIntroCue = { reminderId: null, reminderLeadBeats: 2, reminderVolume: 100, reminderPan: 0, countIn: false, countInLength: null, countInStart: 1, countInVolume: 100, countInPan: 0 };
-function defaultIntroCue() { return { reminderId: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan }; }
+function defaultIntroCue() { return { reminderId: null, reminderName: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan }; }
 let editingSongBeatTones = [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2];
 
 function renderSongBeatTonesBlocks() {
@@ -3177,7 +3192,7 @@ function renderModCueHtml(i) {
                 Count-in
             </label>
             <button type="button" class="mod-cue-countin-settings-toggle text-[10px] text-zinc-600 hover:text-[#F472B6] flex items-center gap-1 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
-                <span>${length}-count from ${start}${expandedCountInSettings.has(i) ? '' : ' · tap to adjust'}</span>
+                <span>${length}-count from ${start}</span>${expandedCountInSettings.has(i) ? '' : `<span style="color:#F472B6; text-decoration:underline; text-underline-offset:2px;"> · tap to adjust</span>`}
                 <i class="fas fa-chevron-down text-[8px] transition-transform" style="${expandedCountInSettings.has(i) ? 'transform:rotate(180deg);' : ''}"></i>
             </button>
         </div>
@@ -3327,8 +3342,13 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
-    editingModulations.push({ bars: 8, extraBeats: 0, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
+    editingModulations.push({ bars: 8, extraBeats: 0, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
     renderModulationRows();
+    requestAnimationFrame(() => {
+        const list = document.getElementById('modulationList');
+        const newRow = list && list.lastElementChild;
+        if (newRow) newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -3402,9 +3422,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reminderSel) {
             const idx = parseInt(reminderSel.dataset.modIdx, 10);
             if (!editingModulations[idx]) return;
-            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
+            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
             const cue = editingModulations[idx].cue;
             cue.reminderId = reminderSel.value || null;
+            cue.reminderName = cue.reminderId ? (state.cueBank.reminders.find(r => r.id === cue.reminderId) || {}).name || null : null;
             if (cue.reminderId && cue.reminderVolume == null) cue.reminderVolume = state.cueVolume;
             if (cue.reminderId && cue.reminderPan == null) cue.reminderPan = state.cuePan;
             renderModulationRows();
@@ -3506,6 +3527,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const reminderSel = e.target.closest('.intro-cue-reminder');
         if (reminderSel) {
             editingIntroCue.reminderId = reminderSel.value || null;
+            editingIntroCue.reminderName = editingIntroCue.reminderId ? (state.cueBank.reminders.find(r => r.id === editingIntroCue.reminderId) || {}).name || null : null;
             if (editingIntroCue.reminderId && editingIntroCue.reminderLeadBeats == null) editingIntroCue.reminderLeadBeats = 2;
             renderIntroCueUI();
             return;
@@ -4376,10 +4398,11 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, reminderName: m.cue.reminderId ? (m.cue.reminderName || (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null) : null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
             introCue: {
                 reminderId: editingIntroCue.reminderId || null,
+                reminderName: editingIntroCue.reminderId ? (editingIntroCue.reminderName || (state.cueBank.reminders.find(r => r.id === editingIntroCue.reminderId) || {}).name || null) : null,
                 reminderLeadBeats: editingIntroCue.reminderId ? Math.max(1, editingIntroCue.reminderLeadBeats || 2) : null,
                 reminderVolume: editingIntroCue.reminderVolume,
                 reminderPan: editingIntroCue.reminderPan,
