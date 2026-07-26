@@ -3292,6 +3292,9 @@ function renderIntroCueUI() {
     if (container) container.innerHTML = renderIntroCueHtml();
 }
 
+const SECTION_COLORS = ['#D4A853', '#2dd4bf', '#F472B6', '#60A5FA', '#A78BFA', '#FB923C', '#34D399', '#F87171', '#FBBF24', '#818CF8'];
+function nextSectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.length]; }
+
 function renderModulationRows() {
     const list = document.getElementById('modulationList');
     const loopRow = document.getElementById('modulationLoopRow');
@@ -3305,10 +3308,18 @@ function renderModulationRows() {
     loopRow.style.display = 'flex';
     hint.textContent = 'Each change applies after the given number of bars of the section before it.';
     list.innerHTML = editingModulations.map((m, i) => {
+        if (!m.color) m.color = nextSectionColor(i); // backward compat for sections saved before coloring existed
         const hasCue = m.cue && (m.cue.reminderId || m.cue.countIn);
+        const colorOptions = SECTION_COLORS.map(c => `<button type="button" class="mod-color-option w-6 h-6 rounded-full flex-shrink-0" style="background:${c}; border:2px solid ${m.color === c ? '#fafafa' : 'transparent'};" data-mod-idx="${i}" data-color="${c}"></button>`).join('');
         return `
-        <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" data-mod-idx="${i}">
+        <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
             <div class="flex items-center gap-1.5 flex-wrap">
+                <div class="relative flex-shrink-0">
+                    <button type="button" class="mod-color-swatch w-5 h-5 rounded-full border border-white/25" style="background:${m.color};" data-mod-idx="${i}" title="Section color"></button>
+                    <div class="mod-color-picker hidden absolute left-0 top-full mt-1.5 p-2 rounded-lg bg-s2 border border-brd/50 shadow-lg grid-cols-5 gap-1.5" data-mod-idx="${i}" style="width:172px; z-index:30;">
+                        ${colorOptions}
+                    </div>
+                </div>
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">Sec ${i + 2}</span>
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">after</span>
                 <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars">
@@ -3342,7 +3353,7 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
-    editingModulations.push({ bars: 8, extraBeats: 0, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, cue: { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
+    editingModulations.push({ bars: 8, extraBeats: 0, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, color: nextSectionColor(editingModulations.length), cue: { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
     renderModulationRows();
     requestAnimationFrame(() => {
         const list = document.getElementById('modulationList');
@@ -3353,7 +3364,33 @@ function addModulationRow() {
 
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('addModulationBtn').addEventListener('click', addModulationRow);
+    document.addEventListener('click', e => {
+        if (e.target.closest('.mod-color-swatch') || e.target.closest('.mod-color-picker')) return;
+        document.querySelectorAll('.mod-color-picker.grid').forEach(p => { p.classList.add('hidden'); p.classList.remove('grid'); });
+    });
     document.getElementById('modulationList').addEventListener('click', e => {
+        const colorSwatch = e.target.closest('.mod-color-swatch');
+        if (colorSwatch) {
+            const idx = colorSwatch.dataset.modIdx;
+            document.querySelectorAll('.mod-color-picker').forEach(p => {
+                if (p.dataset.modIdx !== idx) { p.classList.add('hidden'); p.classList.remove('grid'); }
+            });
+            const picker = document.querySelector(`.mod-color-picker[data-mod-idx="${idx}"]`);
+            if (picker) {
+                const isOpen = picker.classList.contains('grid');
+                if (isOpen) { picker.classList.add('hidden'); picker.classList.remove('grid'); }
+                else { picker.classList.remove('hidden'); picker.classList.add('grid'); }
+            }
+            return;
+        }
+        const colorOption = e.target.closest('.mod-color-option');
+        if (colorOption) {
+            const idx = parseInt(colorOption.dataset.modIdx, 10);
+            if (!editingModulations[idx]) return;
+            editingModulations[idx].color = colorOption.dataset.color;
+            renderModulationRows();
+            return;
+        }
         const removeBtn = e.target.closest('.mod-remove');
         if (removeBtn) {
             const idx = parseInt(removeBtn.dataset.modIdx, 10);
@@ -4398,7 +4435,7 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, reminderName: m.cue.reminderId ? (m.cue.reminderName || (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null) : null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, color: m.color || null, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, reminderName: m.cue.reminderId ? (m.cue.reminderName || (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null) : null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
             introCue: {
                 reminderId: editingIntroCue.reminderId || null,
