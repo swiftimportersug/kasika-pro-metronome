@@ -572,6 +572,23 @@ tailwind.config = {
             </div>
             <p class="text-[11px] text-zinc-600 mt-3">Cue volume and pan are independent of the main click volume.</p>
         </div>
+
+        <div class="rounded-xl bg-s2/60 border border-brd/50 p-4 mt-4">
+            <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1 block font-semibold">Audio Routing</label>
+            <p class="text-[11px] text-zinc-600 mb-3">Send the click, count-in, and reminders to one output (e.g. your in-ear monitor) while the backing loop plays through another (e.g. the house PA). Requires a multi-output audio interface connected to this device — with only the default speaker available, both will sound the same.</p>
+            <div class="mb-3">
+                <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-1 block">Stage / Monitor Output <span class="text-zinc-700">(click, count-in, reminders)</span></label>
+                <select id="stageOutputSelect" class="custom-select w-full"></select>
+            </div>
+            <div>
+                <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-1 block">House Output <span class="text-zinc-700">(backing loop)</span></label>
+                <select id="houseOutputSelect" class="custom-select w-full"></select>
+            </div>
+            <button type="button" id="refreshAudioDevicesBtn" class="mt-3 text-[11px] px-3 py-1.5 rounded-md bg-s3 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-colors">
+                <i class="fas fa-rotate mr-1.5"></i>Refresh available devices
+            </button>
+            <p class="text-[10px] text-zinc-700 mt-2" id="audioRoutingStatus"></p>
+        </div>
     </div>
 </div>
 
@@ -1046,6 +1063,7 @@ const state = {
     cueBufferCache: {},
     cueDuck: null,
     activeLoopNodes: null, songAbsoluteBar: 0, pendingLoopStartBar: null,
+    houseAudioCtx: null, houseBus: null, stageOutputDeviceId: '', houseOutputDeviceId: '',
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -1181,8 +1199,112 @@ function ensureAudio() {
         limiter.connect(makeup);
         makeup.connect(state.audioCtx.destination);
         state.masterBus = limiter;
+        applyAudioRouting();
     }
     if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+}
+
+// ===== HOUSE / STAGE AUDIO ROUTING =====
+// Two independent AudioContexts, each routable to its own output device via setSinkId() —
+// "Stage" (the existing context: click, count-in, reminders) and "House" (the backing loop).
+// Genuinely separate simultaneous outputs from one device require a multi-output audio
+// interface; without one, both contexts still just play through the same default output.
+function supportsSinkRouting() {
+    return typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
+}
+
+function ensureHouseAudio() {
+    if (!state.houseAudioCtx) {
+        state.houseAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        state.houseAudioCtx.onstatechange = () => {
+            if (state.houseAudioCtx.state === 'suspended' && state.isPlaying) state.houseAudioCtx.resume();
+        };
+        const g = state.houseAudioCtx.createGain();
+        g.gain.value = 1;
+        g.connect(state.houseAudioCtx.destination);
+        state.houseBus = g;
+        applyAudioRouting();
+    }
+    if (state.houseAudioCtx.state === 'suspended') state.houseAudioCtx.resume();
+}
+
+// Converts a time expressed on the Stage context's clock to the equivalent moment on the
+// House context's clock — the two contexts run independent clocks, so this keeps the loop's
+// start aligned to the song without needing the two contexts to be the same object.
+function stageTimeToHouseTime(stageTime) {
+    if (!state.houseAudioCtx || !state.audioCtx) return stageTime;
+    const offset = state.houseAudioCtx.currentTime - state.audioCtx.currentTime;
+    return stageTime + offset;
+}
+
+async function applyAudioRouting() {
+    if (!supportsSinkRouting()) return;
+    if (state.audioCtx && state.stageOutputDeviceId) {
+        try { await state.audioCtx.setSinkId(state.stageOutputDeviceId); }
+        catch (err) { console.warn('Could not set stage output device:', err); }
+    }
+    if (state.houseAudioCtx && state.houseOutputDeviceId) {
+        try { await state.houseAudioCtx.setSinkId(state.houseOutputDeviceId); }
+        catch (err) { console.warn('Could not set house output device:', err); }
+    }
+}
+
+const AUDIO_ROUTING_KEY = 'kasika-audio-routing';
+function loadAudioRoutingPrefs() {
+    try {
+        const raw = localStorage.getItem(AUDIO_ROUTING_KEY);
+        if (raw) {
+            const d = JSON.parse(raw);
+            state.stageOutputDeviceId = d.stage || '';
+            state.houseOutputDeviceId = d.house || '';
+        }
+    } catch (err) { /* ignore, defaults stay empty */ }
+}
+function saveAudioRoutingPrefs() {
+    localStorage.setItem(AUDIO_ROUTING_KEY, JSON.stringify({ stage: state.stageOutputDeviceId, house: state.houseOutputDeviceId }));
+}
+
+async function refreshAudioOutputDevices() {
+    const statusEl = document.getElementById('audioRoutingStatus');
+    const stageSel = document.getElementById('stageOutputSelect');
+    const houseSel = document.getElementById('houseOutputSelect');
+    if (!stageSel || !houseSel) return;
+    if (!supportsSinkRouting()) {
+        stageSel.innerHTML = '<option value="">Not supported</option>';
+        houseSel.innerHTML = '<option value="">Not supported</option>';
+        stageSel.disabled = true; houseSel.disabled = true;
+        if (statusEl) statusEl.textContent = 'This browser doesn\'t support custom audio output routing.';
+        return;
+    }
+    stageSel.disabled = false; houseSel.disabled = false;
+    try {
+        // Device labels stay hidden until mic permission is granted at least once.
+        const devicesBefore = await navigator.mediaDevices.enumerateDevices();
+        const labelsHidden = devicesBefore.some(d => d.kind === 'audiooutput' && !d.label);
+        if (labelsHidden) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(t => t.stop());
+            } catch (err) { /* declined — device names may stay generic, routing still works */ }
+        }
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const outputs = devices.filter(d => d.kind === 'audiooutput');
+        const optsHtml = ['<option value="">Default</option>'].concat(
+            outputs.map(d => `<option value="${d.deviceId}">${escHtml(d.label || 'Output device')}</option>`)
+        ).join('');
+        stageSel.innerHTML = optsHtml;
+        houseSel.innerHTML = optsHtml;
+        stageSel.value = state.stageOutputDeviceId || '';
+        houseSel.value = state.houseOutputDeviceId || '';
+        if (statusEl) {
+            statusEl.textContent = outputs.length > 1
+                ? `${outputs.length} output devices available.`
+                : 'Only one output device currently available — connect a multi-output interface to route these separately.';
+        }
+    } catch (err) {
+        console.warn('Could not list audio devices:', err);
+        if (statusEl) statusEl.textContent = 'Could not list audio devices.';
+    }
 }
 
 // ---- Sound kits ----
@@ -3396,9 +3518,18 @@ async function importLoopFile(file) {
 async function previewLoopTrack() {
     if (!editingLoopTrack || !editingLoopTrack.key) return;
     ensureAudio();
+    ensureHouseAudio();
     const buf = await loadCueBuffer(editingLoopTrack.key, editingLoopTrack.url);
     if (!buf) { showToast('Could not load this clip'); return; }
-    playCueClip(buf, state.audioCtx.currentTime + 0.02, editingLoopTrack.volume != null ? editingLoopTrack.volume : 100, editingLoopTrack.pan || 0);
+    const c = state.houseAudioCtx;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    const g = c.createGain();
+    g.gain.value = Math.max(0, Math.min(1, (editingLoopTrack.volume != null ? editingLoopTrack.volume : 100) / 100));
+    const p = c.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, editingLoopTrack.pan || 0));
+    src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
+    src.start(c.currentTime + 0.02);
 }
 
 function removeLoopTrack() {
@@ -3412,13 +3543,14 @@ function removeLoopTrack() {
 
 // Starts the song's backing loop at the given audio-clock time, looping continuously until
 // stopped. Any previously-playing loop is stopped first.
-async function startLoopTrack(song, startTime) {
+async function startLoopTrack(song, stageStartTime) {
     if (!song || !song.loopTrack || !song.loopTrack.key) return;
     stopLoopTrack();
-    ensureAudio();
+    ensureAudio(); // needed to decode the buffer, and as the reference clock for the conversion below
+    ensureHouseAudio();
     const buf = await loadCueBuffer(song.loopTrack.key, song.loopTrack.url);
     if (!buf) return;
-    const c = state.audioCtx;
+    const c = state.houseAudioCtx;
     const src = c.createBufferSource();
     src.buffer = buf;
     src.loop = true;
@@ -3426,8 +3558,9 @@ async function startLoopTrack(song, startTime) {
     g.gain.value = Math.max(0, Math.min(1, (song.loopTrack.volume != null ? song.loopTrack.volume : 100) / 100));
     const p = c.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, song.loopTrack.pan || 0));
-    src.connect(g); g.connect(p); p.connect(state.masterBus || c.destination);
-    src.start(Math.max(startTime, c.currentTime));
+    src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
+    const houseStartTime = stageTimeToHouseTime(stageStartTime);
+    src.start(Math.max(houseStartTime, c.currentTime));
     state.activeLoopNodes = { src, g, p };
 }
 
@@ -4245,7 +4378,7 @@ function applyViewState(view) {
     if (target === 'note-editor') { editorEl.classList.remove('hidden'); editorEl.classList.add('flex'); }
     else { editorEl.classList.add('hidden'); editorEl.classList.remove('flex'); }
 
-    if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); }
+    if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); refreshAudioOutputDevices(); }
     else { cueBankEl.classList.add('hidden'); cueBankEl.classList.remove('flex'); }
 }
 
@@ -4345,6 +4478,30 @@ function setupEvents() {
         setCuePanUI(state.cuePan);
         saveData();
     });
+
+    // ---- Audio Routing (House / Stage) ----
+    document.getElementById('stageOutputSelect').addEventListener('change', async e => {
+        state.stageOutputDeviceId = e.target.value;
+        saveAudioRoutingPrefs();
+        if (!supportsSinkRouting()) return;
+        ensureAudio();
+        try { await state.audioCtx.setSinkId(state.stageOutputDeviceId || ''); showToast('Stage output updated'); }
+        catch (err) { console.warn(err); showToast('Could not set that output device'); }
+    });
+    document.getElementById('houseOutputSelect').addEventListener('change', async e => {
+        state.houseOutputDeviceId = e.target.value;
+        saveAudioRoutingPrefs();
+        if (!supportsSinkRouting()) return;
+        ensureHouseAudio();
+        try { await state.houseAudioCtx.setSinkId(state.houseOutputDeviceId || ''); showToast('House output updated'); }
+        catch (err) { console.warn(err); showToast('Could not set that output device'); }
+    });
+    document.getElementById('refreshAudioDevicesBtn').addEventListener('click', refreshAudioOutputDevices);
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+        navigator.mediaDevices.addEventListener('devicechange', () => {
+            if (currentAppView === 'cuebank') refreshAudioOutputDevices();
+        });
+    }
 
     // ---- Notes ----
     document.getElementById('openNotesBtn').addEventListener('click', openNotesView);
@@ -4804,7 +4961,7 @@ function setupEvents() {
 
 // ===== INIT =====
 function init() {
-    loadData(); setupCanvas(); renderSetlistSelect(); renderSongs();
+    loadData(); loadAudioRoutingPrefs(); setupCanvas(); renderSetlistSelect(); renderSongs();
     updatePlayBtn(); updateEditBarUI(); updateTimerDisplay();
     document.getElementById('soundKitSelect').value = state.soundKit;
     document.getElementById('timeSigSelect').textContent = state.timeSig;
