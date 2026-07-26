@@ -289,12 +289,21 @@ tailwind.config = {
             <i class="fas fa-cloud-arrow-up text-[10px]"></i>
             <span class="hidden sm:inline">Sync</span>
         </button>
-        <div id="syncStatus" class="hidden items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-[#2dd4bf]/10 border border-[#2dd4bf]/25 text-[#2dd4bf]" title="">
-            <i class="fas fa-check-circle text-[10px]" id="syncStatusIcon"></i>
-            <span class="hidden sm:inline" id="syncStatusLabel">Synced</span>
-            <button id="syncSignOutBtn" class="ml-1 text-zinc-500 hover:text-red-400 transition-colors" title="Sign out">
-                <i class="fas fa-xmark text-[10px]"></i>
+        <div class="relative" id="syncStatusWrap">
+            <button id="syncStatus" class="hidden items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-[#2dd4bf]/10 border border-[#2dd4bf]/25 text-[#2dd4bf] hover:bg-[#2dd4bf]/20 transition-colors" title="Sync options">
+                <i class="fas fa-check-circle text-[10px]" id="syncStatusIcon"></i>
+                <span class="hidden sm:inline" id="syncStatusLabel">Synced</span>
+                <i class="fas fa-chevron-down text-[8px] opacity-60 ml-0.5"></i>
             </button>
+            <div id="syncStatusDropdown" class="hidden flex-col absolute right-0 top-full mt-1.5 rounded-lg bg-s2 border border-brd/50 shadow-lg overflow-hidden" style="width:210px; z-index:60;">
+                <div class="px-3 py-2.5 border-b border-brd/40">
+                    <div class="text-[10px] text-zinc-600 uppercase tracking-wider">Signed in as</div>
+                    <div class="text-xs text-zinc-200 truncate mt-0.5" id="syncStatusEmail"></div>
+                </div>
+                <button id="syncSignOutBtn" class="w-full text-left px-3 py-2.5 text-xs text-red-400 hover:bg-red-400/10 transition-colors flex items-center gap-2">
+                    <i class="fas fa-right-from-bracket text-[11px]"></i>Sign Out
+                </button>
+            </div>
         </div>
     </div>
 </header>
@@ -678,6 +687,12 @@ tailwind.config = {
             </div>
 
             <div class="border-t border-brd/50 pt-4">
+                <label class="text-xs text-[#F472B6] uppercase tracking-wider font-semibold block mb-1">Song Intro / Pre-roll</label>
+                <p class="text-[11px] text-zinc-600 mb-2.5">Optional lead-in before the song's actual beat 1 — a reminder phrase, a count-in, or both, each on an exact beat.</p>
+                <div id="introCueContainer" class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2.5"></div>
+            </div>
+
+            <div class="border-t border-brd/50 pt-4">
                 <div class="flex items-center justify-between mb-2">
                     <label class="text-xs text-[#2dd4bf] uppercase tracking-wider font-semibold">Tempo / Time-Sig Modulation</label>
                     <button type="button" id="addModulationBtn" class="text-[11px] px-2.5 py-1 rounded-md bg-[#2dd4bf]/15 text-[#2dd4bf] border border-[#2dd4bf]/30 hover:bg-[#2dd4bf]/25 transition-colors">
@@ -852,15 +867,19 @@ function updateSyncUI(signedIn, label) {
     const signInBtn = document.getElementById('syncSignInBtn');
     const statusEl = document.getElementById('syncStatus');
     const statusLabel = document.getElementById('syncStatusLabel');
+    const emailEl = document.getElementById('syncStatusEmail');
     if (!signInBtn || !statusEl) return;
     if (signedIn) {
         signInBtn.classList.add('hidden');
         statusEl.classList.remove('hidden'); statusEl.classList.add('flex');
         statusEl.title = label || '';
         if (statusLabel) statusLabel.textContent = 'Synced';
+        if (emailEl) emailEl.textContent = label || '';
     } else {
         signInBtn.classList.remove('hidden');
         statusEl.classList.add('hidden'); statusEl.classList.remove('flex');
+        const dd = document.getElementById('syncStatusDropdown');
+        if (dd) { dd.classList.add('hidden'); dd.classList.remove('flex'); }
     }
 }
 
@@ -898,6 +917,7 @@ function startRemoteSync(uid) {
         renderCueBankUI();
         syncAllCueAudioLocally(); // fetch any clip bytes we don't have locally yet
         applyingRemoteUpdate = false;
+        uploadMissingCueAudio(); // safety-net re-check, now that local+remote state has settled
     }, err => console.warn('Sync listener error:', err));
 }
 
@@ -1479,10 +1499,10 @@ function playClick(type, time, beatNum) {
     playBeep(c, t, type, v, pan);
 }
 
-function startMetronome() {
+function startMetronome(delayedStartTime) {
     ensureAudio(); state.isPlaying = true; state.currentClick = 0;
     state.visualClick = -1; state.lastBeatTimestamp = performance.now();
-    state.nextNoteTime = state.audioCtx.currentTime + 0.03;
+    state.nextNoteTime = delayedStartTime != null ? delayedStartTime : state.audioCtx.currentTime + 0.03;
     scheduler(); updatePlayBtn();
 }
 
@@ -1725,19 +1745,36 @@ function fireVoiceCue(next, transitionTime) {
     if (next.cue.reminderId) {
         const rem = state.cueBank.reminders.find(r => r.id === next.cue.reminderId);
         if (rem) {
-            const targetEnd = (firstNumberTime != null ? firstNumberTime : transitionTime) - 0.12;
-            loadCueBuffer(rem.key, rem.url).then(buf => {
-                if (!buf) return;
-                const startTime = Math.max(state.audioCtx.currentTime + 0.02, targetEnd - buf.duration);
-                playCueClip(buf, startTime, reminderVol, reminderPan);
-            });
+            const anchor = firstNumberTime != null ? firstNumberTime : transitionTime;
+            if (next.cue.reminderLeadBeats != null) {
+                // Custom: start exactly N beats before the count-in (or transition) begins,
+                // regardless of how long the clip actually is.
+                const startTime = anchor - next.cue.reminderLeadBeats * newBeatDur;
+                loadCueBuffer(rem.key, rem.url).then(buf => {
+                    if (buf) playCueClip(buf, Math.max(state.audioCtx.currentTime + 0.02, startTime), reminderVol, reminderPan);
+                });
+            } else {
+                // Auto (default): end right before the count-in begins, sized to the clip's
+                // own duration.
+                const targetEnd = anchor - 0.12;
+                loadCueBuffer(rem.key, rem.url).then(buf => {
+                    if (!buf) return;
+                    const startTime = Math.max(state.audioCtx.currentTime + 0.02, targetEnd - buf.duration);
+                    playCueClip(buf, startTime, reminderVol, reminderPan);
+                });
+            }
         }
     }
 
     // Duck the main click under the cue for the overlay window (ducking is estimated
     // generously since clip durations resolve asynchronously above).
     const countInDuration = next.cue.countIn ? Math.max(1, next.cue.countInLength != null ? next.cue.countInLength : newBeatsPerBar) * newBeatDur : 0;
-    const duckLead = countInDuration + (next.cue.reminderId ? 1.6 : 0.3);
+    let duckLead = countInDuration;
+    if (next.cue.reminderId) {
+        duckLead += next.cue.reminderLeadBeats != null ? next.cue.reminderLeadBeats * newBeatDur : 1.6;
+    } else {
+        duckLead += 0.3;
+    }
     state.cueDuck = { start: transitionTime - duckLead, end: transitionTime + 0.1 };
 }
 
@@ -2150,10 +2187,26 @@ function selectOrPlaySong(song) {
 // deliberately skips modulation setup) gets it set up right before playback actually begins.
 function togglePlayback() {
     if (state.isPlaying) { stopMetronome(); return; }
+    ensureAudio();
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === state.activeSongId);
-    if (song) initSongModulation(song);
-    startMetronome();
+    let delayedStart = null;
+    if (song) {
+        initSongModulation(song);
+        const intro = song.introCue;
+        if (intro && (intro.reminderId || intro.countIn)) {
+            const beatDur = 60 / state.bpm;
+            const beatsPerBar = getBeatsPerMeasure();
+            const reminderBeats = intro.reminderId ? Math.max(1, intro.reminderLeadBeats || 2) : 0;
+            const countInBeats = intro.countIn ? Math.max(1, intro.countInLength != null ? intro.countInLength : beatsPerBar) : 0;
+            const totalBeats = reminderBeats + countInBeats;
+            delayedStart = state.audioCtx.currentTime + 0.03 + totalBeats * beatDur;
+            const introForFiring = { bpm: state.bpm, timeSig: state.timeSig, cue: { ...intro, reminderLeadBeats: intro.reminderId ? reminderBeats : null } };
+            fireVoiceCue(introForFiring, delayedStart);
+            state.cueDuck = null; // nothing was already playing before the intro — nothing to duck
+        }
+    }
+    startMetronome(delayedStart);
 }
 
 // ===== EXPORT =====
@@ -2279,9 +2332,21 @@ function openSongEditModal(id) {
     renderSongBeatTonesBlocks();
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
-    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } }));
+    editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } }));
     expandedModTones = new Set();
     expandedModCues = new Set();
+    editingIntroCue = song.introCue ? {
+        reminderId: song.introCue.reminderId || null,
+        reminderLeadBeats: song.introCue.reminderLeadBeats != null ? song.introCue.reminderLeadBeats : 2,
+        reminderVolume: song.introCue.reminderVolume != null ? song.introCue.reminderVolume : state.cueVolume,
+        reminderPan: song.introCue.reminderPan != null ? song.introCue.reminderPan : state.cuePan,
+        countIn: !!song.introCue.countIn,
+        countInLength: song.introCue.countInLength != null ? song.introCue.countInLength : null,
+        countInStart: song.introCue.countInStart != null ? song.introCue.countInStart : 1,
+        countInVolume: song.introCue.countInVolume != null ? song.introCue.countInVolume : state.cueVolume,
+        countInPan: song.introCue.countInPan != null ? song.introCue.countInPan : state.cuePan,
+    } : defaultIntroCue();
+    renderIntroCueUI();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
     showModal('songModal');
@@ -2567,6 +2632,25 @@ async function convertNoteToSetlist(note) {
     applyViewState('setlists');
 }
 
+function highlightText(escapedText, query) {
+    if (!query || !query.trim()) return escapedText;
+    const escQ = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(' + escQ + ')', 'gi');
+    return escapedText.replace(re, '<mark style="background:#facc15;color:#1a1a1a;border-radius:2px;padding:0 1px;">$1</mark>');
+}
+
+function getSnippetAroundMatch(text, query, maxLen) {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (!query || !query.trim()) return clean.slice(0, maxLen);
+    const idx = clean.toLowerCase().indexOf(query.trim().toLowerCase());
+    if (idx === -1) return clean.slice(0, maxLen);
+    const start = Math.max(0, idx - Math.floor(maxLen / 3));
+    let snippet = clean.slice(start, start + maxLen);
+    if (start > 0) snippet = '…' + snippet;
+    if (start + maxLen < clean.length) snippet += '…';
+    return snippet;
+}
+
 function renderNotesList(query) {
     const q = (query || '').trim().toLowerCase();
     const list = document.getElementById('notesList');
@@ -2583,8 +2667,9 @@ function renderNotesList(query) {
     }
     empty.classList.add('hidden');
     list.innerHTML = items.map(n => {
-        const title = escHtml(n.title || 'Untitled note');
-        const snippet = escHtml(stripHtml(n.content).replace(/\s+/g, ' ').trim().slice(0, 90));
+        const title = highlightText(escHtml(n.title || 'Untitled note'), query);
+        const rawSnippet = getSnippetAroundMatch(stripHtml(n.content), query, 90);
+        const snippet = highlightText(escHtml(rawSnippet), query);
         const hasDrawing = !!n.drawingDataUrl;
         const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
         return `
@@ -2608,7 +2693,53 @@ function createNewNote() {
     openNoteEditor(note.id);
 }
 
-function openNoteEditor(id) {
+// Wraps every occurrence of `query` within `root`'s text content in a temporary highlight
+// mark — walks text nodes only, so existing formatting (bold, color spans) is untouched.
+// These marks are stripped again before any save (see stripSearchHighlights), so they can
+// never leak into saved note content.
+function highlightMatchesInElement(root, query) {
+    if (!query || !query.trim()) return;
+    const q = query.trim().toLowerCase();
+    if (!q) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) textNodes.push(node);
+    textNodes.forEach(tn => {
+        const text = tn.nodeValue;
+        const lower = text.toLowerCase();
+        let idx = lower.indexOf(q);
+        if (idx === -1) return;
+        const frag = document.createDocumentFragment();
+        let lastIdx = 0;
+        while (idx !== -1) {
+            if (idx > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, idx)));
+            const mark = document.createElement('mark');
+            mark.className = 'search-hit-mark';
+            mark.style.background = '#facc15';
+            mark.style.color = '#1a1a1a';
+            mark.style.borderRadius = '2px';
+            mark.style.padding = '0 1px';
+            mark.textContent = text.slice(idx, idx + q.length);
+            frag.appendChild(mark);
+            lastIdx = idx + q.length;
+            idx = lower.indexOf(q, lastIdx);
+        }
+        if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+        tn.parentNode.replaceChild(frag, tn);
+    });
+    const firstMark = root.querySelector('mark.search-hit-mark');
+    if (firstMark) firstMark.scrollIntoView({ block: 'center' });
+}
+
+// Removes any search-highlight marks before content is ever saved, so highlighting is purely
+// visual and can never end up persisted into a note.
+function stripSearchHighlights(html) {
+    if (!html) return html;
+    return html.replace(/<mark class="search-hit-mark"[^>]*>(.*?)<\/mark>/gi, '$1');
+}
+
+function openNoteEditor(id, searchQuery) {
     const note = state.notes.find(n => n.id === id);
     if (!note) return;
     state.activeNoteId = id;
@@ -2623,6 +2754,9 @@ function openNoteEditor(id) {
     state.noteUndoStack = [];
     setDrawTool('pencil');
     setNoteMode('text');
+    if (searchQuery && searchQuery.trim()) {
+        highlightMatchesInElement(document.getElementById('noteTextArea'), searchQuery);
+    }
     pushView('note-editor');
     applyViewState('note-editor');
     setTimeout(() => {
@@ -2639,7 +2773,7 @@ function saveActiveNote(immediate) {
     if (!note) return;
     const doSave = () => {
         note.title = document.getElementById('noteTitleInput').value.trim();
-        note.content = document.getElementById('noteTextArea').innerHTML;
+        note.content = stripSearchHighlights(document.getElementById('noteTextArea').innerHTML);
         note.updatedAt = Date.now();
         saveData();
     };
@@ -2842,6 +2976,8 @@ function renderSongSuggestions(query) {
 
 // ===== SONG MODULATION EDITOR (in Add/Edit Song modal) =====
 let editingModulations = [];
+let editingIntroCue = { reminderId: null, reminderLeadBeats: 2, reminderVolume: 100, reminderPan: 0, countIn: false, countInLength: null, countInStart: 1, countInVolume: 100, countInPan: 0 };
+function defaultIntroCue() { return { reminderId: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan }; }
 let editingSongBeatTones = [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2];
 
 function renderSongBeatTonesBlocks() {
@@ -2918,6 +3054,16 @@ function renderModCueHtml(i) {
             <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
             <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 mod-cue-reminder-pan-label">${formatPanLabel(m.cue.reminderPan)}</span>
         </div>
+        <div class="mod-cue-reminder-timing w-full flex items-center gap-2 flex-wrap ${m.cue.reminderId ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <label class="flex items-center gap-1.5 text-[10px] text-zinc-500 select-none flex-shrink-0">
+                <input type="checkbox" class="mod-cue-reminder-custom-timing" data-mod-idx="${i}" ${m.cue.reminderLeadBeats != null ? 'checked' : ''} style="accent-color:#F472B6;">
+                Set exact timing
+            </label>
+            <div class="mod-cue-reminder-timing-detail flex items-center gap-1.5 ${m.cue.reminderLeadBeats != null ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+                <input type="number" class="edit-input mod-cue-reminder-lead" style="width:44px" min="1" max="32" value="${m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : 2}" data-mod-idx="${i}">
+                <span class="text-[10px] text-zinc-600">beats before ${m.cue.countIn ? 'count-in' : 'the change'}</span>
+            </div>
+        </div>
         <div class="w-full flex items-end gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
                 <input type="checkbox" class="mod-cue-countin" data-mod-idx="${i}" ${m.cue.countIn ? 'checked' : ''} style="accent-color:#F472B6;">
@@ -2946,6 +3092,76 @@ function renderModCueHtml(i) {
             <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
             <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 mod-cue-countin-pan-label">${formatPanLabel(m.cue.countInPan)}</span>
         </div>`;
+}
+
+function renderIntroCueHtml() {
+    const ic = editingIntroCue;
+    const opts = ['<option value="">No reminder</option>'].concat(
+        state.cueBank.reminders.map(r => `<option value="${r.id}" ${ic.reminderId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
+    ).join('');
+    const beatsPerBar = parseInt((document.getElementById('songTimeSigInput').textContent || '4/4').trim().split('/')[0], 10) || 4;
+    const length = ic.countInLength != null ? ic.countInLength : beatsPerBar;
+    const start = ic.countInStart != null ? ic.countInStart : 1;
+    const reminderBeats = ic.reminderId ? Math.max(1, ic.reminderLeadBeats || 2) : 0;
+    const countInBeats = ic.countIn ? Math.max(1, length) : 0;
+    const totalBeats = reminderBeats + countInBeats;
+    return `
+        <div class="flex-1 min-w-[140px]">
+            <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
+            <select class="edit-select intro-cue-reminder w-full" style="width:100%;">${opts}</select>
+        </div>
+        <div class="intro-cue-reminder-detail w-full flex flex-col gap-2 ${ic.reminderId ? 'flex' : 'hidden'}">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
+                <input type="range" class="vol-slider intro-cue-reminder-vol-input flex-1" min="0" max="100" step="1" value="${ic.reminderVolume}">
+                <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 intro-cue-reminder-vol-label">${ic.reminderVolume}%</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
+                <input type="range" class="vol-slider intro-cue-reminder-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(ic.reminderPan * 100)}">
+                <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
+                <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 intro-cue-reminder-pan-label">${formatPanLabel(ic.reminderPan)}</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-[10px] text-zinc-600">Fires</span>
+                <input type="number" class="edit-input intro-cue-reminder-beats" style="width:44px" min="1" max="32" value="${ic.reminderLeadBeats || 2}">
+                <span class="text-[10px] text-zinc-600">beats before ${ic.countIn ? 'the count-in' : 'the song starts'}</span>
+            </div>
+        </div>
+        <div class="w-full flex items-end gap-3 flex-wrap pt-2 border-t border-brd/30">
+            <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
+                <input type="checkbox" class="intro-cue-countin" ${ic.countIn ? 'checked' : ''} style="accent-color:#F472B6;">
+                Count-in
+            </label>
+            <div class="intro-cue-countin-detail flex items-end gap-3 flex-wrap ${ic.countIn ? 'flex' : 'hidden'}">
+                <div>
+                    <label class="text-[10px] text-zinc-600 block mb-1">Beats to count</label>
+                    <input type="number" class="edit-input intro-cue-length" style="width:52px" min="1" max="16" value="${length}">
+                </div>
+                <div>
+                    <label class="text-[10px] text-zinc-600 block mb-1">Start at beat</label>
+                    <input type="number" class="edit-input intro-cue-start" style="width:52px" min="1" max="16" value="${start}">
+                </div>
+                <span class="text-[10px] text-zinc-600 pb-1.5">→ speaks ${Array.from({length}, (_, k) => start + k).join(', ')}</span>
+            </div>
+        </div>
+        <div class="intro-cue-countin-vol w-full flex items-center gap-2 ${ic.countIn ? 'flex' : 'hidden'}">
+            <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
+            <input type="range" class="vol-slider intro-cue-countin-vol-input flex-1" min="0" max="100" step="1" value="${ic.countInVolume}">
+            <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 intro-cue-countin-vol-label">${ic.countInVolume}%</span>
+        </div>
+        <div class="intro-cue-countin-pan w-full flex items-center gap-2 ${ic.countIn ? 'flex' : 'hidden'}">
+            <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
+            <input type="range" class="vol-slider intro-cue-countin-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(ic.countInPan * 100)}">
+            <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
+            <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 intro-cue-countin-pan-label">${formatPanLabel(ic.countInPan)}</span>
+        </div>
+        ${totalBeats > 0 ? `<p class="text-[10px] text-zinc-700 w-full pt-1">${totalBeats}-beat pre-roll before the song's actual beat 1.</p>` : ''}`;
+}
+
+function renderIntroCueUI() {
+    const container = document.getElementById('introCueContainer');
+    if (container) container.innerHTML = renderIntroCueHtml();
 }
 
 function renderModulationRows() {
@@ -3105,6 +3321,21 @@ document.addEventListener('DOMContentLoaded', () => {
             renderModulationRows();
             return;
         }
+        const customTimingBox = e.target.closest('.mod-cue-reminder-custom-timing');
+        if (customTimingBox) {
+            const idx = parseInt(customTimingBox.dataset.modIdx, 10);
+            if (!editingModulations[idx] || !editingModulations[idx].cue) return;
+            editingModulations[idx].cue.reminderLeadBeats = customTimingBox.checked ? 2 : null;
+            renderModulationRows();
+            return;
+        }
+        const leadInput = e.target.closest('.mod-cue-reminder-lead');
+        if (leadInput) {
+            const idx = parseInt(leadInput.dataset.modIdx, 10);
+            if (!editingModulations[idx] || !editingModulations[idx].cue) return;
+            editingModulations[idx].cue.reminderLeadBeats = Math.max(1, Math.min(32, parseInt(leadInput.value, 10) || 1));
+            return;
+        }
     });
     document.getElementById('modulationList').addEventListener('input', e => {
         const remVol = e.target.closest('.mod-cue-reminder-vol-input');
@@ -3145,6 +3376,80 @@ document.addEventListener('DOMContentLoaded', () => {
             editingModulations[idx].cue.countInPan = v;
             const row = ciPan.closest('.mod-cue-countin-pan');
             if (row) { const label = row.querySelector('.mod-cue-countin-pan-label'); if (label) label.textContent = formatPanLabel(v); }
+            return;
+        }
+    });
+
+    // ---- Song Intro / Pre-roll ----
+    document.getElementById('introCueContainer').addEventListener('change', e => {
+        const reminderSel = e.target.closest('.intro-cue-reminder');
+        if (reminderSel) {
+            editingIntroCue.reminderId = reminderSel.value || null;
+            if (editingIntroCue.reminderId && editingIntroCue.reminderLeadBeats == null) editingIntroCue.reminderLeadBeats = 2;
+            renderIntroCueUI();
+            return;
+        }
+        const countInBox = e.target.closest('.intro-cue-countin');
+        if (countInBox) {
+            editingIntroCue.countIn = countInBox.checked;
+            if (editingIntroCue.countIn && editingIntroCue.countInLength == null) {
+                const beatsPerBar = parseInt((document.getElementById('songTimeSigInput').textContent || '4/4').trim().split('/')[0], 10) || 4;
+                editingIntroCue.countInLength = beatsPerBar;
+            }
+            if (editingIntroCue.countInStart == null) editingIntroCue.countInStart = 1;
+            renderIntroCueUI();
+            return;
+        }
+        const lengthInput = e.target.closest('.intro-cue-length');
+        if (lengthInput) {
+            editingIntroCue.countInLength = Math.max(1, Math.min(16, parseInt(lengthInput.value, 10) || 1));
+            renderIntroCueUI();
+            return;
+        }
+        const startInput = e.target.closest('.intro-cue-start');
+        if (startInput) {
+            editingIntroCue.countInStart = Math.max(1, Math.min(16, parseInt(startInput.value, 10) || 1));
+            renderIntroCueUI();
+            return;
+        }
+        const beatsInput = e.target.closest('.intro-cue-reminder-beats');
+        if (beatsInput) {
+            editingIntroCue.reminderLeadBeats = Math.max(1, Math.min(32, parseInt(beatsInput.value, 10) || 1));
+            renderIntroCueUI();
+            return;
+        }
+    });
+    document.getElementById('introCueContainer').addEventListener('input', e => {
+        const remVol = e.target.closest('.intro-cue-reminder-vol-input');
+        if (remVol) {
+            const v = Math.max(0, Math.min(100, parseInt(remVol.value, 10) || 0));
+            editingIntroCue.reminderVolume = v;
+            const label = document.querySelector('.intro-cue-reminder-vol-label');
+            if (label) label.textContent = v + '%';
+            return;
+        }
+        const remPan = e.target.closest('.intro-cue-reminder-pan-input');
+        if (remPan) {
+            const v = Math.max(-1, Math.min(1, parseInt(remPan.value, 10) / 100));
+            editingIntroCue.reminderPan = v;
+            const label = document.querySelector('.intro-cue-reminder-pan-label');
+            if (label) label.textContent = formatPanLabel(v);
+            return;
+        }
+        const ciVol = e.target.closest('.intro-cue-countin-vol-input');
+        if (ciVol) {
+            const v = Math.max(0, Math.min(100, parseInt(ciVol.value, 10) || 0));
+            editingIntroCue.countInVolume = v;
+            const label = document.querySelector('.intro-cue-countin-vol-label');
+            if (label) label.textContent = v + '%';
+            return;
+        }
+        const ciPanIntro = e.target.closest('.intro-cue-countin-pan-input');
+        if (ciPanIntro) {
+            const v = Math.max(-1, Math.min(1, parseInt(ciPanIntro.value, 10) / 100));
+            editingIntroCue.countInPan = v;
+            const label = document.querySelector('.intro-cue-countin-pan-label');
+            if (label) label.textContent = formatPanLabel(v);
             return;
         }
     });
@@ -3675,7 +3980,7 @@ function setupEvents() {
     document.getElementById('notesList').addEventListener('click', e => {
         const row = e.target.closest('.note-item');
         if (!row) return;
-        openNoteEditor(row.dataset.noteId);
+        openNoteEditor(row.dataset.noteId, document.getElementById('notesSearchInput').value);
     });
     document.getElementById('closeNoteEditorBtn').addEventListener('click', closeNoteEditor);
     document.getElementById('deleteNoteBtn').addEventListener('click', deleteActiveNote);
@@ -3853,6 +4158,8 @@ function setupEvents() {
         editingModulations = [];
         expandedModTones = new Set();
         expandedModCues = new Set();
+        editingIntroCue = defaultIntroCue();
+        renderIntroCueUI();
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
         showModal('songModal');
@@ -3916,8 +4223,19 @@ function setupEvents() {
             subdivisionVolume: parseInt(document.getElementById('songSubdivVolumeInput').value, 10),
             beatTones: editingSongBeatTones.slice(),
             notes: document.getElementById('songNotesInput').value.trim(),
-            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } })),
+            modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
+            introCue: {
+                reminderId: editingIntroCue.reminderId || null,
+                reminderLeadBeats: editingIntroCue.reminderId ? Math.max(1, editingIntroCue.reminderLeadBeats || 2) : null,
+                reminderVolume: editingIntroCue.reminderVolume,
+                reminderPan: editingIntroCue.reminderPan,
+                countIn: !!editingIntroCue.countIn,
+                countInLength: editingIntroCue.countInLength,
+                countInStart: editingIntroCue.countInStart,
+                countInVolume: editingIntroCue.countInVolume,
+                countInPan: editingIntroCue.countInPan,
+            },
         };
         if (!d.name || isNaN(d.bpm)) return;
         d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
@@ -4060,7 +4378,24 @@ function init() {
     initFirebase();
     history.replaceState({ view: 'main' }, '', location.pathname + location.search);
     document.getElementById('syncSignInBtn').addEventListener('click', signInForSync);
-    document.getElementById('syncSignOutBtn').addEventListener('click', signOutOfSync);
+    document.getElementById('syncSignOutBtn').addEventListener('click', () => {
+        signOutOfSync();
+        document.getElementById('syncStatusDropdown').classList.add('hidden');
+        document.getElementById('syncStatusDropdown').classList.remove('flex');
+    });
+    document.getElementById('syncStatus').addEventListener('click', () => {
+        const dd = document.getElementById('syncStatusDropdown');
+        const isOpen = dd.classList.contains('flex');
+        if (isOpen) { dd.classList.add('hidden'); dd.classList.remove('flex'); }
+        else { dd.classList.remove('hidden'); dd.classList.add('flex'); }
+    });
+    document.addEventListener('click', e => {
+        const dd = document.getElementById('syncStatusDropdown');
+        if (!dd.classList.contains('flex')) return;
+        const wrap = document.getElementById('syncStatusWrap');
+        if (wrap.contains(e.target)) return;
+        dd.classList.add('hidden'); dd.classList.remove('flex');
+    });
     setupEvents(); setupCustomDrag();
     if (window.speechSynthesis) window.speechSynthesis.getVoices();
     requestAnimationFrame(animationLoop);
