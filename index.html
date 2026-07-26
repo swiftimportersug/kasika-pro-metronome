@@ -398,6 +398,14 @@ tailwind.config = {
     </section>
 </main>
 
+<div id="tempoListenIndicator" class="hidden fixed left-1/2 -translate-x-1/2 bottom-28 z-[300] bg-s2 border border-gold/40 rounded-xl px-5 py-3 text-center shadow-2xl">
+    <div class="flex items-center gap-2 justify-center text-gold text-[11px] font-display font-semibold tracking-widest">
+        <i class="fas fa-microphone" style="animation:pulse-glow 1s ease-in-out infinite;"></i> LISTENING
+    </div>
+    <div class="font-mono text-3xl text-zinc-100 mt-1 tabular-nums" id="tempoListenValue">--</div>
+    <div class="text-[10px] text-zinc-600 mt-0.5">Release to apply · move away to cancel</div>
+</div>
+
 <div id="setlistsView" class="fixed inset-0 z-[200] bg-surface hidden flex-col">
     <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50">
         <div class="flex items-center gap-3 px-4 pt-3 pb-1">
@@ -890,10 +898,10 @@ function startRemoteSync(uid) {
     fbUnsub = docRef.onSnapshot(snap => {
         if (!snap.exists) {
             // First time this account has synced: push whatever is currently local up to the cloud.
+            // NOTE: cueBank is intentionally excluded — see below.
             docRef.set({
                 setlists: state.setlists, activeSetlistId: state.activeSetlistId,
                 soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
-                cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
             return;
@@ -906,18 +914,17 @@ function startRemoteSync(uid) {
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
         if (Array.isArray(d.notes)) state.notes = d.notes;
-        if (d.cueBank) state.cueBank = d.cueBank;
-        if (d.cueVolume != null) state.cueVolume = d.cueVolume;
-        if (d.cuePan != null) state.cuePan = d.cuePan;
+        // Cue Bank is deliberately NOT synced here. Without Firebase Storage configured, its
+        // audio bytes only ever live in each device's own local IndexedDB — syncing just the
+        // metadata (names/keys) would let one device's import overwrite another's working
+        // pointers with keys that don't exist in ITS local storage, breaking playback on both.
+        // Each device manages its own Cue Bank independently until Storage is set up.
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan }));
         renderSetlistSelect(); renderSongs();
         document.getElementById('soundKitSelect').value = state.soundKit;
         renderBeatBlocks();
         renderNotesList();
-        renderCueBankUI();
-        syncAllCueAudioLocally(); // fetch any clip bytes we don't have locally yet
         applyingRemoteUpdate = false;
-        uploadMissingCueAudio(); // safety-net re-check, now that local+remote state has settled
     }, err => console.warn('Sync listener error:', err));
 }
 
@@ -932,7 +939,6 @@ function pushToCloud() {
         fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).set({
             setlists: state.setlists, activeSetlistId: state.activeSetlistId,
             soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
-            cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         }, { merge: true }).catch(err => console.warn('Cloud save failed:', err));
     }, 600);
@@ -1407,12 +1413,12 @@ async function importCueFile(file, displayName) {
 }
 
 function uploadCueToCloud(entry, blob) {
-    if (!syncEnabled || !fbStorage || !fbAuth || !fbAuth.currentUser) return;
+    if (!syncEnabled || !fbAuth || !fbAuth.currentUser || !fbStorage) return; // Cue Bank works fully per-device regardless
     const path = `cueAudio/${fbAuth.currentUser.uid}/${entry.id}.dat`;
     fbStorage.ref(path).put(blob).then(snap => snap.ref.getDownloadURL()).then(url => {
         entry.url = url;
         saveData();
-    }).catch(err => console.warn('Cue upload failed (clip still works locally):', err));
+    }).catch(err => console.warn('Cue upload failed (not critical — Cue Bank works fully per-device regardless):', err));
 }
 
 // Some clips may have been imported before sign-in ever succeeded, so they were never
@@ -2004,6 +2010,94 @@ function handleTap() {
     }
 }
 
+// ===== LISTEN-FOR-TEMPO (press-and-hold TAP) =====
+// Energy-based beat detector: low-pass the mic input to isolate bass/kick-drum energy (the
+// strongest rhythmic cue in most music), track a rolling average of that energy, and flag a
+// "beat" whenever the instant energy spikes well above it. Median beat-to-beat interval gives
+// the tempo; octave correction folds double/half-time misreads back into a sane range. This is
+// a real, working technique, but it's still an estimate — a clean, strong beat (kick/bass) will
+// read far more reliably than a quiet or very busy passage.
+let listenStream = null, listenAnalyser = null, listenRAF = null, listenActive = false;
+let listenEnergyHistory = [], listenBeatTimestamps = [], listenLastBeatTime = 0, lastDetectedBpm = null;
+const LISTEN_REFRACTORY_MS = 250; // caps detection at 240 BPM-equivalent spacing, avoids double-firing on one hit
+
+async function startTempoListening() {
+    if (listenActive) return;
+    ensureAudio();
+    try {
+        listenStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+        showToast('Microphone access denied or unavailable');
+        return;
+    }
+    listenActive = true;
+    listenEnergyHistory = []; listenBeatTimestamps = []; listenLastBeatTime = 0; lastDetectedBpm = null;
+    const c = state.audioCtx;
+    const source = c.createMediaStreamSource(listenStream);
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 150; // focus on bass/kick-drum range
+    const analyser = c.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(filter);
+    filter.connect(analyser);
+    listenAnalyser = analyser;
+    // Deliberately NOT connected to destination — we only analyze the mic, never play it back.
+
+    const el = document.getElementById('tempoListenIndicator');
+    el.classList.remove('hidden');
+    document.getElementById('tempoListenValue').textContent = '--';
+    runBeatDetection();
+}
+
+function runBeatDetection() {
+    if (!listenActive) return;
+    const data = new Uint8Array(listenAnalyser.frequencyBinCount);
+    listenAnalyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+    const rms = Math.sqrt(sum / data.length);
+    listenEnergyHistory.push(rms);
+    if (listenEnergyHistory.length > 43) listenEnergyHistory.shift();
+    const avg = listenEnergyHistory.reduce((a, b) => a + b, 0) / listenEnergyHistory.length;
+    const now = performance.now();
+    if (rms > avg * 1.4 && rms > 0.05 && now - listenLastBeatTime > LISTEN_REFRACTORY_MS) {
+        listenLastBeatTime = now;
+        listenBeatTimestamps.push(now);
+        if (listenBeatTimestamps.length > 12) listenBeatTimestamps.shift();
+        updateListeningEstimate();
+    }
+    listenRAF = requestAnimationFrame(runBeatDetection);
+}
+
+function updateListeningEstimate() {
+    if (listenBeatTimestamps.length < 4) return;
+    const intervals = [];
+    for (let i = 1; i < listenBeatTimestamps.length; i++) intervals.push(listenBeatTimestamps[i] - listenBeatTimestamps[i - 1]);
+    intervals.sort((a, b) => a - b);
+    const median = intervals[Math.floor(intervals.length / 2)];
+    let bpm = Math.round(60000 / median);
+    while (bpm > 200) bpm = Math.round(bpm / 2); // fold octave errors back into range
+    while (bpm < 60) bpm = Math.round(bpm * 2);
+    bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, bpm));
+    lastDetectedBpm = bpm;
+    document.getElementById('tempoListenValue').textContent = bpm;
+}
+
+function stopTempoListening(apply) {
+    if (!listenActive) return;
+    listenActive = false;
+    if (listenRAF) cancelAnimationFrame(listenRAF);
+    if (listenStream) listenStream.getTracks().forEach(t => t.stop());
+    const el = document.getElementById('tempoListenIndicator');
+    el.classList.add('hidden');
+    if (apply && lastDetectedBpm) {
+        setLiveBpm(lastDetectedBpm);
+        showToast(`Tempo detected: ${lastDetectedBpm} BPM`);
+    }
+    listenEnergyHistory = []; listenBeatTimestamps = []; lastDetectedBpm = null;
+}
+
 // ===== TIMER =====
 function toggleTimer() {
     if (state.timerRunning) { clearInterval(state.timerInterval); state.timerRunning = false; }
@@ -2418,7 +2512,10 @@ async function previewCueEntry(entry) {
     if (!entry) return;
     ensureAudio();
     const buf = await loadCueBuffer(entry.key, entry.url);
-    if (!buf) { showToast('Could not load this clip'); return; }
+    if (!buf) {
+        showToast('Could not load this clip — try removing and re-importing it');
+        return;
+    }
     playCueClip(buf, state.audioCtx.currentTime + 0.02, state.cueVolume, state.cuePan);
 }
 
@@ -4079,7 +4176,31 @@ function setupEvents() {
     window.addEventListener('pointerup', noteDrawEnd);
     noteCanvasEl.addEventListener('pointerleave', noteDrawEnd);
     noteCanvasEl.addEventListener('pointercancel', noteDrawEnd);
-    document.getElementById('tapBtn').addEventListener('click', handleTap);
+    (() => {
+        const tapBtn = document.getElementById('tapBtn');
+        const HOLD_THRESHOLD_MS = 450;
+        let tapHoldTimer = null, tapHoldTriggered = false;
+        const onDown = e => {
+            tapHoldTriggered = false;
+            clearTimeout(tapHoldTimer);
+            tapHoldTimer = setTimeout(() => { tapHoldTriggered = true; startTempoListening(); }, HOLD_THRESHOLD_MS);
+        };
+        const onUp = e => {
+            clearTimeout(tapHoldTimer);
+            if (tapHoldTriggered) stopTempoListening(true);
+            else handleTap();
+        };
+        const onCancel = () => {
+            clearTimeout(tapHoldTimer);
+            if (tapHoldTriggered) stopTempoListening(false);
+        };
+        tapBtn.addEventListener('mousedown', onDown);
+        tapBtn.addEventListener('touchstart', onDown, { passive: true });
+        tapBtn.addEventListener('mouseup', onUp);
+        tapBtn.addEventListener('touchend', onUp);
+        tapBtn.addEventListener('mouseleave', onCancel);
+        tapBtn.addEventListener('touchcancel', onCancel);
+    })();
     document.getElementById('timeSigSelect').addEventListener('click', () => {
         openTimeSigPicker(state.timeSig, val => {
             state.timeSig = val;
