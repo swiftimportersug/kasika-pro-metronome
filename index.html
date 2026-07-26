@@ -708,6 +708,12 @@ tailwind.config = {
                 <div id="introCueContainer" class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2.5"></div>
             </div>
 
+            <div class="border-t border-brd/50 pt-4">
+                <label class="text-xs text-[#60A5FA] uppercase tracking-wider font-semibold block mb-1">Backing Loop</label>
+                <p class="text-[11px] text-zinc-600 mb-2.5">Optional audio loop (e.g. a percussion track) that plays alongside the click, starting after the intro or at a bar you choose.</p>
+                <div id="loopTrackContainer" class="flex flex-col gap-3 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2.5"></div>
+            </div>
+
             <div class="border-t border-brd/50 pt-4 sticky top-0 z-20 bg-s2" style="margin: 0 -28px; padding-left:28px; padding-right:28px;">
                 <div class="flex items-center justify-between mb-2">
                     <label class="text-xs text-[#2dd4bf] uppercase tracking-wider font-semibold">Tempo / Time-Sig Modulation</label>
@@ -1039,6 +1045,7 @@ const state = {
     cuePan: 0,
     cueBufferCache: {},
     cueDuck: null,
+    activeLoopNodes: null, songAbsoluteBar: 0, pendingLoopStartBar: null,
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -1525,6 +1532,8 @@ function stopMetronome() {
     state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     clearAllBeatBlockFlashes();
+    stopLoopTrack();
+    state.pendingLoopStartBar = null;
     // Stopping resets the song back to its start — a paused/resumed mid-song state (still
     // sitting mid-bridge, at whatever tempo the bridge was at) would be dangerous live, since
     // the next Play needs to reliably start the song from the top, not wherever it left off.
@@ -1641,6 +1650,13 @@ function stopPractice(silent) {
 }
 
 function onMeasureComplete() {
+    state.songAbsoluteBar++;
+    if (state.pendingLoopStartBar != null && state.songAbsoluteBar === state.pendingLoopStartBar) {
+        state.pendingLoopStartBar = null;
+        const sl = getActiveSetlist();
+        const song = sl?.songs.find(s => s.id === state.activeSongId);
+        if (song) startLoopTrack(song, state.nextNoteTime);
+    }
     if (state.practice.active) {
         state.practice.barsElapsed++;
         if (state.practice.barsElapsed >= state.practice.barsPerStep) {
@@ -2257,6 +2273,14 @@ function loadAndPlaySong(song) {
     updateActiveSongNotesPanel(song);
     if (state.practice.active) stopPractice(true);
     initSongModulation(song);
+    stopLoopTrack();
+    state.songAbsoluteBar = 0;
+    state.pendingLoopStartBar = null;
+    if (song.loopTrack && song.loopTrack.key && song.loopTrack.startMode !== 'atBar') {
+        startLoopTrack(song, state.audioCtx ? state.audioCtx.currentTime + 0.03 : 0);
+    } else if (song.loopTrack && song.loopTrack.key && song.loopTrack.startMode === 'atBar' && (song.loopTrack.startBar || 1) > 1) {
+        state.pendingLoopStartBar = (song.loopTrack.startBar || 1) - 1;
+    }
     if (state.isPlaying) {
         state.bpm = tb; state.currentClick = 0; state.visualClick = -1;
         state.nextNoteTime = state.audioCtx.currentTime + 0.03;
@@ -2307,6 +2331,9 @@ function togglePlayback() {
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === state.activeSongId);
     let delayedStart = null;
+    state.songAbsoluteBar = 0;
+    state.pendingLoopStartBar = null;
+    stopLoopTrack();
     if (song) {
         initSongModulation(song);
         const intro = song.introCue;
@@ -2320,6 +2347,15 @@ function togglePlayback() {
             const introForFiring = { bpm: state.bpm, timeSig: state.timeSig, cue: { ...intro, reminderLeadBeats: intro.reminderId ? reminderBeats : null } };
             fireVoiceCue(introForFiring, delayedStart);
             state.cueDuck = null; // nothing was already playing before the intro — nothing to duck
+        }
+        if (song.loopTrack && song.loopTrack.key) {
+            if (song.loopTrack.startMode === 'atBar' && (song.loopTrack.startBar || 1) > 1) {
+                // onMeasureComplete increments songAbsoluteBar upon ENTERING each new bar, so
+                // "start at bar N" fires once N-1 bars have completed.
+                state.pendingLoopStartBar = (song.loopTrack.startBar || 1) - 1;
+            } else {
+                startLoopTrack(song, delayedStart != null ? delayedStart : state.audioCtx.currentTime + 0.03);
+            }
         }
     }
     startMetronome(delayedStart);
@@ -2465,6 +2501,8 @@ function openSongEditModal(id) {
         countInPan: song.introCue.countInPan != null ? song.introCue.countInPan : state.cuePan,
     } : defaultIntroCue();
     renderIntroCueUI();
+    editingLoopTrack = song.loopTrack ? { ...song.loopTrack } : null;
+    renderLoopTrackUI();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
     showModal('songModal');
@@ -3122,6 +3160,7 @@ function cycleSongBeatTone(idx) {
 }
 
 let expandedModTones = new Set();
+let editRowExpandedId = null;
 let expandedModCues = new Set();
 let expandedCountInSettings = new Set();
 
@@ -3296,6 +3335,107 @@ function renderIntroCueHtml() {
 function renderIntroCueUI() {
     const container = document.getElementById('introCueContainer');
     if (container) container.innerHTML = renderIntroCueHtml();
+}
+
+// ===== BACKING LOOP =====
+let editingLoopTrack = null;
+
+function renderLoopTrackHtml() {
+    const lt = editingLoopTrack;
+    const hasFile = lt && lt.key;
+    const fileInputHtml = `<input type="file" id="loopTrackFileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg" class="hidden">`;
+    if (!hasFile) {
+        return `${fileInputHtml}
+        <button type="button" id="loopTrackImportBtn" class="w-full py-2.5 rounded-lg border border-dashed border-brd bg-s3/30 text-zinc-500 text-sm hover:border-[#60A5FA]/40 hover:text-[#60A5FA] transition-all">
+            <i class="fas fa-file-audio mr-2 text-xs"></i>Import a loop file
+        </button>`;
+    }
+    return `${fileInputHtml}
+        <div class="flex items-center justify-between gap-2">
+            <span class="text-sm text-zinc-200 truncate min-w-0"><i class="fas fa-file-audio text-[#60A5FA] mr-1.5"></i>${escHtml(lt.fileName || 'Loop file')}</span>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                <button type="button" id="loopTrackPreviewBtn" class="w-7 h-7 rounded-md bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/25 hover:bg-[#60A5FA]/25 flex items-center justify-center" title="Preview"><i class="fas fa-play text-[10px] ml-0.5"></i></button>
+                <button type="button" id="loopTrackRemoveBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex items-center justify-center" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
+            </div>
+        </div>
+        <div class="flex items-center gap-3 flex-wrap">
+            <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none">
+                <input type="radio" name="loopStartMode" class="loop-start-mode" value="afterIntro" ${lt.startMode !== 'atBar' ? 'checked' : ''} style="accent-color:#60A5FA;">
+                Start after intro
+            </label>
+            <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none">
+                <input type="radio" name="loopStartMode" class="loop-start-mode" value="atBar" ${lt.startMode === 'atBar' ? 'checked' : ''} style="accent-color:#60A5FA;">
+                Start at bar
+                <input type="number" id="loopStartBarInput" class="edit-input" style="width:52px" min="1" max="999" value="${lt.startBar || 8}" ${lt.startMode === 'atBar' ? '' : 'disabled'}>
+            </label>
+        </div>
+        <div class="flex items-center gap-2">
+            <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
+            <input type="range" id="loopVolumeInput" class="vol-slider flex-1" min="0" max="100" step="1" value="${lt.volume != null ? lt.volume : 100}">
+            <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0" id="loopVolumeLabel">${lt.volume != null ? lt.volume : 100}%</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
+            <input type="range" id="loopPanInput" class="vol-slider flex-1" min="-100" max="100" step="1" value="${Math.round((lt.pan || 0) * 100)}">
+            <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
+            <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0" id="loopPanLabel">${formatPanLabel(lt.pan || 0)}</span>
+        </div>`;
+}
+
+function renderLoopTrackUI() {
+    const container = document.getElementById('loopTrackContainer');
+    if (container) container.innerHTML = renderLoopTrackHtml();
+}
+
+async function importLoopFile(file) {
+    const entry = await importCueFile(file, file.name.replace(/\.[^.]+$/, ''));
+    editingLoopTrack = { key: entry.key, url: entry.url, fileName: file.name, startMode: 'afterIntro', startBar: 8, volume: 100, pan: 0 };
+    renderLoopTrackUI();
+}
+
+async function previewLoopTrack() {
+    if (!editingLoopTrack || !editingLoopTrack.key) return;
+    ensureAudio();
+    const buf = await loadCueBuffer(editingLoopTrack.key, editingLoopTrack.url);
+    if (!buf) { showToast('Could not load this clip'); return; }
+    playCueClip(buf, state.audioCtx.currentTime + 0.02, editingLoopTrack.volume != null ? editingLoopTrack.volume : 100, editingLoopTrack.pan || 0);
+}
+
+function removeLoopTrack() {
+    if (editingLoopTrack && editingLoopTrack.key) {
+        cueDbDelete(editingLoopTrack.key).catch(() => {});
+        delete state.cueBufferCache[editingLoopTrack.key];
+    }
+    editingLoopTrack = null;
+    renderLoopTrackUI();
+}
+
+// Starts the song's backing loop at the given audio-clock time, looping continuously until
+// stopped. Any previously-playing loop is stopped first.
+async function startLoopTrack(song, startTime) {
+    if (!song || !song.loopTrack || !song.loopTrack.key) return;
+    stopLoopTrack();
+    ensureAudio();
+    const buf = await loadCueBuffer(song.loopTrack.key, song.loopTrack.url);
+    if (!buf) return;
+    const c = state.audioCtx;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const g = c.createGain();
+    g.gain.value = Math.max(0, Math.min(1, (song.loopTrack.volume != null ? song.loopTrack.volume : 100) / 100));
+    const p = c.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, song.loopTrack.pan || 0));
+    src.connect(g); g.connect(p); p.connect(state.masterBus || c.destination);
+    src.start(Math.max(startTime, c.currentTime));
+    state.activeLoopNodes = { src, g, p };
+}
+
+function stopLoopTrack() {
+    if (!state.activeLoopNodes) return;
+    try { state.activeLoopNodes.src.stop(); } catch (err) {}
+    try { state.activeLoopNodes.src.disconnect(); state.activeLoopNodes.g.disconnect(); state.activeLoopNodes.p.disconnect(); } catch (err) {}
+    state.activeLoopNodes = null;
 }
 
 const SECTION_COLORS = ['#D4A853', '#2dd4bf', '#F472B6', '#60A5FA', '#A78BFA', '#FB923C', '#34D399', '#F87171', '#FBBF24', '#818CF8'];
@@ -3639,6 +3779,50 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
     });
+
+    // ---- Backing Loop ----
+    document.getElementById('loopTrackContainer').addEventListener('click', e => {
+        if (e.target.closest('#loopTrackImportBtn')) { document.getElementById('loopTrackFileInput').click(); return; }
+        if (e.target.closest('#loopTrackPreviewBtn')) { previewLoopTrack(); return; }
+        if (e.target.closest('#loopTrackRemoveBtn')) { removeLoopTrack(); return; }
+    });
+    document.getElementById('loopTrackContainer').addEventListener('change', e => {
+        if (e.target.id === 'loopTrackFileInput') {
+            const file = e.target.files[0];
+            if (file) importLoopFile(file);
+            e.target.value = '';
+            return;
+        }
+        if (e.target.classList.contains('loop-start-mode')) {
+            if (!editingLoopTrack) return;
+            editingLoopTrack.startMode = e.target.value;
+            renderLoopTrackUI();
+            return;
+        }
+        if (e.target.id === 'loopStartBarInput') {
+            if (!editingLoopTrack) return;
+            editingLoopTrack.startBar = Math.max(1, parseInt(e.target.value, 10) || 1);
+            return;
+        }
+    });
+    document.getElementById('loopTrackContainer').addEventListener('input', e => {
+        if (e.target.id === 'loopVolumeInput') {
+            if (!editingLoopTrack) return;
+            const v = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+            editingLoopTrack.volume = v;
+            const label = document.getElementById('loopVolumeLabel');
+            if (label) label.textContent = v + '%';
+            return;
+        }
+        if (e.target.id === 'loopPanInput') {
+            if (!editingLoopTrack) return;
+            const v = Math.max(-1, Math.min(1, parseInt(e.target.value, 10) / 100));
+            editingLoopTrack.pan = v;
+            const label = document.getElementById('loopPanLabel');
+            if (label) label.textContent = formatPanLabel(v);
+            return;
+        }
+    });
 });
 
 function renderSetlistSelect() {
@@ -3694,6 +3878,7 @@ function renderEditMode(container, sl) {
 
     container.innerHTML = sl.songs.map((song, idx) => {
         const isActive = state.activeSongId === song.id;
+        const isExpanded = editRowExpandedId === song.id;
         return `
         <div class="edit-row flex flex-col gap-2 px-3 py-2.5 border-b border-brd/20 ${isActive ? 'edit-row-active' : ''}" data-song-id="${song.id}">
             <div class="flex items-center gap-2">
@@ -3702,11 +3887,14 @@ function renderEditMode(container, sl) {
                 </div>
                 <span class="text-[11px] font-mono text-zinc-600 flex-shrink-0 w-5 text-center">${String(idx + 1).padStart(2, '0')}</span>
                 <input type="text" class="edit-input flex-1 min-w-0" value="${escHtml(song.name)}" data-field="name" data-song-id="${song.id}" placeholder="Song name">
+                <button class="edit-btn edit-btn-move edit-row-expand-toggle flex-shrink-0" data-song-id="${song.id}" title="${isExpanded ? 'Collapse' : 'Expand to edit'}">
+                    <i class="fas fa-chevron-${isExpanded ? 'up' : 'down'} text-[10px]"></i>
+                </button>
                 <button class="edit-btn edit-btn-del flex-shrink-0" data-action="delete" data-song-id="${song.id}" title="Remove song">
                     <i class="fas fa-trash-can"></i>
                 </button>
             </div>
-            <div class="flex items-center gap-2 pl-7">
+            <div class="items-center gap-2 pl-7 ${isExpanded ? 'flex' : 'hidden'}">
                 <input type="number" class="edit-input edit-input-bpm" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
                 <button type="button" class="edit-select ts-inline-btn flex-shrink-0" data-song-id="${song.id}" style="width:44px;">${song.timeSig}</button>
                 <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
@@ -4371,6 +4559,8 @@ function setupEvents() {
         expandedCountInSettings = new Set();
         editingIntroCue = defaultIntroCue();
         renderIntroCueUI();
+        editingLoopTrack = null;
+        renderLoopTrackUI();
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
         showModal('songModal');
@@ -4455,6 +4645,15 @@ function setupEvents() {
                 countInVolume: editingIntroCue.countInVolume,
                 countInPan: editingIntroCue.countInPan,
             },
+            loopTrack: (editingLoopTrack && editingLoopTrack.key) ? {
+                key: editingLoopTrack.key,
+                url: editingLoopTrack.url || null,
+                fileName: editingLoopTrack.fileName || 'Loop',
+                startMode: editingLoopTrack.startMode === 'atBar' ? 'atBar' : 'afterIntro',
+                startBar: Math.max(1, editingLoopTrack.startBar || 8),
+                volume: editingLoopTrack.volume != null ? editingLoopTrack.volume : 100,
+                pan: editingLoopTrack.pan || 0,
+            } : null,
         };
         if (!d.name || isNaN(d.bpm)) return;
         d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
@@ -4464,11 +4663,29 @@ function setupEvents() {
         hideModal('songModal');
     });
 
-    document.getElementById('editToggleBtn').addEventListener('click', () => { state.editMode = !state.editMode; updateEditBarUI(); renderSongs(); });
+    document.getElementById('editToggleBtn').addEventListener('click', () => {
+        state.editMode = !state.editMode;
+        if (state.editMode) editRowExpandedId = state.activeSongId || null;
+        updateEditBarUI();
+        renderSongs();
+        if (state.editMode && state.activeSongId) {
+            requestAnimationFrame(() => {
+                const row = document.querySelector(`#songList [data-song-id="${state.activeSongId}"]`);
+                if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        }
+    });
 
     // Song list click delegation
     document.getElementById('songList').addEventListener('click', e => {
         if (state.editMode) {
+            const expandToggle = e.target.closest('.edit-row-expand-toggle');
+            if (expandToggle) {
+                const sid = expandToggle.dataset.songId;
+                editRowExpandedId = editRowExpandedId === sid ? null : sid;
+                renderSongs();
+                return;
+            }
             const ab = e.target.closest('[data-action]');
             if (!ab) return;
             const a = ab.dataset.action, sid = ab.dataset.songId;
