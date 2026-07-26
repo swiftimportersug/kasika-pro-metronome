@@ -3154,8 +3154,10 @@ function renderModCueHtml(i) {
     if (m.cue.countInVolume == null) m.cue.countInVolume = state.cueVolume;
     if (m.cue.reminderPan == null) m.cue.reminderPan = state.cuePan;
     if (m.cue.countInPan == null) m.cue.countInPan = state.cuePan;
+    const matchedReminder = findReminderForCue(m.cue);
+    const matchedByNameOnly = matchedReminder && m.cue.reminderId !== matchedReminder.id;
     const opts = ['<option value="">No reminder</option>'].concat(
-        state.cueBank.reminders.map(r => `<option value="${r.id}" ${m.cue.reminderId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
+        state.cueBank.reminders.map(r => `<option value="${r.id}" ${matchedReminder && matchedReminder.id === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
     ).join('');
     const n = parseInt(String(m.timeSig).split('/')[0], 10) || 4;
     const length = m.cue.countInLength != null ? m.cue.countInLength : n;
@@ -3164,13 +3166,14 @@ function renderModCueHtml(i) {
         <div class="flex-1 min-w-[140px]">
             <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
             <select class="edit-select mod-cue-reminder w-full" data-mod-idx="${i}" style="width:100%;">${opts}</select>
+            ${matchedByNameOnly ? `<p class="text-[10px] text-[#2dd4bf] mt-1"><i class="fas fa-check mr-1"></i>Matched locally by name: "${escHtml(matchedReminder.name)}"</p>` : ''}
         </div>
-        <div class="mod-cue-reminder-vol w-full flex items-center gap-2 ${m.cue.reminderId ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+        <div class="mod-cue-reminder-vol w-full flex items-center gap-2 ${matchedReminder ? 'flex' : 'hidden'}" data-mod-idx="${i}">
             <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
             <input type="range" class="vol-slider mod-cue-reminder-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.reminderVolume}" data-mod-idx="${i}">
             <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-reminder-vol-label">${m.cue.reminderVolume}%</span>
         </div>
-        <div class="mod-cue-reminder-pan w-full flex items-center gap-2 ${m.cue.reminderId ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+        <div class="mod-cue-reminder-pan w-full flex items-center gap-2 ${matchedReminder ? 'flex' : 'hidden'}" data-mod-idx="${i}">
             <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
             <input type="range" class="vol-slider mod-cue-reminder-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(m.cue.reminderPan * 100)}" data-mod-idx="${i}">
             <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
@@ -3224,8 +3227,10 @@ function renderModCueHtml(i) {
 
 function renderIntroCueHtml() {
     const ic = editingIntroCue;
+    const matchedReminder = findReminderForCue(ic);
+    const matchedByNameOnly = matchedReminder && ic.reminderId !== matchedReminder.id;
     const opts = ['<option value="">No reminder</option>'].concat(
-        state.cueBank.reminders.map(r => `<option value="${r.id}" ${ic.reminderId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
+        state.cueBank.reminders.map(r => `<option value="${r.id}" ${matchedReminder && matchedReminder.id === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`)
     ).join('');
     const beatsPerBar = parseInt((document.getElementById('songTimeSigInput').textContent || '4/4').trim().split('/')[0], 10) || 4;
     const length = ic.countInLength != null ? ic.countInLength : beatsPerBar;
@@ -3237,8 +3242,9 @@ function renderIntroCueHtml() {
         <div class="flex-1 min-w-[140px]">
             <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
             <select class="edit-select intro-cue-reminder w-full" style="width:100%;">${opts}</select>
+            ${matchedByNameOnly ? `<p class="text-[10px] text-[#2dd4bf] mt-1"><i class="fas fa-check mr-1"></i>Matched locally by name: "${escHtml(matchedReminder.name)}"</p>` : ''}
         </div>
-        <div class="intro-cue-reminder-detail w-full flex flex-col gap-2 ${ic.reminderId ? 'flex' : 'hidden'}">
+        <div class="intro-cue-reminder-detail w-full flex flex-col gap-2 ${matchedReminder || ic.reminderId ? 'flex' : 'hidden'}">
             <div class="flex items-center gap-2">
                 <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
                 <input type="range" class="vol-slider intro-cue-reminder-vol-input flex-1" min="0" max="100" step="1" value="${ic.reminderVolume}">
