@@ -159,6 +159,7 @@ tailwind.config = {
     .edit-btn-move:hover { color: #a1a1aa; background: #27272a; }
     .edit-btn-move:disabled { opacity: 0.15; cursor: default; background: none; }
     .edit-btn-del { color: #52525b; }
+    .edit-btn-lg { width: 34px; height: 34px; font-size: 13px; }
     .edit-btn-del:hover { color: #f87171; background: rgba(248,113,113,0.1); }
     .drop-line {
         height: 2px; background: #D4A853; border-radius: 1px; margin: -1px 10px 0 10px;
@@ -663,23 +664,30 @@ tailwind.config = {
                     <option value="thirty-second">Thirty-second notes</option>
                 </select>
             </div>
-            <div>
-                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Subdivision Pan</label>
-                <p class="text-[11px] text-zinc-600 mb-2">Main beat tones always play centered. Drag to pan the subdivision clicks left or right.</p>
-                <div class="flex items-center gap-2">
-                    <span class="text-[10px] text-zinc-600 flex-shrink-0 w-3">L</span>
-                    <input type="range" id="songSubdivPanFader" class="vol-slider flex-1" min="-100" max="100" value="0" step="1">
-                    <span class="text-[10px] text-zinc-600 flex-shrink-0 w-3 text-right">R</span>
-                </div>
-                <div class="text-center text-[11px] text-zinc-500 mt-1" id="subdivPanLabel">Center</div>
-            </div>
-            <div>
-                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Subdivision Volume</label>
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-volume-low text-zinc-600 text-xs"></i>
-                    <input type="range" id="songSubdivVolumeInput" class="vol-slider flex-1" min="0" max="100" value="100" step="1">
-                    <i class="fas fa-volume-high text-zinc-600 text-xs"></i>
-                    <span class="text-[11px] text-zinc-500 w-9 text-right flex-shrink-0" id="subdivVolumeLabel">100%</span>
+            <div class="rounded-lg border border-brd/30 bg-s3/20">
+                <button type="button" id="subdivMixToggle" class="w-full flex items-center justify-between px-3 py-2.5 text-left">
+                    <span class="text-xs text-zinc-500 uppercase tracking-wider">Subdivision Pan &amp; Volume</span>
+                    <i class="fas fa-chevron-down text-zinc-600 text-[10px] transition-transform" id="subdivMixChevron"></i>
+                </button>
+                <div id="subdivMixPanel" class="hidden px-3 pb-3 flex-col gap-3">
+                    <div>
+                        <p class="text-[11px] text-zinc-600 mb-2">Main beat tones always play centered. Drag to pan the subdivision clicks left or right.</p>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] text-zinc-600 flex-shrink-0 w-3">L</span>
+                            <input type="range" id="songSubdivPanFader" class="vol-slider flex-1" min="-100" max="100" value="0" step="1">
+                            <span class="text-[10px] text-zinc-600 flex-shrink-0 w-3 text-right">R</span>
+                        </div>
+                        <div class="text-center text-[11px] text-zinc-500 mt-1" id="subdivPanLabel">Center</div>
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-1.5 block">Subdivision Volume</label>
+                        <div class="flex items-center gap-2">
+                            <i class="fas fa-volume-low text-zinc-600 text-xs"></i>
+                            <input type="range" id="songSubdivVolumeInput" class="vol-slider flex-1" min="0" max="100" value="100" step="1">
+                            <i class="fas fa-volume-high text-zinc-600 text-xs"></i>
+                            <span class="text-[11px] text-zinc-500 w-9 text-right flex-shrink-0" id="subdivVolumeLabel">100%</span>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div>
@@ -700,22 +708,22 @@ tailwind.config = {
                 <div id="introCueContainer" class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2.5"></div>
             </div>
 
-            <div class="border-t border-brd/50 pt-4">
+            <div class="border-t border-brd/50 pt-4 sticky top-0 z-20 bg-s2" style="margin: 0 -28px; padding-left:28px; padding-right:28px;">
                 <div class="flex items-center justify-between mb-2">
                     <label class="text-xs text-[#2dd4bf] uppercase tracking-wider font-semibold">Tempo / Time-Sig Modulation</label>
                     <button type="button" id="addModulationBtn" class="text-[11px] px-2.5 py-1 rounded-md bg-[#2dd4bf]/15 text-[#2dd4bf] border border-[#2dd4bf]/30 hover:bg-[#2dd4bf]/25 transition-colors">
                         <i class="fas fa-plus mr-1"></i>Add Change
                     </button>
                 </div>
-                <p class="text-[11px] text-zinc-600 mb-2.5" id="modulationHint">The song starts at the BPM / time sig above. Add a change to switch tempo or time signature after a set number of bars.</p>
+                <p class="text-[11px] text-zinc-600 pb-2.5" id="modulationHint">The song starts at the BPM / time sig above. Add a change to switch tempo or time signature after a set number of bars.</p>
+            </div>
                 <div id="modulationList" class="flex flex-col gap-2"></div>
                 <label class="flex items-center gap-2 mt-3 text-[11px] text-zinc-500 select-none" id="modulationLoopRow" style="display:none;">
                     <input type="checkbox" id="modulationLoopInput" style="accent-color:#2dd4bf;">
                     Loop back to the start after the final section
                 </label>
-            </div>
 
-            <div class="flex gap-3 mt-2">
+            <div class="flex gap-3 mt-2 sticky bottom-0 z-20 bg-s2" style="margin: 0 -28px -28px; padding: 12px 28px 20px;">
                 <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
                 <button type="button" onclick="hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
             </div>
@@ -2429,6 +2437,7 @@ function openSongEditModal(id) {
     editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } }));
     expandedModTones = new Set();
     expandedModCues = new Set();
+    expandedCountInSettings = new Set();
     editingIntroCue = song.introCue ? {
         reminderId: song.introCue.reminderId || null,
         reminderLeadBeats: song.introCue.reminderLeadBeats != null ? song.introCue.reminderLeadBeats : 2,
@@ -3099,6 +3108,7 @@ function cycleSongBeatTone(idx) {
 
 let expandedModTones = new Set();
 let expandedModCues = new Set();
+let expandedCountInSettings = new Set();
 
 function defaultBeatTonesArray() { return [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]; }
 
@@ -3110,7 +3120,7 @@ function renderModBeatTonesHtml(i) {
     for (let b = 0; b < n; b++) {
         const tone = m.beatTones[b] || 2;
         const color = TONE_COLORS[tone];
-        html += `<button type="button" class="beat-block mod-beat-block" style="width:30px;height:30px;font-size:11px;border-radius:7px;--tone-color:${color};border-color:${color}66;color:${color};" data-mod-idx="${i}" data-beat-idx="${b}" title="Beat ${b + 1} · tone ${tone}">${b + 1}</button>`;
+        html += `<button type="button" class="beat-block mod-beat-block" style="width:40px;height:40px;font-size:14px;border-radius:9px;--tone-color:${color};border-color:${color}66;color:${color};" data-mod-idx="${i}" data-beat-idx="${b}" title="Beat ${b + 1} · tone ${tone}">${b + 1}</button>`;
     }
     return html;
 }
@@ -3161,12 +3171,18 @@ function renderModCueHtml(i) {
                 <span class="text-[10px] text-zinc-600">beats before ${m.cue.countIn ? 'count-in' : 'the change'}</span>
             </div>
         </div>
-        <div class="w-full flex items-end gap-3 flex-wrap">
+        <div class="w-full flex items-center gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
                 <input type="checkbox" class="mod-cue-countin" data-mod-idx="${i}" ${m.cue.countIn ? 'checked' : ''} style="accent-color:#F472B6;">
                 Count-in
             </label>
-            <div class="mod-cue-countin-detail flex items-end gap-3 flex-wrap ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <button type="button" class="mod-cue-countin-settings-toggle text-[10px] text-zinc-600 hover:text-[#F472B6] flex items-center gap-1 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+                <span>${length}-count from ${start}${expandedCountInSettings.has(i) ? '' : ' · tap to adjust'}</span>
+                <i class="fas fa-chevron-down text-[8px] transition-transform" style="${expandedCountInSettings.has(i) ? 'transform:rotate(180deg);' : ''}"></i>
+            </button>
+        </div>
+        <div class="mod-cue-countin-settings w-full flex-col gap-3 ${m.cue.countIn && expandedCountInSettings.has(i) ? 'flex' : 'hidden'}" data-mod-idx="${i}">
+            <div class="flex items-end gap-3 flex-wrap">
                 <div>
                     <label class="text-[10px] text-zinc-600 block mb-1">Beats to count</label>
                     <input type="number" class="edit-input mod-cue-length" style="width:52px" min="1" max="16" value="${length}" data-mod-idx="${i}">
@@ -3177,17 +3193,17 @@ function renderModCueHtml(i) {
                 </div>
                 <span class="text-[10px] text-zinc-600 pb-1.5">→ speaks ${Array.from({length}, (_, k) => start + k).join(', ')}</span>
             </div>
-        </div>
-        <div class="mod-cue-countin-vol w-full flex items-center gap-2 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
-            <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
-            <input type="range" class="vol-slider mod-cue-countin-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.countInVolume}" data-mod-idx="${i}">
-            <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-countin-vol-label">${m.cue.countInVolume}%</span>
-        </div>
-        <div class="mod-cue-countin-pan w-full flex items-center gap-2 ${m.cue.countIn ? 'flex' : 'hidden'}" data-mod-idx="${i}">
-            <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
-            <input type="range" class="vol-slider mod-cue-countin-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(m.cue.countInPan * 100)}" data-mod-idx="${i}">
-            <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
-            <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 mod-cue-countin-pan-label">${formatPanLabel(m.cue.countInPan)}</span>
+            <div class="w-full flex items-center gap-2">
+                <i class="fas fa-volume-low text-zinc-600 text-[10px] flex-shrink-0"></i>
+                <input type="range" class="vol-slider mod-cue-countin-vol-input flex-1" min="0" max="100" step="1" value="${m.cue.countInVolume}" data-mod-idx="${i}">
+                <span class="text-[10px] text-zinc-500 w-8 text-right flex-shrink-0 mod-cue-countin-vol-label">${m.cue.countInVolume}%</span>
+            </div>
+            <div class="w-full flex items-center gap-2">
+                <span class="text-[9px] text-zinc-600 w-3 flex-shrink-0">L</span>
+                <input type="range" class="vol-slider mod-cue-countin-pan-input flex-1" min="-100" max="100" step="1" value="${Math.round(m.cue.countInPan * 100)}" data-mod-idx="${i}">
+                <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
+                <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 mod-cue-countin-pan-label">${formatPanLabel(m.cue.countInPan)}</span>
+            </div>
         </div>`;
 }
 
@@ -3286,13 +3302,13 @@ function renderModulationRows() {
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">beats →</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
-                <button type="button" class="edit-btn edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
+                <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
                     <i class="fas fa-drum"></i>
                 </button>
-                <button type="button" class="edit-btn edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
+                <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
                     <i class="fas fa-microphone"></i>
                 </button>
-                <button type="button" class="edit-btn edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
+                <button type="button" class="edit-btn edit-btn-lg edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                     <i class="fas fa-trash-can"></i>
                 </button>
             </div>
@@ -3324,6 +3340,7 @@ document.addEventListener('DOMContentLoaded', () => {
             editingModulations.splice(idx, 1);
             expandedModTones = new Set(Array.from(expandedModTones).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
             expandedModCues = new Set(Array.from(expandedModCues).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
+            expandedCountInSettings = new Set(Array.from(expandedCountInSettings).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
             renderModulationRows();
             return;
         }
@@ -3338,6 +3355,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cueToggle) {
             const idx = parseInt(cueToggle.dataset.modIdx, 10);
             if (expandedModCues.has(idx)) expandedModCues.delete(idx); else expandedModCues.add(idx);
+            renderModulationRows();
+            return;
+        }
+        const countInSettingsToggle = e.target.closest('.mod-cue-countin-settings-toggle');
+        if (countInSettingsToggle) {
+            const idx = parseInt(countInSettingsToggle.dataset.modIdx, 10);
+            if (expandedCountInSettings.has(idx)) expandedCountInSettings.delete(idx); else expandedCountInSettings.add(idx);
             renderModulationRows();
             return;
         }
@@ -4279,6 +4303,7 @@ function setupEvents() {
         editingModulations = [];
         expandedModTones = new Set();
         expandedModCues = new Set();
+        expandedCountInSettings = new Set();
         editingIntroCue = defaultIntroCue();
         renderIntroCueUI();
         document.getElementById('modulationLoopInput').checked = false;
@@ -4293,6 +4318,13 @@ function setupEvents() {
         cycleSongBeatTone(parseInt(btn.dataset.idx, 10));
     });
 
+    document.getElementById('subdivMixToggle').addEventListener('click', () => {
+        const panel = document.getElementById('subdivMixPanel');
+        const chevron = document.getElementById('subdivMixChevron');
+        const isOpen = panel.classList.contains('flex');
+        if (isOpen) { panel.classList.add('hidden'); panel.classList.remove('flex'); chevron.style.transform = ''; }
+        else { panel.classList.remove('hidden'); panel.classList.add('flex'); chevron.style.transform = 'rotate(180deg)'; }
+    });
     document.getElementById('songSubdivPanFader').addEventListener('input', e => setSubdivPanFaderUI(parseInt(e.target.value, 10) / 100));
     document.getElementById('songSubdivVolumeInput').addEventListener('input', e => setSubdivVolumeUI(parseInt(e.target.value, 10)));
 
