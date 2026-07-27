@@ -635,7 +635,7 @@ tailwind.config = {
         <!-- Host flow -->
         <div id="bandSyncHostFlow" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
             <p class="text-xs text-zinc-500 text-center">Have your band member open Band Sync → Join and scan this:</p>
-            <div id="bandSyncQrHost" class="bg-white p-3 rounded-xl"></div>
+            <div id="bandSyncQrHost" class="bg-white p-3 rounded-xl w-full mx-auto" style="max-width:min(78vw,320px); aspect-ratio:1;"></div>
             <button type="button" id="bandSyncHostScanReplyBtn" class="w-full py-3 rounded-xl bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30 font-semibold text-sm hover:bg-[#60A5FA]/25 transition-colors">
                 <i class="fas fa-camera mr-2"></i>Scan Their Reply Code
             </button>
@@ -644,7 +644,7 @@ tailwind.config = {
         <!-- Join flow -->
         <div id="bandSyncJoinFlow" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
             <p class="text-xs text-zinc-500 text-center">Show this back to the host to finish connecting:</p>
-            <div id="bandSyncQrJoin" class="bg-white p-3 rounded-xl"></div>
+            <div id="bandSyncQrJoin" class="bg-white p-3 rounded-xl w-full mx-auto" style="max-width:min(78vw,320px); aspect-ratio:1;"></div>
         </div>
 
         <!-- Shared camera scan area — used both to scan the host's offer and the joiner's reply -->
@@ -1470,7 +1470,9 @@ function renderQrCode(containerId, text) {
         const qr = qrcode(0, 'L'); // type 0 = auto-pick smallest version that fits; L = max capacity
         qr.addData(text);
         qr.make();
-        container.innerHTML = qr.createSvgTag(5, 0);
+        container.innerHTML = qr.createSvgTag({ scalable: true });
+        const svg = container.querySelector('svg');
+        if (svg) { svg.style.width = '100%'; svg.style.height = '100%'; svg.style.display = 'block'; }
     } catch (err) {
         console.warn('QR generation failed:', err);
         container.innerHTML = '<p class="text-red-500 text-xs p-4 max-w-[200px]">Could not generate this code — the connection data may be too large for this network setup.</p>';
@@ -1495,7 +1497,11 @@ async function startQrScanner(label, onDecode) {
     const video = document.getElementById('bandSyncScanVideo');
     try {
         bandSync.scanStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+            video: {
+                facingMode: 'environment',
+                width: { ideal: 3840 }, height: { ideal: 2160 },
+                advanced: [{ focusMode: 'continuous' }],
+            }
         });
     } catch (err) {
         setBandSyncStatus('Camera access denied — cannot scan a code.');
