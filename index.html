@@ -288,8 +288,9 @@ tailwind.config = {
         <button id="openCueBankBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#F472B6] hover:border-[#F472B6]/30 transition-all font-medium" title="Open voice cue bank">
             <i class="fas fa-microphone text-[10px]"></i><span class="hidden sm:inline">Cues</span>
         </button>
-        <button id="openBandSyncBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all font-medium" title="Sync with your band's phones">
+        <button id="openBandSyncBtn" class="relative flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all font-medium" title="Sync with your band's phones">
             <i class="fas fa-people-group text-[10px]"></i><span class="hidden sm:inline">Band</span>
+            <span id="bandSyncConnectedDot" class="hidden absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#34D399] border-2 border-surface"></span>
         </button>
         <div class="w-px h-4 bg-brd hidden sm:block"></div>
         <button id="syncSignInBtn" class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
@@ -1568,8 +1569,14 @@ function setupBandSyncChannel(channel) {
         setBandSyncStatus('');
         showBandSyncConnected();
         logBandSyncMessage('Connected — data channel open.', 'system');
+        const dot = document.getElementById('bandSyncConnectedDot');
+        if (dot) dot.classList.remove('hidden');
     };
-    channel.onclose = () => logBandSyncMessage('Data channel closed.', 'system');
+    channel.onclose = () => {
+        logBandSyncMessage('Data channel closed.', 'system');
+        const dot = document.getElementById('bandSyncConnectedDot');
+        if (dot) dot.classList.add('hidden');
+    };
     channel.onmessage = e => {
         let msg;
         try { msg = JSON.parse(e.data); } catch (err) { logBandSyncMessage(`Received: ${e.data}`, 'in'); return; }
@@ -1582,6 +1589,8 @@ function setupBandSyncChannel(channel) {
             return;
         }
         if (msg.type === 'clocksync_pong') return; // handled by the per-round listener in sendClockSyncPing
+        if (msg.type === 'sync_start') { handleBandSyncStart(msg); return; }
+        if (msg.type === 'sync_stop') { handleBandSyncStop(); return; }
         logBandSyncMessage(`Received: ${e.data}`, 'in');
     };
 }
@@ -1634,6 +1643,55 @@ async function runClockSync() {
     const best = samples[0];
     bandSync.clockOffset = best.offset; // adds to OUR clock reading to get THEIR equivalent clock reading
     return { ...best, sampleCount: samples.length };
+}
+
+// ===== BAND SYNC — Stage 3: synchronized start/stop =====
+// Clock sync (Stage 2) measured offsets using performance.now(), but actual audio scheduling
+// runs on AudioContext.currentTime — a different clock. This bridges between them: read both
+// clocks at the same instant, then any performance.now()-based target time can be converted
+// to the equivalent AudioContext time by carrying that instant's relationship forward.
+function perfTimeToAudioCtxTime(perfTime) {
+    ensureAudio();
+    const bridgePerf = performance.now();
+    const bridgeAudio = state.audioCtx.currentTime;
+    return bridgeAudio + (perfTime - bridgePerf) / 1000;
+}
+
+const BAND_SYNC_LEAD_MS = 300; // generous margin over the ~10ms round-trips we're seeing, so the start command has time to arrive before it's due
+
+function broadcastBandSyncStart() {
+    if (!bandSync.channel || bandSync.channel.readyState !== 'open') return null;
+    const targetPerfTime = performance.now() + BAND_SYNC_LEAD_MS + (bandSync.clockOffset || 0);
+    bandSync.channel.send(JSON.stringify({
+        type: 'sync_start', targetPerfTime,
+        bpm: state.bpm, timeSig: state.timeSig, subdivision: state.subdivision,
+    }));
+    logBandSyncMessage(`Sent sync start (BPM ${state.bpm}, ${state.timeSig})`, 'out');
+    // Our own start time, on OUR clock, matching the same instant we just told the peer to start at.
+    return perfTimeToAudioCtxTime(performance.now() + BAND_SYNC_LEAD_MS);
+}
+
+function broadcastBandSyncStop() {
+    if (!bandSync.channel || bandSync.channel.readyState !== 'open') return;
+    bandSync.channel.send(JSON.stringify({ type: 'sync_stop' }));
+    logBandSyncMessage('Sent sync stop', 'out');
+}
+
+function handleBandSyncStart(msg) {
+    state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, msg.bpm || state.bpm));
+    if (msg.timeSig) state.timeSig = msg.timeSig;
+    if (msg.subdivision) state.subdivision = msg.subdivision;
+    document.getElementById('timeSigSelect').textContent = state.timeSig;
+    document.getElementById('subdivSelect').value = state.subdivision;
+    renderBeatBlocks();
+    const targetAudioTime = perfTimeToAudioCtxTime(msg.targetPerfTime);
+    logBandSyncMessage(`Received sync start — starting in ${Math.max(0, msg.targetPerfTime - performance.now()).toFixed(0)}ms`, 'in');
+    startMetronome(targetAudioTime);
+}
+
+function handleBandSyncStop() {
+    logBandSyncMessage('Received sync stop', 'in');
+    if (state.isPlaying) stopMetronome();
 }
 
 function logBandSyncMessage(text, kind) {
@@ -1729,6 +1787,8 @@ function resetBandSync() {
     document.getElementById('bandSyncMessageLog').innerHTML = '';
     const clockResultEl = document.getElementById('bandSyncClockSyncResult');
     if (clockResultEl) clockResultEl.textContent = '';
+    const dot = document.getElementById('bandSyncConnectedDot');
+    if (dot) dot.classList.add('hidden');
     document.getElementById('bandSyncRolePicker').classList.remove('hidden');
     document.getElementById('bandSyncHostFlow').classList.add('hidden'); document.getElementById('bandSyncHostFlow').classList.remove('flex');
     document.getElementById('bandSyncJoinFlow').classList.add('hidden'); document.getElementById('bandSyncJoinFlow').classList.remove('flex');
@@ -2876,7 +2936,11 @@ function selectOrPlaySong(song) {
 // modulation for whichever song is currently armed, so a song selected via armSong() (which
 // deliberately skips modulation setup) gets it set up right before playback actually begins.
 function togglePlayback() {
-    if (state.isPlaying) { stopMetronome(); return; }
+    if (state.isPlaying) {
+        stopMetronome();
+        if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') broadcastBandSyncStop();
+        return;
+    }
     ensureAudio();
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === state.activeSongId);
@@ -2898,6 +2962,14 @@ function togglePlayback() {
             fireVoiceCue(introForFiring, delayedStart);
             state.cueDuck = null; // nothing was already playing before the intro — nothing to duck
         }
+        // Band Sync: if we're the host and connected to a band member, broadcast the exact
+        // start moment instead of starting immediately, so everyone (host included) lands on
+        // the same beat. Computed here, before the backing loop below, so the loop's start
+        // time lines up with the synced start rather than whatever came before it.
+        if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') {
+            const syncedStart = broadcastBandSyncStart();
+            if (syncedStart != null) delayedStart = syncedStart;
+        }
         if (song.loopTrack && song.loopTrack.key) {
             if (song.loopTrack.startMode === 'atBar' && (song.loopTrack.startBar || 1) > 1) {
                 // onMeasureComplete increments songAbsoluteBar upon ENTERING each new bar, so
@@ -2907,6 +2979,11 @@ function togglePlayback() {
                 startLoopTrack(song, delayedStart != null ? delayedStart : state.audioCtx.currentTime + 0.03);
             }
         }
+    } else if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') {
+        // No song armed, but still band-synced (e.g. testing, or just a plain click) —
+        // broadcast anyway so both phones' plain metronomes start together.
+        const syncedStart = broadcastBandSyncStart();
+        if (syncedStart != null) delayedStart = syncedStart;
     }
     startMetronome(delayedStart);
 }
