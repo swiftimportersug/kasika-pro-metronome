@@ -13,6 +13,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-storage-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <script>
@@ -284,6 +286,9 @@ tailwind.config = {
         </button>
         <button id="openCueBankBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#F472B6] hover:border-[#F472B6]/30 transition-all font-medium" title="Open voice cue bank">
             <i class="fas fa-microphone text-[10px]"></i><span class="hidden sm:inline">Cues</span>
+        </button>
+        <button id="openBandSyncBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all font-medium" title="Sync with your band's phones">
+            <i class="fas fa-people-group text-[10px]"></i><span class="hidden sm:inline">Band</span>
         </button>
         <div class="w-px h-4 bg-brd hidden sm:block"></div>
         <button id="syncSignInBtn" class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
@@ -589,6 +594,85 @@ tailwind.config = {
             </button>
             <p class="text-[10px] text-zinc-700 mt-2" id="audioRoutingStatus"></p>
         </div>
+    </div>
+</div>
+
+<div id="bandSyncView" class="fixed inset-0 z-[200] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50">
+        <div class="flex items-center gap-3 px-4 pt-3 pb-3">
+            <button id="closeBandSyncBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Back to metronome" title="Back to metronome">
+                <i class="fas fa-arrow-left text-xs"></i>
+            </button>
+            <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-200 uppercase flex-1">Band Sync <span class="text-[9px] text-zinc-600 normal-case tracking-normal">· Stage 1: pairing test</span></h2>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto px-4 py-4">
+        <!-- Role picker -->
+        <div id="bandSyncRolePicker" class="flex flex-col gap-3 max-w-sm mx-auto mt-4">
+            <p class="text-xs text-zinc-500 text-center mb-1">Both phones need to be on the same WiFi or hotspot — no internet required. One phone hosts, the other joins.</p>
+            <button type="button" id="bandSyncHostBtn" class="w-full py-4 rounded-xl bg-s2 border border-[#60A5FA]/30 text-left px-4 hover:border-[#60A5FA]/60 transition-all">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-tower-broadcast text-[#60A5FA] text-lg flex-shrink-0"></i>
+                    <div>
+                        <div class="text-sm font-semibold text-zinc-100">Host (mother phone)</div>
+                        <div class="text-[11px] text-zinc-500">I'm running the hotspot — show a code for a band member to scan</div>
+                    </div>
+                </div>
+            </button>
+            <button type="button" id="bandSyncJoinBtn" class="w-full py-4 rounded-xl bg-s2 border border-brd text-left px-4 hover:border-gold/40 transition-all">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-qrcode text-gold text-lg flex-shrink-0"></i>
+                    <div>
+                        <div class="text-sm font-semibold text-zinc-100">Join (band member)</div>
+                        <div class="text-[11px] text-zinc-500">Scan the host's code to connect</div>
+                    </div>
+                </div>
+            </button>
+        </div>
+
+        <!-- Host flow -->
+        <div id="bandSyncHostFlow" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
+            <p class="text-xs text-zinc-500 text-center">Have your band member open Band Sync → Join and scan this:</p>
+            <div id="bandSyncQrHost" class="bg-white p-3 rounded-xl"></div>
+            <button type="button" id="bandSyncHostScanReplyBtn" class="w-full py-3 rounded-xl bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30 font-semibold text-sm hover:bg-[#60A5FA]/25 transition-colors">
+                <i class="fas fa-camera mr-2"></i>Scan Their Reply Code
+            </button>
+        </div>
+
+        <!-- Join flow -->
+        <div id="bandSyncJoinFlow" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
+            <p class="text-xs text-zinc-500 text-center">Show this back to the host to finish connecting:</p>
+            <div id="bandSyncQrJoin" class="bg-white p-3 rounded-xl"></div>
+        </div>
+
+        <!-- Shared camera scan area — used both to scan the host's offer and the joiner's reply -->
+        <div id="bandSyncScanArea" class="hidden flex-col items-center gap-3 max-w-sm mx-auto mt-2">
+            <p id="bandSyncScanLabel" class="text-xs text-zinc-500 text-center">Point your camera at the code:</p>
+            <div class="rounded-xl overflow-hidden bg-black relative w-full" style="aspect-ratio:1;">
+                <video id="bandSyncScanVideo" class="w-full h-full object-cover" playsinline muted></video>
+            </div>
+            <button type="button" id="bandSyncCancelScanBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">Cancel</button>
+        </div>
+
+        <!-- Connected state (shared by both roles) -->
+        <div id="bandSyncConnected" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
+            <div class="flex items-center gap-2 text-[#34D399] text-sm font-semibold">
+                <i class="fas fa-circle-check"></i>Connected!
+            </div>
+            <div class="w-full rounded-xl bg-s2/60 border border-brd/50 p-3">
+                <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-2 block">Test Messages</label>
+                <div id="bandSyncMessageLog" class="flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-3 text-xs"></div>
+                <button type="button" id="bandSyncSendTestBtn" class="w-full py-2.5 rounded-lg bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">
+                    Send Test Ping
+                </button>
+            </div>
+            <button type="button" id="bandSyncDisconnectBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">
+                <i class="fas fa-xmark mr-1"></i>Disconnect
+            </button>
+        </div>
+
+        <p id="bandSyncStatusText" class="text-center text-[11px] text-zinc-600 mt-4 max-w-sm mx-auto"></p>
     </div>
 </div>
 
@@ -1305,6 +1389,219 @@ async function refreshAudioOutputDevices() {
         console.warn('Could not list audio devices:', err);
         if (statusEl) statusEl.textContent = 'Could not list audio devices.';
     }
+}
+
+// ===== BAND SYNC (Stage 1: peer-to-peer pairing over local WiFi/hotspot, no server) =====
+// A phone-to-phone WebRTC connection needs a brief "signaling" handshake (exchanging
+// connection details) before the two phones can talk directly — normally done through a
+// server. Since we want this to work with zero internet, the QR codes ARE the signaling
+// channel: the host's offer is shown as a QR code, the joiner scans it and shows their
+// answer back as a second QR code, and once both sides have processed each other's
+// description, the browsers connect directly over the local network.
+const bandSync = { role: null, pc: null, channel: null, scanStream: null, scanRAF: null };
+
+function createBandPeerConnection() {
+    // No STUN/TURN servers — those require internet to reach, which defeats the point.
+    // Both phones being on the same local network is enough for direct "host" candidates.
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    pc.onconnectionstatechange = () => {
+        console.log('Band Sync connection state:', pc.connectionState);
+        if (pc.connectionState === 'failed') setBandSyncStatus('Connection failed — make sure both phones are on the same WiFi/hotspot and try again.');
+        else if (pc.connectionState === 'disconnected') setBandSyncStatus('Connection lost.');
+    };
+    return pc;
+}
+
+function waitForIceGatheringComplete(pc) {
+    return new Promise(resolve => {
+        if (pc.iceGatheringState === 'complete') { resolve(); return; }
+        function check() {
+            if (pc.iceGatheringState === 'complete') {
+                pc.removeEventListener('icegatheringstatechange', check);
+                resolve();
+            }
+        }
+        pc.addEventListener('icegatheringstatechange', check);
+        setTimeout(() => { pc.removeEventListener('icegatheringstatechange', check); resolve(); }, 4000);
+    });
+}
+
+function setBandSyncStatus(msg) {
+    const el = document.getElementById('bandSyncStatusText');
+    if (el) el.textContent = msg || '';
+}
+
+function renderQrCode(containerId, text) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    try {
+        const qr = qrcode(0, 'L'); // type 0 = auto-pick smallest version that fits; L = max capacity
+        qr.addData(text);
+        qr.make();
+        container.innerHTML = qr.createSvgTag(4, 0);
+    } catch (err) {
+        console.warn('QR generation failed:', err);
+        container.innerHTML = '<p class="text-red-500 text-xs p-4 max-w-[200px]">Could not generate this code — the connection data may be too large for this network setup.</p>';
+    }
+}
+
+async function startQrScanner(label, onDecode) {
+    document.getElementById('bandSyncScanLabel').textContent = label;
+    const scanArea = document.getElementById('bandSyncScanArea');
+    scanArea.classList.remove('hidden'); scanArea.classList.add('flex');
+    const video = document.getElementById('bandSyncScanVideo');
+    try {
+        bandSync.scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    } catch (err) {
+        setBandSyncStatus('Camera access denied — cannot scan a code.');
+        stopQrScanner();
+        return;
+    }
+    video.srcObject = bandSync.scanStream;
+    await video.play();
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    function tick() {
+        if (!bandSync.scanStream) return; // scanner was stopped
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            if (code && code.data) {
+                stopQrScanner();
+                onDecode(code.data);
+                return;
+            }
+        }
+        bandSync.scanRAF = requestAnimationFrame(tick);
+    }
+    tick();
+}
+
+function stopQrScanner() {
+    if (bandSync.scanRAF) cancelAnimationFrame(bandSync.scanRAF);
+    bandSync.scanRAF = null;
+    if (bandSync.scanStream) { bandSync.scanStream.getTracks().forEach(t => t.stop()); bandSync.scanStream = null; }
+    const video = document.getElementById('bandSyncScanVideo');
+    if (video) video.srcObject = null;
+    const scanArea = document.getElementById('bandSyncScanArea');
+    if (scanArea) { scanArea.classList.add('hidden'); scanArea.classList.remove('flex'); }
+}
+
+function setupBandSyncChannel(channel) {
+    bandSync.channel = channel;
+    channel.onopen = () => {
+        setBandSyncStatus('');
+        showBandSyncConnected();
+        logBandSyncMessage('Connected — data channel open.', 'system');
+    };
+    channel.onclose = () => logBandSyncMessage('Data channel closed.', 'system');
+    channel.onmessage = e => {
+        try {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'ping') logBandSyncMessage(`Received ping: "${msg.text}"`, 'in');
+            else logBandSyncMessage(`Received: ${e.data}`, 'in');
+        } catch (err) {
+            logBandSyncMessage(`Received: ${e.data}`, 'in');
+        }
+    };
+}
+
+function logBandSyncMessage(text, kind) {
+    const log = document.getElementById('bandSyncMessageLog');
+    if (!log) return;
+    const row = document.createElement('div');
+    const colors = { in: 'text-[#2dd4bf]', out: 'text-gold', system: 'text-zinc-600' };
+    row.className = colors[kind] || 'text-zinc-400';
+    row.textContent = (kind === 'out' ? '→ ' : kind === 'in' ? '← ' : '') + text;
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+}
+
+function showBandSyncConnected() {
+    document.getElementById('bandSyncHostFlow').classList.add('hidden'); document.getElementById('bandSyncHostFlow').classList.remove('flex');
+    document.getElementById('bandSyncJoinFlow').classList.add('hidden'); document.getElementById('bandSyncJoinFlow').classList.remove('flex');
+    document.getElementById('bandSyncScanArea').classList.add('hidden'); document.getElementById('bandSyncScanArea').classList.remove('flex');
+    const connected = document.getElementById('bandSyncConnected');
+    connected.classList.remove('hidden'); connected.classList.add('flex');
+}
+
+async function startBandSyncHost() {
+    bandSync.role = 'host';
+    document.getElementById('bandSyncRolePicker').classList.add('hidden');
+    const hostFlow = document.getElementById('bandSyncHostFlow');
+    hostFlow.classList.remove('hidden'); hostFlow.classList.add('flex');
+    setBandSyncStatus('Creating connection…');
+
+    const pc = createBandPeerConnection();
+    bandSync.pc = pc;
+    setupBandSyncChannel(pc.createDataChannel('bandSync'));
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIceGatheringComplete(pc);
+
+    const payload = JSON.stringify({ t: 'offer', sdp: pc.localDescription.sdp });
+    renderQrCode('bandSyncQrHost', payload);
+    setBandSyncStatus('Code ready. Waiting for your band member to scan it and show you their reply code.');
+}
+
+function startBandSyncHostScanReply() {
+    startQrScanner('Point your camera at your band member\'s reply code:', async data => {
+        try {
+            const msg = JSON.parse(data);
+            if (msg.t !== 'answer') { setBandSyncStatus('That doesn\'t look like a reply code — try again.'); return; }
+            setBandSyncStatus('Connecting…');
+            await bandSync.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+        } catch (err) {
+            console.warn('Band Sync: failed to process reply code', err);
+            setBandSyncStatus('Could not read that code — try again.');
+        }
+    });
+}
+
+async function startBandSyncJoin() {
+    bandSync.role = 'join';
+    document.getElementById('bandSyncRolePicker').classList.add('hidden');
+    startQrScanner('Point your camera at the host\'s code:', async data => {
+        try {
+            const msg = JSON.parse(data);
+            if (msg.t !== 'offer') { setBandSyncStatus('That doesn\'t look like a host code — try again.'); return; }
+            setBandSyncStatus('Preparing reply…');
+            const pc = createBandPeerConnection();
+            bandSync.pc = pc;
+            pc.ondatachannel = e => setupBandSyncChannel(e.channel);
+
+            await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await waitForIceGatheringComplete(pc);
+
+            const payload = JSON.stringify({ t: 'answer', sdp: pc.localDescription.sdp });
+            const joinFlow = document.getElementById('bandSyncJoinFlow');
+            joinFlow.classList.remove('hidden'); joinFlow.classList.add('flex');
+            renderQrCode('bandSyncQrJoin', payload);
+            setBandSyncStatus('Show this to the host — connecting once they scan it.');
+        } catch (err) {
+            console.warn('Band Sync: failed to process host code', err);
+            setBandSyncStatus('Could not read that code — try again.');
+        }
+    });
+}
+
+function resetBandSync() {
+    stopQrScanner();
+    if (bandSync.channel) { try { bandSync.channel.close(); } catch (err) {} bandSync.channel = null; }
+    if (bandSync.pc) { try { bandSync.pc.close(); } catch (err) {} bandSync.pc = null; }
+    bandSync.role = null;
+    setBandSyncStatus('');
+    document.getElementById('bandSyncMessageLog').innerHTML = '';
+    document.getElementById('bandSyncRolePicker').classList.remove('hidden');
+    document.getElementById('bandSyncHostFlow').classList.add('hidden'); document.getElementById('bandSyncHostFlow').classList.remove('flex');
+    document.getElementById('bandSyncJoinFlow').classList.add('hidden'); document.getElementById('bandSyncJoinFlow').classList.remove('flex');
+    document.getElementById('bandSyncConnected').classList.add('hidden'); document.getElementById('bandSyncConnected').classList.remove('flex');
 }
 
 // ---- Sound kits ----
@@ -4367,6 +4664,7 @@ function applyViewState(view) {
     const notesEl = document.getElementById('notesView');
     const editorEl = document.getElementById('noteEditorView');
     const cueBankEl = document.getElementById('cueBankView');
+    const bandSyncEl = document.getElementById('bandSyncView');
 
     if (target === 'setlists') { setlistsEl.classList.remove('hidden'); setlistsEl.classList.add('flex'); }
     else { setlistsEl.classList.add('hidden'); setlistsEl.classList.remove('flex'); }
@@ -4380,6 +4678,12 @@ function applyViewState(view) {
 
     if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); refreshAudioOutputDevices(); }
     else { cueBankEl.classList.add('hidden'); cueBankEl.classList.remove('flex'); }
+
+    if (target === 'bandsync') { bandSyncEl.classList.remove('hidden'); bandSyncEl.classList.add('flex'); }
+    else {
+        if (bandSyncEl.classList.contains('flex')) resetBandSync(); // leaving mid-pairing shouldn't leave a stray camera/connection running
+        bandSyncEl.classList.add('hidden'); bandSyncEl.classList.remove('flex');
+    }
 }
 
 window.addEventListener('popstate', e => {
@@ -4390,6 +4694,8 @@ function openSetlistsView() { pushView('setlists'); applyViewState('setlists'); 
 function closeSetlistsView() { history.back(); }
 function openCueBankView() { pushView('cuebank'); applyViewState('cuebank'); }
 function closeCueBankView() { history.back(); }
+function openBandSyncView() { pushView('bandsync'); applyViewState('bandsync'); }
+function closeBandSyncView() { history.back(); }
 
 // Routes every MANUAL tempo change (buttons, wheel drag/scroll, tap tempo, keyboard) through
 // here. If a song's modulation sections are actively playing, the change is applied
@@ -4432,6 +4738,21 @@ function setupEvents() {
     document.getElementById('openSetlistsBtn').addEventListener('click', openSetlistsView);
     document.getElementById('closeSetlistsBtn').addEventListener('click', closeSetlistsView);
     document.getElementById('mainSearchBtn').addEventListener('click', openSearchModal);
+
+    // ---- Band Sync ----
+    document.getElementById('openBandSyncBtn').addEventListener('click', openBandSyncView);
+    document.getElementById('closeBandSyncBtn').addEventListener('click', closeBandSyncView);
+    document.getElementById('bandSyncHostBtn').addEventListener('click', startBandSyncHost);
+    document.getElementById('bandSyncJoinBtn').addEventListener('click', startBandSyncJoin);
+    document.getElementById('bandSyncHostScanReplyBtn').addEventListener('click', startBandSyncHostScanReply);
+    document.getElementById('bandSyncCancelScanBtn').addEventListener('click', () => { stopQrScanner(); resetBandSync(); });
+    document.getElementById('bandSyncDisconnectBtn').addEventListener('click', resetBandSync);
+    document.getElementById('bandSyncSendTestBtn').addEventListener('click', () => {
+        if (!bandSync.channel || bandSync.channel.readyState !== 'open') { setBandSyncStatus('Not connected.'); return; }
+        const text = `ping from ${bandSync.role} @ ${new Date().toLocaleTimeString()}`;
+        bandSync.channel.send(JSON.stringify({ type: 'ping', text }));
+        logBandSyncMessage(`Sent ping: "${text}"`, 'out');
+    });
 
     // ---- Voice Cue Bank ----
     document.getElementById('openCueBankBtn').addEventListener('click', openCueBankView);
