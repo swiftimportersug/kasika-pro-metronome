@@ -15,6 +15,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-storage-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <script>
@@ -1431,6 +1432,36 @@ function setBandSyncStatus(msg) {
     if (el) el.textContent = msg || '';
 }
 
+// Compact payload encoding for the QR codes: no JSON wrapper (JSON would escape every
+// newline in the SDP as two characters, "\n", nearly doubling that overhead for no reason),
+// and DEFLATE-compressed since SDP text is highly repetitive and compresses well. This
+// meaningfully shrinks the data, which means a lower-density, easier-to-scan QR code.
+function encodeBandSyncPayload(type, sdp) {
+    const raw = (type === 'offer' ? 'O' : 'A') + sdp;
+    try {
+        const compressed = pako.deflate(raw);
+        let binary = '';
+        for (let i = 0; i < compressed.length; i++) binary += String.fromCharCode(compressed[i]);
+        return 'Z' + btoa(binary);
+    } catch (err) {
+        console.warn('Compression failed, sending uncompressed:', err);
+        return raw;
+    }
+}
+
+function decodeBandSyncPayload(data) {
+    let raw;
+    if (data[0] === 'Z') {
+        const binary = atob(data.slice(1));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        raw = pako.inflate(bytes, { to: 'string' });
+    } else {
+        raw = data;
+    }
+    return { t: raw[0] === 'O' ? 'offer' : 'answer', sdp: raw.slice(1) };
+}
+
 function renderQrCode(containerId, text) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -1439,7 +1470,7 @@ function renderQrCode(containerId, text) {
         const qr = qrcode(0, 'L'); // type 0 = auto-pick smallest version that fits; L = max capacity
         qr.addData(text);
         qr.make();
-        container.innerHTML = qr.createSvgTag(4, 0);
+        container.innerHTML = qr.createSvgTag(5, 0);
     } catch (err) {
         console.warn('QR generation failed:', err);
         container.innerHTML = '<p class="text-red-500 text-xs p-4 max-w-[200px]">Could not generate this code — the connection data may be too large for this network setup.</p>';
@@ -1543,15 +1574,15 @@ async function startBandSyncHost() {
     await pc.setLocalDescription(offer);
     await waitForIceGatheringComplete(pc);
 
-    const payload = JSON.stringify({ t: 'offer', sdp: pc.localDescription.sdp });
+    const payload = encodeBandSyncPayload('offer', pc.localDescription.sdp);
     renderQrCode('bandSyncQrHost', payload);
-    setBandSyncStatus('Code ready. Waiting for your band member to scan it and show you their reply code.');
+    setBandSyncStatus(`Code ready (${payload.length} characters). Waiting for your band member to scan it and show you their reply code.`);
 }
 
 function startBandSyncHostScanReply() {
     startQrScanner('Point your camera at your band member\'s reply code:', async data => {
         try {
-            const msg = JSON.parse(data);
+            const msg = decodeBandSyncPayload(data);
             if (msg.t !== 'answer') { setBandSyncStatus('That doesn\'t look like a reply code — try again.'); return; }
             setBandSyncStatus('Connecting…');
             await bandSync.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
@@ -1567,7 +1598,7 @@ async function startBandSyncJoin() {
     document.getElementById('bandSyncRolePicker').classList.add('hidden');
     startQrScanner('Point your camera at the host\'s code:', async data => {
         try {
-            const msg = JSON.parse(data);
+            const msg = decodeBandSyncPayload(data);
             if (msg.t !== 'offer') { setBandSyncStatus('That doesn\'t look like a host code — try again.'); return; }
             setBandSyncStatus('Preparing reply…');
             const pc = createBandPeerConnection();
@@ -1579,7 +1610,7 @@ async function startBandSyncJoin() {
             await pc.setLocalDescription(answer);
             await waitForIceGatheringComplete(pc);
 
-            const payload = JSON.stringify({ t: 'answer', sdp: pc.localDescription.sdp });
+            const payload = encodeBandSyncPayload('answer', pc.localDescription.sdp);
             const joinFlow = document.getElementById('bandSyncJoinFlow');
             joinFlow.classList.remove('hidden'); joinFlow.classList.add('flex');
             renderQrCode('bandSyncQrJoin', payload);
