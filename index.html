@@ -636,9 +636,6 @@ tailwind.config = {
         <div id="bandSyncHostFlow" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
             <p class="text-xs text-zinc-500 text-center">Have your band member open Band Sync → Join and scan this:</p>
             <div id="bandSyncQrHost" class="bg-white p-3 rounded-xl w-full mx-auto" style="max-width:min(78vw,320px); aspect-ratio:1;"></div>
-            <button type="button" id="bandSyncHostScanReplyBtn" class="w-full py-3 rounded-xl bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30 font-semibold text-sm hover:bg-[#60A5FA]/25 transition-colors">
-                <i class="fas fa-camera mr-2"></i>Scan Their Reply Code
-            </button>
         </div>
 
         <!-- Join flow -->
@@ -667,6 +664,13 @@ tailwind.config = {
                 <button type="button" id="bandSyncSendTestBtn" class="w-full py-2.5 rounded-lg bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">
                     Send Test Ping
                 </button>
+            </div>
+            <div class="w-full rounded-xl bg-s2/60 border border-brd/50 p-3">
+                <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-2 block">Clock Sync <span class="text-zinc-700 normal-case">(Stage 2)</span></label>
+                <button type="button" id="bandSyncClockSyncBtn" class="w-full py-2.5 rounded-lg bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30 font-semibold text-sm hover:bg-[#60A5FA]/25 transition-colors">
+                    Measure Clock Offset
+                </button>
+                <p class="text-[11px] text-zinc-500 mt-2 text-center" id="bandSyncClockSyncResult"></p>
             </div>
             <button type="button" id="bandSyncDisconnectBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">
                 <i class="fas fa-xmark mr-1"></i>Disconnect
@@ -1399,7 +1403,7 @@ async function refreshAudioOutputDevices() {
 // channel: the host's offer is shown as a QR code, the joiner scans it and shows their
 // answer back as a second QR code, and once both sides have processed each other's
 // description, the browsers connect directly over the local network.
-const bandSync = { role: null, pc: null, channel: null, scanStream: null, scanRAF: null };
+const bandSync = { role: null, pc: null, channel: null, scanStream: null, scanRAF: null, clockOffset: null };
 
 function createBandPeerConnection() {
     // No STUN/TURN servers — those require internet to reach, which defeats the point.
@@ -1567,14 +1571,69 @@ function setupBandSyncChannel(channel) {
     };
     channel.onclose = () => logBandSyncMessage('Data channel closed.', 'system');
     channel.onmessage = e => {
-        try {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'ping') logBandSyncMessage(`Received ping: "${msg.text}"`, 'in');
-            else logBandSyncMessage(`Received: ${e.data}`, 'in');
-        } catch (err) {
-            logBandSyncMessage(`Received: ${e.data}`, 'in');
+        let msg;
+        try { msg = JSON.parse(e.data); } catch (err) { logBandSyncMessage(`Received: ${e.data}`, 'in'); return; }
+        if (msg.type === 'ping') { logBandSyncMessage(`Received ping: "${msg.text}"`, 'in'); return; }
+        if (msg.type === 'clocksync_ping') {
+            // Respond immediately with our own receive/send timestamps — whichever side
+            // gets a ping always replies, regardless of who initiated the sync round.
+            const t1 = performance.now();
+            channel.send(JSON.stringify({ type: 'clocksync_pong', seq: msg.seq, t0: msg.t0, t1, t2: performance.now() }));
+            return;
         }
+        if (msg.type === 'clocksync_pong') return; // handled by the per-round listener in sendClockSyncPing
+        logBandSyncMessage(`Received: ${e.data}`, 'in');
     };
+}
+
+// ===== BAND SYNC — Stage 2: clock synchronization =====
+// NTP-style offset measurement over the data channel: send a timestamped ping, the other
+// side stamps its receive/send times and echoes them back, and from the round trip we can
+// estimate both the network latency and the offset between the two phones' clocks. Local
+// WiFi round-trips are typically 1-5ms, so this can be quite precise — we take several
+// rounds and trust the one with the lowest round-trip time most, since it had the least
+// chance of extra queuing/jitter distorting the estimate.
+function sendClockSyncPing() {
+    return new Promise(resolve => {
+        if (!bandSync.channel || bandSync.channel.readyState !== 'open') { resolve(null); return; }
+        const seq = Math.random().toString(36).slice(2);
+        const t0 = performance.now();
+        let done = false;
+        function onMessage(e) {
+            let msg;
+            try { msg = JSON.parse(e.data); } catch (err) { return; }
+            if (msg.type === 'clocksync_pong' && msg.seq === seq && !done) {
+                done = true;
+                bandSync.channel.removeEventListener('message', onMessage);
+                const t3 = performance.now();
+                const rtt = (t3 - t0) - (msg.t2 - msg.t1);
+                resolve({ rtt, offset: msg.t1 - (t0 + rtt / 2) });
+            }
+        }
+        bandSync.channel.addEventListener('message', onMessage);
+        bandSync.channel.send(JSON.stringify({ type: 'clocksync_ping', seq, t0 }));
+        setTimeout(() => {
+            if (done) return;
+            done = true;
+            bandSync.channel.removeEventListener('message', onMessage);
+            resolve(null);
+        }, 1500);
+    });
+}
+
+async function runClockSync() {
+    const rounds = 10;
+    const samples = [];
+    for (let i = 0; i < rounds; i++) {
+        const sample = await sendClockSyncPing();
+        if (sample) samples.push(sample);
+        await new Promise(r => setTimeout(r, 40));
+    }
+    if (!samples.length) return null;
+    samples.sort((a, b) => a.rtt - b.rtt);
+    const best = samples[0];
+    bandSync.clockOffset = best.offset; // adds to OUR clock reading to get THEIR equivalent clock reading
+    return { ...best, sampleCount: samples.length };
 }
 
 function logBandSyncMessage(text, kind) {
@@ -1613,7 +1672,8 @@ async function startBandSyncHost() {
 
     const payload = encodeBandSyncPayload('offer', pc.localDescription.sdp);
     renderQrCode('bandSyncQrHost', payload);
-    setBandSyncStatus(`Code ready (${payload.length} characters). Waiting for your band member to scan it and show you their reply code.`);
+    setBandSyncStatus(`Code ready (${payload.length} characters). Waiting for your band member to scan it, then automatically watching for their reply…`);
+    startBandSyncHostScanReply();
 }
 
 function startBandSyncHostScanReply() {
@@ -1664,8 +1724,11 @@ function resetBandSync() {
     if (bandSync.channel) { try { bandSync.channel.close(); } catch (err) {} bandSync.channel = null; }
     if (bandSync.pc) { try { bandSync.pc.close(); } catch (err) {} bandSync.pc = null; }
     bandSync.role = null;
+    bandSync.clockOffset = null;
     setBandSyncStatus('');
     document.getElementById('bandSyncMessageLog').innerHTML = '';
+    const clockResultEl = document.getElementById('bandSyncClockSyncResult');
+    if (clockResultEl) clockResultEl.textContent = '';
     document.getElementById('bandSyncRolePicker').classList.remove('hidden');
     document.getElementById('bandSyncHostFlow').classList.add('hidden'); document.getElementById('bandSyncHostFlow').classList.remove('flex');
     document.getElementById('bandSyncJoinFlow').classList.add('hidden'); document.getElementById('bandSyncJoinFlow').classList.remove('flex');
@@ -4812,7 +4875,6 @@ function setupEvents() {
     document.getElementById('closeBandSyncBtn').addEventListener('click', closeBandSyncView);
     document.getElementById('bandSyncHostBtn').addEventListener('click', startBandSyncHost);
     document.getElementById('bandSyncJoinBtn').addEventListener('click', startBandSyncJoin);
-    document.getElementById('bandSyncHostScanReplyBtn').addEventListener('click', startBandSyncHostScanReply);
     document.getElementById('bandSyncCancelScanBtn').addEventListener('click', () => { stopQrScanner(); resetBandSync(); });
     document.getElementById('bandSyncDisconnectBtn').addEventListener('click', resetBandSync);
     document.getElementById('bandSyncSendTestBtn').addEventListener('click', () => {
@@ -4820,6 +4882,21 @@ function setupEvents() {
         const text = `ping from ${bandSync.role} @ ${new Date().toLocaleTimeString()}`;
         bandSync.channel.send(JSON.stringify({ type: 'ping', text }));
         logBandSyncMessage(`Sent ping: "${text}"`, 'out');
+    });
+    document.getElementById('bandSyncClockSyncBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('bandSyncClockSyncBtn');
+        const resultEl = document.getElementById('bandSyncClockSyncResult');
+        if (!bandSync.channel || bandSync.channel.readyState !== 'open') { resultEl.textContent = 'Not connected.'; return; }
+        btn.disabled = true; btn.textContent = 'Measuring…';
+        resultEl.textContent = '';
+        const result = await runClockSync();
+        btn.disabled = false; btn.textContent = 'Measure Clock Offset';
+        if (result) {
+            resultEl.textContent = `Offset: ${result.offset.toFixed(2)}ms · Best round-trip: ${result.rtt.toFixed(2)}ms (${result.sampleCount}/10 rounds succeeded)`;
+            logBandSyncMessage(`Clock synced — offset ${result.offset.toFixed(2)}ms, best RTT ${result.rtt.toFixed(2)}ms`, 'system');
+        } else {
+            resultEl.textContent = 'Could not measure — no responses received.';
+        }
     });
 
     // ---- Voice Cue Bank ----
