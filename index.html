@@ -1477,13 +1477,26 @@ function renderQrCode(containerId, text) {
     }
 }
 
+async function getBarcodeDetectorIfSupported() {
+    if (!('BarcodeDetector' in window)) return null;
+    try {
+        const formats = await BarcodeDetector.getSupportedFormats();
+        if (!formats.includes('qr_code')) return null;
+        return new BarcodeDetector({ formats: ['qr_code'] });
+    } catch (err) {
+        return null;
+    }
+}
+
 async function startQrScanner(label, onDecode) {
     document.getElementById('bandSyncScanLabel').textContent = label;
     const scanArea = document.getElementById('bandSyncScanArea');
     scanArea.classList.remove('hidden'); scanArea.classList.add('flex');
     const video = document.getElementById('bandSyncScanVideo');
     try {
-        bandSync.scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        bandSync.scanStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
     } catch (err) {
         setBandSyncStatus('Camera access denied — cannot scan a code.');
         stopQrScanner();
@@ -1491,20 +1504,38 @@ async function startQrScanner(label, onDecode) {
     }
     video.srcObject = bandSync.scanStream;
     await video.play();
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    function tick() {
-        if (!bandSync.scanStream) return; // scanner was stopped
+
+    // Prefer the OS's own barcode detector (e.g. Google Play Services on Android) — the
+    // same underlying tech most dedicated scanner apps use, and far more robust than a
+    // pure-JS decoder, especially for scanning a code off another phone's screen (glare,
+    // moire, angle). Falls back to jsQR only where native detection isn't available.
+    const detector = await getBarcodeDetectorIfSupported();
+    let canvas, ctx;
+    if (!detector) { canvas = document.createElement('canvas'); ctx = canvas.getContext('2d', { willReadFrequently: true }); }
+
+    let stopped = false;
+    async function tick() {
+        if (!bandSync.scanStream || stopped) return;
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
-            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(imageData.data, imageData.width, imageData.height);
-            if (code && code.data) {
-                stopQrScanner();
-                onDecode(code.data);
-                return;
-            }
+            try {
+                let result = null;
+                if (detector) {
+                    const barcodes = await detector.detect(video);
+                    if (barcodes && barcodes.length) result = barcodes[0].rawValue;
+                } else {
+                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imageData.data, imageData.width, imageData.height);
+                    if (code && code.data) result = code.data;
+                }
+                if (result) {
+                    stopped = true;
+                    stopQrScanner();
+                    onDecode(result);
+                    return;
+                }
+            } catch (err) { /* keep trying on the next frame */ }
         }
         bandSync.scanRAF = requestAnimationFrame(tick);
     }
