@@ -4889,7 +4889,11 @@ function applyViewState(view) {
 
     if (target === 'bandsync') { bandSyncEl.classList.remove('hidden'); bandSyncEl.classList.add('flex'); }
     else {
-        if (bandSyncEl.classList.contains('flex')) resetBandSync(); // leaving mid-pairing shouldn't leave a stray camera/connection running
+        // Only clean up if leaving mid-pairing (camera open, no connection established yet).
+        // A successfully connected session must survive navigating away — the whole point of
+        // Stage 3 is triggering it from the main Play button, which requires leaving this screen.
+        const isConnected = bandSync.channel && bandSync.channel.readyState === 'open';
+        if (bandSyncEl.classList.contains('flex') && !isConnected) resetBandSync();
         bandSyncEl.classList.add('hidden'); bandSyncEl.classList.remove('flex');
     }
 }
