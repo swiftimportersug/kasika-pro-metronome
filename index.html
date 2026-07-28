@@ -677,9 +677,16 @@ tailwind.config = {
                 <label class="flex items-center justify-between gap-3 cursor-pointer">
                     <span class="text-xs text-zinc-300">
                         Follow host's song sections
-                        <span class="block text-[10px] text-zinc-600 mt-0.5">Off: play your own arrangement, just synced in tempo/time.<br>On: follow the host's verse/chorus/bridge changes live — your own reminder cues still play.</span>
+                        <span class="block text-[10px] text-zinc-600 mt-0.5">Off: play your own arrangement, just synced in tempo/time.<br>On: follow the host's verse/chorus/bridge changes live.</span>
                     </span>
                     <input type="checkbox" id="bandSyncFollowToggle" class="flex-shrink-0" style="accent-color:#60A5FA; width:18px; height:18px;">
+                </label>
+                <label id="bandSyncUseHostCuesRow" class="hidden items-center justify-between gap-3 cursor-pointer pt-3 mt-3 border-t border-brd/30">
+                    <span class="text-xs text-zinc-300">
+                        Use host's reminder cues
+                        <span class="block text-[10px] text-zinc-600 mt-0.5">Off (default): your own reminder/count-in choices per section.<br>On: match the host's cue choices — needs a phrase with the same name imported on this phone too.</span>
+                    </span>
+                    <input type="checkbox" id="bandSyncUseHostCuesToggle" class="flex-shrink-0" style="accent-color:#60A5FA; width:18px; height:18px;">
                 </label>
             </div>
             <button type="button" id="bandSyncDisconnectBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">
@@ -1163,7 +1170,7 @@ const state = {
     cueDuck: null,
     activeLoopNodes: null, songAbsoluteBar: 0, pendingLoopStartBar: null,
     houseAudioCtx: null, houseBus: null, stageOutputDeviceId: '', houseOutputDeviceId: '',
-    bandSyncFollowSections: false,
+    bandSyncFollowSections: false, bandSyncUseHostCues: false,
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -1354,11 +1361,15 @@ const BAND_SYNC_PREFS_KEY = 'kasika-band-sync-prefs';
 function loadBandSyncPrefs() {
     try {
         const raw = localStorage.getItem(BAND_SYNC_PREFS_KEY);
-        if (raw) state.bandSyncFollowSections = !!JSON.parse(raw).followSections;
-    } catch (err) { /* ignore, default stays false */ }
+        if (raw) {
+            const d = JSON.parse(raw);
+            state.bandSyncFollowSections = !!d.followSections;
+            state.bandSyncUseHostCues = !!d.useHostCues;
+        }
+    } catch (err) { /* ignore, defaults stay false */ }
 }
 function saveBandSyncPrefs() {
-    localStorage.setItem(BAND_SYNC_PREFS_KEY, JSON.stringify({ followSections: state.bandSyncFollowSections }));
+    localStorage.setItem(BAND_SYNC_PREFS_KEY, JSON.stringify({ followSections: state.bandSyncFollowSections, useHostCues: state.bandSyncUseHostCues }));
 }
 function loadAudioRoutingPrefs() {
     try {
@@ -1611,6 +1622,7 @@ function setupBandSyncChannel(channel) {
         if (msg.type === 'clocksync_pong') return; // handled by the per-round listener in sendClockSyncPing
         if (msg.type === 'sync_start') { handleBandSyncStart(msg); return; }
         if (msg.type === 'sync_stop') { handleBandSyncStop(); return; }
+        if (msg.type === 'sync_ack') { handleBandSyncAck(msg); return; }
         logBandSyncMessage(`Received: ${e.data}`, 'in');
     };
 }
@@ -1683,7 +1695,8 @@ function extractSongSectionStructure(song) {
     if (!song) return null;
     return {
         bpm: song.bpm, timeSig: song.timeSig, modulationLoop: !!song.modulationLoop,
-        modulations: (song.modulations || []).map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig })),
+        introCue: song.introCue || null,
+        modulations: (song.modulations || []).map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, cue: m.cue || null })),
     };
 }
 
@@ -1709,6 +1722,7 @@ function broadcastBandSyncStop() {
 
 function buildFollowHostSong(hostSections, ownSong) {
     const ownMods = ownSong ? (ownSong.modulations || []) : [];
+    const useHostCues = state.bandSyncUseHostCues;
     return {
         bpm: hostSections.bpm, timeSig: hostSections.timeSig,
         beatTones: ownSong ? ownSong.beatTones : null,
@@ -1718,7 +1732,10 @@ function buildFollowHostSong(hostSections, ownSong) {
             return {
                 bars: m.bars, extraBeats: m.extraBeats, bpm: m.bpm, timeSig: m.timeSig,
                 beatTones: ownM ? ownM.beatTones : null,
-                cue: ownM ? ownM.cue : null, // this musician's own reminder cues, at the matching section
+                // The host's cue is only USABLE here because it carries reminderName, resolved
+                // locally against this phone's own Cue Bank — a matching clip must still be
+                // imported on this device for it to actually play.
+                cue: useHostCues ? (m.cue || null) : (ownM ? ownM.cue : null),
             };
         }),
     };
@@ -1743,20 +1760,40 @@ function handleBandSyncStart(msg) {
         stopSongModulation(true); // plain tempo/time-sig match only, no section following
     }
 
-    // Our own intro cue (if we have one configured) still fires — anchored to the same
-    // shared downbeat, so each musician keeps their own reminder/count-in.
-    if (ownSong && ownSong.introCue && (ownSong.introCue.reminderId || ownSong.introCue.countIn)) {
-        fireVoiceCue({ bpm: state.bpm, timeSig: state.timeSig, cue: { ...ownSong.introCue } }, targetAudioTime);
+    // Intro cue: the host's (if "use host's cues" is on and they sent one) or our own —
+    // either way it's resolved against THIS phone's local Cue Bank by name.
+    const introCueToFire = (state.bandSyncUseHostCues && msg.sections && msg.sections.introCue) ? msg.sections.introCue : (ownSong && ownSong.introCue);
+    if (introCueToFire && (introCueToFire.reminderId || introCueToFire.countIn)) {
+        fireVoiceCue({ bpm: state.bpm, timeSig: state.timeSig, cue: { ...introCueToFire } }, targetAudioTime);
         state.cueDuck = null;
     }
 
-    logBandSyncMessage(`Received sync start — starting in ${Math.max(0, msg.targetPerfTime - performance.now()).toFixed(0)}ms`, 'in');
+    const lateByMs = performance.now() - msg.targetPerfTime;
+    logBandSyncMessage(`Received sync start — starting in ${Math.max(0, -lateByMs).toFixed(0)}ms`, 'in');
     startMetronome(targetAudioTime);
+    if (bandSync.channel && bandSync.channel.readyState === 'open') {
+        bandSync.channel.send(JSON.stringify({ type: 'sync_ack', lateByMs }));
+    }
+    if (lateByMs > 0) logBandSyncMessage(`⚠ Start command arrived ${lateByMs.toFixed(0)}ms late`, 'system');
 }
 
 function handleBandSyncStop() {
     logBandSyncMessage('Received sync stop', 'in');
     if (state.isPlaying) stopMetronome();
+}
+
+// The connected phone reports back how its actual start compared to the intended target —
+// if the start command arrived AFTER the target time had already passed, that specific start
+// definitely landed out of sync. Surfaced as a toast so it's visible even after navigating
+// back to the main screen, not just while on the Band Sync view.
+function handleBandSyncAck(msg) {
+    const lateBy = msg.lateByMs || 0;
+    if (lateBy > 0) {
+        logBandSyncMessage(`⚠ Band member started ${lateBy.toFixed(0)}ms late — that take is likely out of sync`, 'system');
+        showToast(`⚠ Sync issue: band member started ~${lateBy.toFixed(0)}ms late — consider restarting`);
+    } else {
+        logBandSyncMessage(`✓ Band member synced (${(-lateBy).toFixed(0)}ms to spare)`, 'system');
+    }
 }
 
 function logBandSyncMessage(text, kind) {
@@ -1777,6 +1814,10 @@ function showBandSyncConnected() {
     const connected = document.getElementById('bandSyncConnected');
     connected.classList.remove('hidden'); connected.classList.add('flex');
     document.getElementById('bandSyncFollowToggle').checked = state.bandSyncFollowSections;
+    document.getElementById('bandSyncUseHostCuesToggle').checked = state.bandSyncUseHostCues;
+    const cuesRow = document.getElementById('bandSyncUseHostCuesRow');
+    if (state.bandSyncFollowSections) { cuesRow.classList.remove('hidden'); cuesRow.classList.add('flex'); }
+    else { cuesRow.classList.add('hidden'); cuesRow.classList.remove('flex'); }
 }
 
 async function startBandSyncHost() {
@@ -3011,17 +3052,23 @@ async function togglePlayback() {
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === state.activeSongId);
     const isBandSyncing = bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open';
+    let leadMs = BAND_SYNC_LEAD_MS;
     if (isBandSyncing) {
         // Re-measure the clock offset right before every synced start — a manual measurement
         // from minutes earlier can drift, and this keeps every start using a fresh reading
         // instead of relying on the musician remembering to re-sync themselves.
-        await runClockSync(4);
+        const resyncResult = await runClockSync(4);
+        if (resyncResult) {
+            // Adapt the margin to what the network is doing RIGHT NOW — if this round's RTT is
+            // unusually high, a fixed margin might not be enough; scale up accordingly.
+            leadMs = Math.max(BAND_SYNC_LEAD_MS, resyncResult.rtt * 20 + 200);
+        }
     }
     // Base lead-in before the true downbeat: minimal for a normal local start, or a network-
     // safe margin when band-synced (needs time to reach the connected phone). Any intro
     // pre-roll duration STACKS ON TOP of this, rather than the two competing — that mismatch
     // was exactly what threw the count-in out of sync with the actual beats.
-    const baseLeadSec = isBandSyncing ? (BAND_SYNC_LEAD_MS / 1000) : 0.03;
+    const baseLeadSec = isBandSyncing ? (leadMs / 1000) : 0.03;
     let delayedStart = state.audioCtx.currentTime + baseLeadSec;
     state.songAbsoluteBar = 0;
     state.pendingLoopStartBar = null;
@@ -5179,6 +5226,13 @@ function setupEvents() {
     });
     document.getElementById('bandSyncFollowToggle').addEventListener('change', e => {
         state.bandSyncFollowSections = e.target.checked;
+        saveBandSyncPrefs();
+        const cuesRow = document.getElementById('bandSyncUseHostCuesRow');
+        if (state.bandSyncFollowSections) { cuesRow.classList.remove('hidden'); cuesRow.classList.add('flex'); }
+        else { cuesRow.classList.add('hidden'); cuesRow.classList.remove('flex'); }
+    });
+    document.getElementById('bandSyncUseHostCuesToggle').addEventListener('change', e => {
+        state.bandSyncUseHostCues = e.target.checked;
         saveBandSyncPrefs();
     });
 
