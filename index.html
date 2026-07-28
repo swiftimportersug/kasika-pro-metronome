@@ -868,7 +868,7 @@ tailwind.config = {
 
             <div class="flex gap-3 mt-3 sticky bottom-0 z-20 bg-s2" style="margin: 0 -28px; padding: 14px 28px 20px; box-shadow: 0 -8px 12px -4px rgba(0,0,0,0.3);">
                 <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
-                <button type="button" onclick="hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+                <button type="button" onclick="stopLoopPreview(); hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
             </div>
         </form>
     </div>
@@ -1819,9 +1819,13 @@ function handleBandSyncStop() {
 function handleBandSyncAck(msg, peer) {
     const lateBy = msg.lateByMs || 0;
     const label = (peer && peer.label) || 'Band member';
+    const RISKY_MARGIN_MS = 20; // even a start that "made it" with less than this much buffer is worth flagging
     if (lateBy > 0) {
         logBandSyncMessage(`⚠ ${label} started ${lateBy.toFixed(0)}ms late — that take is likely out of sync`, 'system');
         showBandSyncSyncAlert(`⚠ Sync issue: ${label} started ~${lateBy.toFixed(0)}ms late — consider restarting`);
+    } else if (-lateBy < RISKY_MARGIN_MS) {
+        logBandSyncMessage(`⚠ ${label} started with only ${(-lateBy).toFixed(0)}ms of margin — risk of audible mismatch`, 'system');
+        showBandSyncSyncAlert(`⚠ Tight margin: ${label} had only ~${(-lateBy).toFixed(0)}ms of buffer — sync may be slightly off`);
     } else {
         logBandSyncMessage(`✓ ${label} synced (${(-lateBy).toFixed(0)}ms to spare)`, 'system');
     }
@@ -3175,7 +3179,7 @@ async function togglePlayback() {
         // start using a fresh reading instead of relying on the musicians remembering to
         // re-sync themselves. Run in parallel since each peer's exchange is independent.
         const peers = getConnectedPeers();
-        const resyncResults = await Promise.all(peers.map(p => runClockSync(p, 4)));
+        const resyncResults = await Promise.all(peers.map(p => runClockSync(p, 8)));
         const worstRtt = Math.max(0, ...resyncResults.filter(Boolean).map(r => r.rtt));
         if (worstRtt > 0) {
             // Adapt the margin to what the network is doing RIGHT NOW, and to the slowest
@@ -4213,19 +4217,17 @@ function renderLoopTrackHtml() {
     return `${fileInputHtml}
         <div class="flex items-center justify-between gap-2">
             <span class="text-sm text-zinc-200 truncate min-w-0"><i class="fas fa-file-audio text-[#60A5FA] mr-1.5"></i>${escHtml(lt.fileName || 'Loop file')}</span>
-            <div class="flex items-center gap-1.5 flex-shrink-0">
-                <button type="button" id="loopTrackPreviewBtn" class="w-7 h-7 rounded-md bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/25 hover:bg-[#60A5FA]/25 flex items-center justify-center" title="Preview"><i class="fas fa-play text-[10px] ml-0.5"></i></button>
-                <button type="button" id="loopTrackRemoveBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex items-center justify-center" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
-            </div>
+            <button type="button" id="loopTrackRemoveBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex-shrink-0 flex items-center justify-center" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
         </div>
         <div class="flex flex-col gap-1.5">
             <label class="text-[10px] text-zinc-600 uppercase tracking-wider">Trim (drag the edges)</label>
+            <canvas id="loopRulerCanvas" class="w-full block" style="height:16px;"></canvas>
             <div id="loopWaveformWrap" class="relative rounded-lg overflow-hidden bg-s3 touch-none select-none" style="height:72px;">
                 <canvas id="loopWaveformCanvas" class="w-full h-full block"></canvas>
                 <div id="loopTrimDimLeft" class="absolute top-0 bottom-0 left-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
                 <div id="loopTrimDimRight" class="absolute top-0 bottom-0 right-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
-                <div id="loopTrimHandleStart" class="absolute top-0 bottom-0 bg-[#60A5FA] cursor-ew-resize touch-none" style="width:8px; left:0%; margin-left:-4px;"></div>
-                <div id="loopTrimHandleEnd" class="absolute top-0 bottom-0 bg-[#60A5FA] cursor-ew-resize touch-none" style="width:8px; left:100%; margin-left:-4px;"></div>
+                <div id="loopTrimHandleStart" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:8px; left:0%; margin-left:-4px;"></div>
+                <div id="loopTrimHandleEnd" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:8px; left:100%; margin-left:-4px;"></div>
             </div>
             <div class="flex items-center justify-between text-[10px] text-zinc-500">
                 <span id="loopTrimStartLabel">0.00s</span>
@@ -4233,7 +4235,7 @@ function renderLoopTrackHtml() {
                 <span id="loopTrimEndLabel">0.00s</span>
             </div>
             <button type="button" id="loopTrimPreviewBtn" class="w-full py-2 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xs hover:border-[#60A5FA]/40 hover:text-[#60A5FA] transition-colors">
-                <i class="fas fa-play mr-1.5"></i>Preview Trimmed Section
+                <i class="fas fa-play mr-1.5" id="loopTrimPreviewIcon"></i><span id="loopTrimPreviewLabel">Preview Trimmed Section (loops)</span>
             </button>
         </div>
         <div class="flex items-center gap-3 flex-wrap">
@@ -4307,6 +4309,39 @@ async function renderLoopWaveform() {
     }
     updateLoopTrimHandlesUI();
     setupLoopTrimDragHandlers();
+    drawLoopRuler(buf.duration);
+}
+
+// Draws tick marks at each beat across the loop's duration, using the song currently being
+// edited (its BPM and time signature) — a longer tick on beat 1 of each bar, shorter ticks on
+// the others, so the loop can be trimmed to land exactly on bar/beat boundaries.
+function drawLoopRuler(durationSec) {
+    const canvas = document.getElementById('loopRulerCanvas');
+    if (!canvas || !durationSec) return;
+    const bpm = parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm || 120;
+    const timeSigText = (document.getElementById('songTimeSigInput').textContent || '4/4').trim();
+    const beatsPerBar = parseInt(timeSigText.split('/')[0], 10) || 4;
+    const beatDur = 60 / bpm;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width)), height = Math.max(1, Math.round(rect.height)) || 16;
+    canvas.width = width * dpr; canvas.height = height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    let beatIdx = 0;
+    for (let t = 0; t <= durationSec + 0.0001; t += beatDur) {
+        const x = (t / durationSec) * width;
+        const isBarStart = beatIdx % beatsPerBar === 0;
+        const tickHeight = isBarStart ? height : height * 0.45;
+        ctx.strokeStyle = isBarStart ? '#a1a1aa' : '#52525b';
+        ctx.lineWidth = isBarStart ? 1.5 : 1;
+        ctx.beginPath();
+        ctx.moveTo(x, height - tickHeight);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+        beatIdx++;
+    }
 }
 
 function updateLoopTrimHandlesUI() {
@@ -4356,7 +4391,32 @@ function setupLoopTrimDragHandlers() {
     makeDraggable(endHandle, false);
 }
 
-async function previewTrimmedLoop() {
+let editingLoopPreviewSource = null;
+
+function updateLoopPreviewButtonUI() {
+    const icon = document.getElementById('loopTrimPreviewIcon');
+    const label = document.getElementById('loopTrimPreviewLabel');
+    if (!icon || !label) return;
+    if (editingLoopPreviewSource) {
+        icon.className = 'fas fa-stop mr-1.5';
+        label.textContent = 'Stop Preview';
+    } else {
+        icon.className = 'fas fa-play mr-1.5';
+        label.textContent = 'Preview Trimmed Section (loops)';
+    }
+}
+
+function stopLoopPreview() {
+    if (editingLoopPreviewSource) {
+        try { editingLoopPreviewSource.stop(); } catch (err) {}
+        try { editingLoopPreviewSource.disconnect(); } catch (err) {}
+        editingLoopPreviewSource = null;
+    }
+    updateLoopPreviewButtonUI();
+}
+
+async function toggleLoopPreview() {
+    if (editingLoopPreviewSource) { stopLoopPreview(); return; }
     if (!editingLoopTrack || !editingLoopTrack.key) return;
     ensureHouseAudio();
     const buf = await loadCueBuffer(editingLoopTrack.key, editingLoopTrack.url);
@@ -4364,14 +4424,20 @@ async function previewTrimmedLoop() {
     const c = state.houseAudioCtx;
     const src = c.createBufferSource();
     src.buffer = buf;
+    src.loop = true;
+    const start = editingLoopTrack.trimStart || 0;
+    const end = editingLoopTrack.trimEnd != null ? editingLoopTrack.trimEnd : buf.duration;
+    src.loopStart = start;
+    src.loopEnd = Math.max(start + 0.05, end);
     const g = c.createGain();
     g.gain.value = Math.max(0, Math.min(1, (editingLoopTrack.volume != null ? editingLoopTrack.volume : 100) / 100));
     const p = c.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, editingLoopTrack.pan || 0));
     src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
-    const start = editingLoopTrack.trimStart || 0;
-    const end = editingLoopTrack.trimEnd != null ? editingLoopTrack.trimEnd : buf.duration;
-    src.start(c.currentTime + 0.02, start, Math.max(0.05, end - start));
+    src.start(c.currentTime + 0.02, start);
+    src.onended = () => { if (editingLoopPreviewSource === src) { editingLoopPreviewSource = null; updateLoopPreviewButtonUI(); } };
+    editingLoopPreviewSource = src;
+    updateLoopPreviewButtonUI();
 }
 
 async function importLoopFile(file) {
@@ -4380,24 +4446,9 @@ async function importLoopFile(file) {
     renderLoopTrackUI();
 }
 
-async function previewLoopTrack() {
-    if (!editingLoopTrack || !editingLoopTrack.key) return;
-    ensureAudio();
-    ensureHouseAudio();
-    const buf = await loadCueBuffer(editingLoopTrack.key, editingLoopTrack.url);
-    if (!buf) { showToast('Could not load this clip'); return; }
-    const c = state.houseAudioCtx;
-    const src = c.createBufferSource();
-    src.buffer = buf;
-    const g = c.createGain();
-    g.gain.value = Math.max(0, Math.min(1, (editingLoopTrack.volume != null ? editingLoopTrack.volume : 100) / 100));
-    const p = c.createStereoPanner();
-    p.pan.value = Math.max(-1, Math.min(1, editingLoopTrack.pan || 0));
-    src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
-    src.start(c.currentTime + 0.02);
-}
 
 function removeLoopTrack() {
+    stopLoopPreview();
     if (editingLoopTrack && editingLoopTrack.key) {
         cueDbDelete(editingLoopTrack.key).catch(() => {});
         delete state.cueBufferCache[editingLoopTrack.key];
@@ -4785,8 +4836,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- Backing Loop ----
     document.getElementById('loopTrackContainer').addEventListener('click', e => {
         if (e.target.closest('#loopTrackImportBtn')) { document.getElementById('loopTrackFileInput').click(); return; }
-        if (e.target.closest('#loopTrackPreviewBtn')) { previewLoopTrack(); return; }
-        if (e.target.closest('#loopTrimPreviewBtn')) { previewTrimmedLoop(); return; }
+        if (e.target.closest('#loopTrimPreviewBtn')) { toggleLoopPreview(); return; }
         if (e.target.closest('#loopTrackRemoveBtn')) { removeLoopTrack(); return; }
     });
     document.getElementById('loopTrackContainer').addEventListener('change', e => {
@@ -5678,7 +5728,11 @@ function setupEvents() {
         openTimeSigPicker(document.getElementById('songTimeSigInput').textContent.trim(), val => {
             document.getElementById('songTimeSigInput').textContent = val;
             renderSongBeatTonesBlocks();
+            if (editingLoopTrack && editingLoopTrack.duration) drawLoopRuler(editingLoopTrack.duration);
         });
+    });
+    document.getElementById('songBpmInput').addEventListener('input', () => {
+        if (editingLoopTrack && editingLoopTrack.duration) drawLoopRuler(editingLoopTrack.duration);
     });
 
     document.getElementById('songNameSuggestions').addEventListener('click', e => {
@@ -5710,6 +5764,7 @@ function setupEvents() {
 
     document.getElementById('songForm').addEventListener('submit', e => {
         e.preventDefault();
+        stopLoopPreview();
         const eid = document.getElementById('songEditId').value;
         const d = {
             name: document.getElementById('songNameInput').value.trim(),
