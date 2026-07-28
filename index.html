@@ -673,6 +673,15 @@ tailwind.config = {
                 </button>
                 <p class="text-[11px] text-zinc-500 mt-2 text-center" id="bandSyncClockSyncResult"></p>
             </div>
+            <div class="w-full rounded-xl bg-s2/60 border border-brd/50 p-3">
+                <label class="flex items-center justify-between gap-3 cursor-pointer">
+                    <span class="text-xs text-zinc-300">
+                        Follow host's song sections
+                        <span class="block text-[10px] text-zinc-600 mt-0.5">Off: play your own arrangement, just synced in tempo/time.<br>On: follow the host's verse/chorus/bridge changes live — your own reminder cues still play.</span>
+                    </span>
+                    <input type="checkbox" id="bandSyncFollowToggle" class="flex-shrink-0" style="accent-color:#60A5FA; width:18px; height:18px;">
+                </label>
+            </div>
             <button type="button" id="bandSyncDisconnectBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">
                 <i class="fas fa-xmark mr-1"></i>Disconnect
             </button>
@@ -1154,6 +1163,7 @@ const state = {
     cueDuck: null,
     activeLoopNodes: null, songAbsoluteBar: 0, pendingLoopStartBar: null,
     houseAudioCtx: null, houseBus: null, stageOutputDeviceId: '', houseOutputDeviceId: '',
+    bandSyncFollowSections: false,
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -1340,6 +1350,16 @@ async function applyAudioRouting() {
 }
 
 const AUDIO_ROUTING_KEY = 'kasika-audio-routing';
+const BAND_SYNC_PREFS_KEY = 'kasika-band-sync-prefs';
+function loadBandSyncPrefs() {
+    try {
+        const raw = localStorage.getItem(BAND_SYNC_PREFS_KEY);
+        if (raw) state.bandSyncFollowSections = !!JSON.parse(raw).followSections;
+    } catch (err) { /* ignore, default stays false */ }
+}
+function saveBandSyncPrefs() {
+    localStorage.setItem(BAND_SYNC_PREFS_KEY, JSON.stringify({ followSections: state.bandSyncFollowSections }));
+}
 function loadAudioRoutingPrefs() {
     try {
         const raw = localStorage.getItem(AUDIO_ROUTING_KEY);
@@ -1630,8 +1650,8 @@ function sendClockSyncPing() {
     });
 }
 
-async function runClockSync() {
-    const rounds = 10;
+async function runClockSync(rounds) {
+    rounds = rounds || 10;
     const samples = [];
     for (let i = 0; i < rounds; i++) {
         const sample = await sendClockSyncPing();
@@ -1657,24 +1677,51 @@ function perfTimeToAudioCtxTime(perfTime) {
     return bridgeAudio + (perfTime - bridgePerf) / 1000;
 }
 
-const BAND_SYNC_LEAD_MS = 300; // generous margin over the ~10ms round-trips we're seeing, so the start command has time to arrive before it's due
+const BAND_SYNC_LEAD_MS = 450; // margin over the ~6-11ms round-trips observed, with headroom for occasional jitter
 
-function broadcastBandSyncStart() {
-    if (!bandSync.channel || bandSync.channel.readyState !== 'open') return null;
-    const targetPerfTime = performance.now() + BAND_SYNC_LEAD_MS + (bandSync.clockOffset || 0);
+function extractSongSectionStructure(song) {
+    if (!song) return null;
+    return {
+        bpm: song.bpm, timeSig: song.timeSig, modulationLoop: !!song.modulationLoop,
+        modulations: (song.modulations || []).map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig })),
+    };
+}
+
+function broadcastBandSyncStart(hostAudioCtxStartTime, song) {
+    if (!bandSync.channel || bandSync.channel.readyState !== 'open') return;
+    const bridgeAudio = state.audioCtx.currentTime;
+    const bridgePerf = performance.now();
+    const hostPerfTime = bridgePerf + (hostAudioCtxStartTime - bridgeAudio) * 1000;
+    const peerPerfTime = hostPerfTime + (bandSync.clockOffset || 0);
     bandSync.channel.send(JSON.stringify({
-        type: 'sync_start', targetPerfTime,
+        type: 'sync_start', targetPerfTime: peerPerfTime,
         bpm: state.bpm, timeSig: state.timeSig, subdivision: state.subdivision,
+        sections: extractSongSectionStructure(song),
     }));
     logBandSyncMessage(`Sent sync start (BPM ${state.bpm}, ${state.timeSig})`, 'out');
-    // Our own start time, on OUR clock, matching the same instant we just told the peer to start at.
-    return perfTimeToAudioCtxTime(performance.now() + BAND_SYNC_LEAD_MS);
 }
 
 function broadcastBandSyncStop() {
     if (!bandSync.channel || bandSync.channel.readyState !== 'open') return;
     bandSync.channel.send(JSON.stringify({ type: 'sync_stop' }));
     logBandSyncMessage('Sent sync stop', 'out');
+}
+
+function buildFollowHostSong(hostSections, ownSong) {
+    const ownMods = ownSong ? (ownSong.modulations || []) : [];
+    return {
+        bpm: hostSections.bpm, timeSig: hostSections.timeSig,
+        beatTones: ownSong ? ownSong.beatTones : null,
+        modulationLoop: hostSections.modulationLoop,
+        modulations: (hostSections.modulations || []).map((m, i) => {
+            const ownM = ownMods[i];
+            return {
+                bars: m.bars, extraBeats: m.extraBeats, bpm: m.bpm, timeSig: m.timeSig,
+                beatTones: ownM ? ownM.beatTones : null,
+                cue: ownM ? ownM.cue : null, // this musician's own reminder cues, at the matching section
+            };
+        }),
+    };
 }
 
 function handleBandSyncStart(msg) {
@@ -1684,7 +1731,25 @@ function handleBandSyncStart(msg) {
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     renderBeatBlocks();
+
+    const sl = getActiveSetlist();
+    const ownSong = sl?.songs.find(s => s.id === state.activeSongId);
     const targetAudioTime = perfTimeToAudioCtxTime(msg.targetPerfTime);
+
+    if (state.bandSyncFollowSections && msg.sections && msg.sections.modulations && msg.sections.modulations.length) {
+        initSongModulation(buildFollowHostSong(msg.sections, ownSong));
+        logBandSyncMessage(`Following host's ${msg.sections.modulations.length + 1}-section arrangement`, 'system');
+    } else {
+        stopSongModulation(true); // plain tempo/time-sig match only, no section following
+    }
+
+    // Our own intro cue (if we have one configured) still fires — anchored to the same
+    // shared downbeat, so each musician keeps their own reminder/count-in.
+    if (ownSong && ownSong.introCue && (ownSong.introCue.reminderId || ownSong.introCue.countIn)) {
+        fireVoiceCue({ bpm: state.bpm, timeSig: state.timeSig, cue: { ...ownSong.introCue } }, targetAudioTime);
+        state.cueDuck = null;
+    }
+
     logBandSyncMessage(`Received sync start — starting in ${Math.max(0, msg.targetPerfTime - performance.now()).toFixed(0)}ms`, 'in');
     startMetronome(targetAudioTime);
 }
@@ -1711,6 +1776,7 @@ function showBandSyncConnected() {
     document.getElementById('bandSyncScanArea').classList.add('hidden'); document.getElementById('bandSyncScanArea').classList.remove('flex');
     const connected = document.getElementById('bandSyncConnected');
     connected.classList.remove('hidden'); connected.classList.add('flex');
+    document.getElementById('bandSyncFollowToggle').checked = state.bandSyncFollowSections;
 }
 
 async function startBandSyncHost() {
@@ -2935,7 +3001,7 @@ function selectOrPlaySong(song) {
 // The single entry point for the Play/Stop button and spacebar. Starting fresh initializes
 // modulation for whichever song is currently armed, so a song selected via armSong() (which
 // deliberately skips modulation setup) gets it set up right before playback actually begins.
-function togglePlayback() {
+async function togglePlayback() {
     if (state.isPlaying) {
         stopMetronome();
         if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') broadcastBandSyncStop();
@@ -2944,7 +3010,19 @@ function togglePlayback() {
     ensureAudio();
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === state.activeSongId);
-    let delayedStart = null;
+    const isBandSyncing = bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open';
+    if (isBandSyncing) {
+        // Re-measure the clock offset right before every synced start — a manual measurement
+        // from minutes earlier can drift, and this keeps every start using a fresh reading
+        // instead of relying on the musician remembering to re-sync themselves.
+        await runClockSync(4);
+    }
+    // Base lead-in before the true downbeat: minimal for a normal local start, or a network-
+    // safe margin when band-synced (needs time to reach the connected phone). Any intro
+    // pre-roll duration STACKS ON TOP of this, rather than the two competing — that mismatch
+    // was exactly what threw the count-in out of sync with the actual beats.
+    const baseLeadSec = isBandSyncing ? (BAND_SYNC_LEAD_MS / 1000) : 0.03;
+    let delayedStart = state.audioCtx.currentTime + baseLeadSec;
     state.songAbsoluteBar = 0;
     state.pendingLoopStartBar = null;
     stopLoopTrack();
@@ -2957,18 +3035,10 @@ function togglePlayback() {
             const reminderBeats = intro.reminderId ? Math.max(1, intro.reminderLeadBeats || 2) : 0;
             const countInBeats = intro.countIn ? Math.max(1, intro.countInLength != null ? intro.countInLength : beatsPerBar) : 0;
             const totalBeats = reminderBeats + countInBeats;
-            delayedStart = state.audioCtx.currentTime + 0.03 + totalBeats * beatDur;
+            delayedStart += totalBeats * beatDur;
             const introForFiring = { bpm: state.bpm, timeSig: state.timeSig, cue: { ...intro, reminderLeadBeats: intro.reminderId ? reminderBeats : null } };
             fireVoiceCue(introForFiring, delayedStart);
             state.cueDuck = null; // nothing was already playing before the intro — nothing to duck
-        }
-        // Band Sync: if we're the host and connected to a band member, broadcast the exact
-        // start moment instead of starting immediately, so everyone (host included) lands on
-        // the same beat. Computed here, before the backing loop below, so the loop's start
-        // time lines up with the synced start rather than whatever came before it.
-        if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') {
-            const syncedStart = broadcastBandSyncStart();
-            if (syncedStart != null) delayedStart = syncedStart;
         }
         if (song.loopTrack && song.loopTrack.key) {
             if (song.loopTrack.startMode === 'atBar' && (song.loopTrack.startBar || 1) > 1) {
@@ -2976,15 +3046,11 @@ function togglePlayback() {
                 // "start at bar N" fires once N-1 bars have completed.
                 state.pendingLoopStartBar = (song.loopTrack.startBar || 1) - 1;
             } else {
-                startLoopTrack(song, delayedStart != null ? delayedStart : state.audioCtx.currentTime + 0.03);
+                startLoopTrack(song, delayedStart);
             }
         }
-    } else if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') {
-        // No song armed, but still band-synced (e.g. testing, or just a plain click) —
-        // broadcast anyway so both phones' plain metronomes start together.
-        const syncedStart = broadcastBandSyncStart();
-        if (syncedStart != null) delayedStart = syncedStart;
     }
+    if (isBandSyncing) broadcastBandSyncStart(delayedStart, song);
     startMetronome(delayedStart);
 }
 
@@ -3985,6 +4051,24 @@ function renderLoopTrackHtml() {
                 <button type="button" id="loopTrackRemoveBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex items-center justify-center" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
             </div>
         </div>
+        <div class="flex flex-col gap-1.5">
+            <label class="text-[10px] text-zinc-600 uppercase tracking-wider">Trim (drag the edges)</label>
+            <div id="loopWaveformWrap" class="relative rounded-lg overflow-hidden bg-s3 touch-none select-none" style="height:72px;">
+                <canvas id="loopWaveformCanvas" class="w-full h-full block"></canvas>
+                <div id="loopTrimDimLeft" class="absolute top-0 bottom-0 left-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
+                <div id="loopTrimDimRight" class="absolute top-0 bottom-0 right-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
+                <div id="loopTrimHandleStart" class="absolute top-0 bottom-0 bg-[#60A5FA] cursor-ew-resize touch-none" style="width:8px; left:0%; margin-left:-4px;"></div>
+                <div id="loopTrimHandleEnd" class="absolute top-0 bottom-0 bg-[#60A5FA] cursor-ew-resize touch-none" style="width:8px; left:100%; margin-left:-4px;"></div>
+            </div>
+            <div class="flex items-center justify-between text-[10px] text-zinc-500">
+                <span id="loopTrimStartLabel">0.00s</span>
+                <span id="loopTrimDurationLabel" class="text-zinc-600">0.00s selected</span>
+                <span id="loopTrimEndLabel">0.00s</span>
+            </div>
+            <button type="button" id="loopTrimPreviewBtn" class="w-full py-2 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xs hover:border-[#60A5FA]/40 hover:text-[#60A5FA] transition-colors">
+                <i class="fas fa-play mr-1.5"></i>Preview Trimmed Section
+            </button>
+        </div>
         <div class="flex items-center gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none">
                 <input type="radio" name="loopStartMode" class="loop-start-mode" value="afterIntro" ${lt.startMode !== 'atBar' ? 'checked' : ''} style="accent-color:#60A5FA;">
@@ -4012,6 +4096,115 @@ function renderLoopTrackHtml() {
 function renderLoopTrackUI() {
     const container = document.getElementById('loopTrackContainer');
     if (container) container.innerHTML = renderLoopTrackHtml();
+    if (editingLoopTrack && editingLoopTrack.key) renderLoopWaveform();
+}
+
+async function renderLoopWaveform() {
+    if (!editingLoopTrack || !editingLoopTrack.key) return;
+    ensureAudio();
+    const buf = await loadCueBuffer(editingLoopTrack.key, editingLoopTrack.url);
+    if (!buf) return;
+    editingLoopTrack.duration = buf.duration;
+    if (editingLoopTrack.trimStart == null) editingLoopTrack.trimStart = 0;
+    if (editingLoopTrack.trimEnd == null) editingLoopTrack.trimEnd = buf.duration;
+    editingLoopTrack.trimStart = Math.max(0, Math.min(editingLoopTrack.trimStart, buf.duration));
+    editingLoopTrack.trimEnd = Math.max(editingLoopTrack.trimStart + 0.05, Math.min(editingLoopTrack.trimEnd, buf.duration));
+
+    const canvas = document.getElementById('loopWaveformCanvas');
+    const wrap = document.getElementById('loopWaveformWrap');
+    if (!canvas || !wrap) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = wrap.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width)), height = Math.max(1, Math.round(rect.height));
+    canvas.width = width * dpr; canvas.height = height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    const data = buf.getChannelData(0);
+    const step = Math.max(1, Math.floor(data.length / width));
+    ctx.fillStyle = '#60A5FA';
+    for (let i = 0; i < width; i++) {
+        let min = 1, max = -1;
+        const start = i * step;
+        for (let j = 0; j < step; j++) {
+            const idx = start + j;
+            if (idx >= data.length) break;
+            const v = data[idx];
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        if (min > max) { min = 0; max = 0; }
+        const y1 = (height / 2) * (1 - max);
+        const y2 = (height / 2) * (1 - min);
+        ctx.fillRect(i, y1, 1, Math.max(1, y2 - y1));
+    }
+    updateLoopTrimHandlesUI();
+    setupLoopTrimDragHandlers();
+}
+
+function updateLoopTrimHandlesUI() {
+    if (!editingLoopTrack || !editingLoopTrack.duration) return;
+    const dur = editingLoopTrack.duration;
+    const startPct = (editingLoopTrack.trimStart / dur) * 100;
+    const endPct = (editingLoopTrack.trimEnd / dur) * 100;
+    const sh = document.getElementById('loopTrimHandleStart'), eh = document.getElementById('loopTrimHandleEnd');
+    if (sh) sh.style.left = startPct + '%';
+    if (eh) eh.style.left = endPct + '%';
+    const dl = document.getElementById('loopTrimDimLeft'), dr = document.getElementById('loopTrimDimRight');
+    if (dl) dl.style.width = startPct + '%';
+    if (dr) dr.style.width = (100 - endPct) + '%';
+    const sl = document.getElementById('loopTrimStartLabel'), el = document.getElementById('loopTrimEndLabel'), du = document.getElementById('loopTrimDurationLabel');
+    if (sl) sl.textContent = editingLoopTrack.trimStart.toFixed(2) + 's';
+    if (el) el.textContent = editingLoopTrack.trimEnd.toFixed(2) + 's';
+    if (du) du.textContent = (editingLoopTrack.trimEnd - editingLoopTrack.trimStart).toFixed(2) + 's selected';
+}
+
+function setupLoopTrimDragHandlers() {
+    const wrap = document.getElementById('loopWaveformWrap');
+    const startHandle = document.getElementById('loopTrimHandleStart');
+    const endHandle = document.getElementById('loopTrimHandleEnd');
+    if (!wrap || !startHandle || !endHandle) return;
+    function makeDraggable(handle, isStart) {
+        handle.onpointerdown = e => {
+            e.preventDefault();
+            handle.setPointerCapture(e.pointerId);
+            function onMove(e2) {
+                const rect = wrap.getBoundingClientRect();
+                let pct = (e2.clientX - rect.left) / rect.width;
+                pct = Math.max(0, Math.min(1, pct));
+                const time = pct * editingLoopTrack.duration;
+                if (isStart) editingLoopTrack.trimStart = Math.max(0, Math.min(time, editingLoopTrack.trimEnd - 0.05));
+                else editingLoopTrack.trimEnd = Math.min(editingLoopTrack.duration, Math.max(time, editingLoopTrack.trimStart + 0.05));
+                updateLoopTrimHandlesUI();
+            }
+            function onUp() {
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+        };
+    }
+    makeDraggable(startHandle, true);
+    makeDraggable(endHandle, false);
+}
+
+async function previewTrimmedLoop() {
+    if (!editingLoopTrack || !editingLoopTrack.key) return;
+    ensureHouseAudio();
+    const buf = await loadCueBuffer(editingLoopTrack.key, editingLoopTrack.url);
+    if (!buf) { showToast('Could not load this clip'); return; }
+    const c = state.houseAudioCtx;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    const g = c.createGain();
+    g.gain.value = Math.max(0, Math.min(1, (editingLoopTrack.volume != null ? editingLoopTrack.volume : 100) / 100));
+    const p = c.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, editingLoopTrack.pan || 0));
+    src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
+    const start = editingLoopTrack.trimStart || 0;
+    const end = editingLoopTrack.trimEnd != null ? editingLoopTrack.trimEnd : buf.duration;
+    src.start(c.currentTime + 0.02, start, Math.max(0.05, end - start));
 }
 
 async function importLoopFile(file) {
@@ -4059,13 +4252,17 @@ async function startLoopTrack(song, stageStartTime) {
     const src = c.createBufferSource();
     src.buffer = buf;
     src.loop = true;
+    const trimStart = Math.max(0, Math.min(song.loopTrack.trimStart || 0, buf.duration));
+    const trimEnd = song.loopTrack.trimEnd != null ? Math.min(song.loopTrack.trimEnd, buf.duration) : buf.duration;
+    src.loopStart = trimStart;
+    src.loopEnd = Math.max(trimStart + 0.05, trimEnd);
     const g = c.createGain();
     g.gain.value = Math.max(0, Math.min(1, (song.loopTrack.volume != null ? song.loopTrack.volume : 100) / 100));
     const p = c.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, song.loopTrack.pan || 0));
     src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
     const houseStartTime = stageTimeToHouseTime(stageStartTime);
-    src.start(Math.max(houseStartTime, c.currentTime));
+    src.start(Math.max(houseStartTime, c.currentTime), trimStart);
     state.activeLoopNodes = { src, g, p };
 }
 
@@ -4422,6 +4619,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('loopTrackContainer').addEventListener('click', e => {
         if (e.target.closest('#loopTrackImportBtn')) { document.getElementById('loopTrackFileInput').click(); return; }
         if (e.target.closest('#loopTrackPreviewBtn')) { previewLoopTrack(); return; }
+        if (e.target.closest('#loopTrimPreviewBtn')) { previewTrimmedLoop(); return; }
         if (e.target.closest('#loopTrackRemoveBtn')) { removeLoopTrack(); return; }
     });
     document.getElementById('loopTrackContainer').addEventListener('change', e => {
@@ -4979,6 +5177,10 @@ function setupEvents() {
             resultEl.textContent = 'Could not measure — no responses received.';
         }
     });
+    document.getElementById('bandSyncFollowToggle').addEventListener('change', e => {
+        state.bandSyncFollowSections = e.target.checked;
+        saveBandSyncPrefs();
+    });
 
     // ---- Voice Cue Bank ----
     document.getElementById('openCueBankBtn').addEventListener('click', openCueBankView);
@@ -5357,6 +5559,8 @@ function setupEvents() {
                 startBar: Math.max(1, editingLoopTrack.startBar || 8),
                 volume: editingLoopTrack.volume != null ? editingLoopTrack.volume : 100,
                 pan: editingLoopTrack.pan || 0,
+                trimStart: editingLoopTrack.trimStart || 0,
+                trimEnd: editingLoopTrack.trimEnd != null ? editingLoopTrack.trimEnd : null,
             } : null,
         };
         if (!d.name || isNaN(d.bpm)) return;
@@ -5508,7 +5712,7 @@ function setupEvents() {
 
 // ===== INIT =====
 function init() {
-    loadData(); loadAudioRoutingPrefs(); setupCanvas(); renderSetlistSelect(); renderSongs();
+    loadData(); loadAudioRoutingPrefs(); loadBandSyncPrefs(); setupCanvas(); renderSetlistSelect(); renderSongs();
     updatePlayBtn(); updateEditBarUI(); updateTimerDisplay();
     document.getElementById('soundKitSelect').value = state.soundKit;
     document.getElementById('timeSigSelect').textContent = state.timeSig;
