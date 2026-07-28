@@ -414,6 +414,16 @@ tailwind.config = {
     <div class="text-[10px] text-zinc-600 mt-0.5">Release to apply · move away to cancel</div>
 </div>
 
+<div id="bandSyncAlertBanner" class="hidden fixed top-4 left-1/2 -translate-x-1/2 z-[400] max-w-sm w-[92vw] bg-red-950 border border-red-500/50 rounded-xl px-4 py-3 shadow-2xl">
+    <div class="flex items-start gap-3">
+        <i class="fas fa-triangle-exclamation text-red-400 text-sm mt-0.5 flex-shrink-0"></i>
+        <p class="text-xs text-red-200 flex-1" id="bandSyncAlertText"></p>
+        <button type="button" id="bandSyncAlertDismissBtn" class="text-red-400 hover:text-red-200 flex-shrink-0" aria-label="Dismiss">
+            <i class="fas fa-xmark text-sm"></i>
+        </button>
+    </div>
+</div>
+
 <div id="setlistsView" class="fixed inset-0 z-[200] bg-surface hidden flex-col">
     <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50">
         <div class="flex items-center gap-3 px-4 pt-3 pb-1">
@@ -657,8 +667,12 @@ tailwind.config = {
         <!-- Connected state (shared by both roles) -->
         <div id="bandSyncConnected" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
             <div class="flex items-center gap-2 text-[#34D399] text-sm font-semibold">
-                <i class="fas fa-circle-check"></i>Connected!
+                <i class="fas fa-circle-check"></i><span id="bandSyncConnectedCount">Connected!</span>
             </div>
+            <div id="bandSyncPeerList" class="w-full flex flex-col gap-1.5"></div>
+            <button type="button" id="bandSyncAddPeerBtn" class="hidden w-full py-2.5 rounded-xl bg-s2 border border-brd text-zinc-300 text-sm hover:border-[#60A5FA]/40 hover:text-[#60A5FA] transition-all">
+                <i class="fas fa-plus mr-2"></i>Add Another Band Member
+            </button>
             <div class="w-full rounded-xl bg-s2/60 border border-brd/50 p-3">
                 <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-2 block">Test Messages</label>
                 <div id="bandSyncMessageLog" class="flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-3 text-xs"></div>
@@ -1435,7 +1449,11 @@ async function refreshAudioOutputDevices() {
 // channel: the host's offer is shown as a QR code, the joiner scans it and shows their
 // answer back as a second QR code, and once both sides have processed each other's
 // description, the browsers connect directly over the local network.
-const bandSync = { role: null, pc: null, channel: null, scanStream: null, scanRAF: null, clockOffset: null };
+const bandSync = { role: null, peers: [], scanStream: null, scanRAF: null };
+
+function getConnectedPeers() {
+    return bandSync.peers.filter(p => p.channel && p.channel.readyState === 'open');
+}
 
 function createBandPeerConnection() {
     // No STUN/TURN servers — those require internet to reach, which defeats the point.
@@ -1515,17 +1533,6 @@ function renderQrCode(containerId, text) {
     }
 }
 
-async function getBarcodeDetectorIfSupported() {
-    if (!('BarcodeDetector' in window)) return null;
-    try {
-        const formats = await BarcodeDetector.getSupportedFormats();
-        if (!formats.includes('qr_code')) return null;
-        return new BarcodeDetector({ formats: ['qr_code'] });
-    } catch (err) {
-        return null;
-    }
-}
-
 async function startQrScanner(label, onDecode) {
     document.getElementById('bandSyncScanLabel').textContent = label;
     const scanArea = document.getElementById('bandSyncScanArea');
@@ -1584,6 +1591,17 @@ async function startQrScanner(label, onDecode) {
     tick();
 }
 
+async function getBarcodeDetectorIfSupported() {
+    if (!('BarcodeDetector' in window)) return null;
+    try {
+        const formats = await BarcodeDetector.getSupportedFormats();
+        if (!formats.includes('qr_code')) return null;
+        return new BarcodeDetector({ formats: ['qr_code'] });
+    } catch (err) {
+        return null;
+    }
+}
+
 function stopQrScanner() {
     if (bandSync.scanRAF) cancelAnimationFrame(bandSync.scanRAF);
     bandSync.scanRAF = null;
@@ -1594,24 +1612,30 @@ function stopQrScanner() {
     if (scanArea) { scanArea.classList.add('hidden'); scanArea.classList.remove('flex'); }
 }
 
-function setupBandSyncChannel(channel) {
-    bandSync.channel = channel;
+function setupBandSyncChannel(channel, peer) {
+    peer.channel = channel;
     channel.onopen = () => {
+        peer.connected = true;
         setBandSyncStatus('');
         showBandSyncConnected();
-        logBandSyncMessage('Connected — data channel open.', 'system');
+        logBandSyncMessage(`${peer.label} connected.`, 'system');
+        renderBandSyncPeerList();
         const dot = document.getElementById('bandSyncConnectedDot');
         if (dot) dot.classList.remove('hidden');
     };
     channel.onclose = () => {
-        logBandSyncMessage('Data channel closed.', 'system');
-        const dot = document.getElementById('bandSyncConnectedDot');
-        if (dot) dot.classList.add('hidden');
+        peer.connected = false;
+        logBandSyncMessage(`${peer.label} disconnected.`, 'system');
+        renderBandSyncPeerList();
+        if (!getConnectedPeers().length) {
+            const dot = document.getElementById('bandSyncConnectedDot');
+            if (dot) dot.classList.add('hidden');
+        }
     };
     channel.onmessage = e => {
         let msg;
         try { msg = JSON.parse(e.data); } catch (err) { logBandSyncMessage(`Received: ${e.data}`, 'in'); return; }
-        if (msg.type === 'ping') { logBandSyncMessage(`Received ping: "${msg.text}"`, 'in'); return; }
+        if (msg.type === 'ping') { logBandSyncMessage(`Received ping from ${peer.label}: "${msg.text}"`, 'in'); return; }
         if (msg.type === 'clocksync_ping') {
             // Respond immediately with our own receive/send timestamps — whichever side
             // gets a ping always replies, regardless of who initiated the sync round.
@@ -1622,7 +1646,7 @@ function setupBandSyncChannel(channel) {
         if (msg.type === 'clocksync_pong') return; // handled by the per-round listener in sendClockSyncPing
         if (msg.type === 'sync_start') { handleBandSyncStart(msg); return; }
         if (msg.type === 'sync_stop') { handleBandSyncStop(); return; }
-        if (msg.type === 'sync_ack') { handleBandSyncAck(msg); return; }
+        if (msg.type === 'sync_ack') { handleBandSyncAck(msg, peer); return; }
         logBandSyncMessage(`Received: ${e.data}`, 'in');
     };
 }
@@ -1631,12 +1655,12 @@ function setupBandSyncChannel(channel) {
 // NTP-style offset measurement over the data channel: send a timestamped ping, the other
 // side stamps its receive/send times and echoes them back, and from the round trip we can
 // estimate both the network latency and the offset between the two phones' clocks. Local
-// WiFi round-trips are typically 1-5ms, so this can be quite precise — we take several
+// WiFi round-trips are typically 1-11ms, so this can be quite precise — we take several
 // rounds and trust the one with the lowest round-trip time most, since it had the least
 // chance of extra queuing/jitter distorting the estimate.
-function sendClockSyncPing() {
+function sendClockSyncPing(peer) {
     return new Promise(resolve => {
-        if (!bandSync.channel || bandSync.channel.readyState !== 'open') { resolve(null); return; }
+        if (!peer.channel || peer.channel.readyState !== 'open') { resolve(null); return; }
         const seq = Math.random().toString(36).slice(2);
         const t0 = performance.now();
         let done = false;
@@ -1645,35 +1669,35 @@ function sendClockSyncPing() {
             try { msg = JSON.parse(e.data); } catch (err) { return; }
             if (msg.type === 'clocksync_pong' && msg.seq === seq && !done) {
                 done = true;
-                bandSync.channel.removeEventListener('message', onMessage);
+                peer.channel.removeEventListener('message', onMessage);
                 const t3 = performance.now();
                 const rtt = (t3 - t0) - (msg.t2 - msg.t1);
                 resolve({ rtt, offset: msg.t1 - (t0 + rtt / 2) });
             }
         }
-        bandSync.channel.addEventListener('message', onMessage);
-        bandSync.channel.send(JSON.stringify({ type: 'clocksync_ping', seq, t0 }));
+        peer.channel.addEventListener('message', onMessage);
+        peer.channel.send(JSON.stringify({ type: 'clocksync_ping', seq, t0 }));
         setTimeout(() => {
             if (done) return;
             done = true;
-            bandSync.channel.removeEventListener('message', onMessage);
+            peer.channel.removeEventListener('message', onMessage);
             resolve(null);
         }, 1500);
     });
 }
 
-async function runClockSync(rounds) {
+async function runClockSync(peer, rounds) {
     rounds = rounds || 10;
     const samples = [];
     for (let i = 0; i < rounds; i++) {
-        const sample = await sendClockSyncPing();
+        const sample = await sendClockSyncPing(peer);
         if (sample) samples.push(sample);
         await new Promise(r => setTimeout(r, 40));
     }
     if (!samples.length) return null;
     samples.sort((a, b) => a.rtt - b.rtt);
     const best = samples[0];
-    bandSync.clockOffset = best.offset; // adds to OUR clock reading to get THEIR equivalent clock reading
+    peer.clockOffset = best.offset; // adds to OUR clock reading to get THIS PEER's equivalent clock reading
     return { ...best, sampleCount: samples.length };
 }
 
@@ -1701,22 +1725,27 @@ function extractSongSectionStructure(song) {
 }
 
 function broadcastBandSyncStart(hostAudioCtxStartTime, song) {
-    if (!bandSync.channel || bandSync.channel.readyState !== 'open') return;
+    const peers = getConnectedPeers();
+    if (!peers.length) return;
     const bridgeAudio = state.audioCtx.currentTime;
     const bridgePerf = performance.now();
     const hostPerfTime = bridgePerf + (hostAudioCtxStartTime - bridgeAudio) * 1000;
-    const peerPerfTime = hostPerfTime + (bandSync.clockOffset || 0);
-    bandSync.channel.send(JSON.stringify({
-        type: 'sync_start', targetPerfTime: peerPerfTime,
-        bpm: state.bpm, timeSig: state.timeSig, subdivision: state.subdivision,
-        sections: extractSongSectionStructure(song),
-    }));
-    logBandSyncMessage(`Sent sync start (BPM ${state.bpm}, ${state.timeSig})`, 'out');
+    const structure = extractSongSectionStructure(song);
+    peers.forEach(peer => {
+        const peerPerfTime = hostPerfTime + (peer.clockOffset || 0);
+        peer.channel.send(JSON.stringify({
+            type: 'sync_start', targetPerfTime: peerPerfTime,
+            bpm: state.bpm, timeSig: state.timeSig, subdivision: state.subdivision,
+            sections: structure,
+        }));
+    });
+    logBandSyncMessage(`Sent sync start to ${peers.length} device${peers.length === 1 ? '' : 's'} (BPM ${state.bpm}, ${state.timeSig})`, 'out');
 }
 
 function broadcastBandSyncStop() {
-    if (!bandSync.channel || bandSync.channel.readyState !== 'open') return;
-    bandSync.channel.send(JSON.stringify({ type: 'sync_stop' }));
+    const peers = getConnectedPeers();
+    if (!peers.length) return;
+    peers.forEach(peer => peer.channel.send(JSON.stringify({ type: 'sync_stop' })));
     logBandSyncMessage('Sent sync stop', 'out');
 }
 
@@ -1771,8 +1800,9 @@ function handleBandSyncStart(msg) {
     const lateByMs = performance.now() - msg.targetPerfTime;
     logBandSyncMessage(`Received sync start — starting in ${Math.max(0, -lateByMs).toFixed(0)}ms`, 'in');
     startMetronome(targetAudioTime);
-    if (bandSync.channel && bandSync.channel.readyState === 'open') {
-        bandSync.channel.send(JSON.stringify({ type: 'sync_ack', lateByMs }));
+    const hostPeer = bandSync.peers[0];
+    if (hostPeer && hostPeer.channel && hostPeer.channel.readyState === 'open') {
+        hostPeer.channel.send(JSON.stringify({ type: 'sync_ack', lateByMs }));
     }
     if (lateByMs > 0) logBandSyncMessage(`⚠ Start command arrived ${lateByMs.toFixed(0)}ms late`, 'system');
 }
@@ -1784,16 +1814,55 @@ function handleBandSyncStop() {
 
 // The connected phone reports back how its actual start compared to the intended target —
 // if the start command arrived AFTER the target time had already passed, that specific start
-// definitely landed out of sync. Surfaced as a toast so it's visible even after navigating
-// back to the main screen, not just while on the Band Sync view.
-function handleBandSyncAck(msg) {
+// definitely landed out of sync. Surfaced as a floating, dismissable alert with an audible
+// tone so it's impossible to miss even after navigating back to the main screen.
+function handleBandSyncAck(msg, peer) {
     const lateBy = msg.lateByMs || 0;
+    const label = (peer && peer.label) || 'Band member';
     if (lateBy > 0) {
-        logBandSyncMessage(`⚠ Band member started ${lateBy.toFixed(0)}ms late — that take is likely out of sync`, 'system');
-        showToast(`⚠ Sync issue: band member started ~${lateBy.toFixed(0)}ms late — consider restarting`);
+        logBandSyncMessage(`⚠ ${label} started ${lateBy.toFixed(0)}ms late — that take is likely out of sync`, 'system');
+        showBandSyncSyncAlert(`⚠ Sync issue: ${label} started ~${lateBy.toFixed(0)}ms late — consider restarting`);
     } else {
-        logBandSyncMessage(`✓ Band member synced (${(-lateBy).toFixed(0)}ms to spare)`, 'system');
+        logBandSyncMessage(`✓ ${label} synced (${(-lateBy).toFixed(0)}ms to spare)`, 'system');
     }
+}
+
+// Two short beeps — distinct from the metronome's own click sounds, deliberately attention-
+// grabbing since this needs to be noticed immediately during a live performance.
+function playSyncAlertTone() {
+    try {
+        ensureAudio();
+        const c = state.audioCtx;
+        const dest = state.masterBus || c.destination;
+        [0, 0.2].forEach(offset => {
+            const osc = c.createOscillator();
+            const g = c.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 880;
+            const t = c.currentTime + offset;
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(0.35, t + 0.01);
+            g.gain.linearRampToValueAtTime(0, t + 0.15);
+            osc.connect(g); g.connect(dest);
+            osc.start(t); osc.stop(t + 0.16);
+        });
+    } catch (err) { console.warn('Could not play sync alert tone:', err); }
+}
+
+// Stays visible until the person dismisses it — a toast would auto-vanish, and a sync
+// failure during a live set is exactly the kind of thing that shouldn't be easy to miss.
+function showBandSyncSyncAlert(text) {
+    const banner = document.getElementById('bandSyncAlertBanner');
+    const textEl = document.getElementById('bandSyncAlertText');
+    if (!banner || !textEl) return;
+    textEl.textContent = text;
+    banner.classList.remove('hidden');
+    playSyncAlertTone();
+}
+
+function hideBandSyncSyncAlert() {
+    const banner = document.getElementById('bandSyncAlertBanner');
+    if (banner) banner.classList.add('hidden');
 }
 
 function logBandSyncMessage(text, kind) {
@@ -1807,6 +1876,37 @@ function logBandSyncMessage(text, kind) {
     log.scrollTop = log.scrollHeight;
 }
 
+function renderBandSyncPeerList() {
+    const list = document.getElementById('bandSyncPeerList');
+    if (!list) return;
+    const connected = bandSync.peers.filter(p => p.connected);
+    list.innerHTML = bandSync.peers.map(p => `
+        <div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-s3/50 border border-brd/40">
+            <span class="text-xs text-zinc-300 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:${p.connected ? '#34D399' : '#71717a'};"></span>
+                ${escHtml(p.label)}${p.connected ? '' : ' (disconnected)'}
+            </span>
+            <button type="button" class="band-sync-remove-peer text-zinc-600 hover:text-red-400 transition-colors" data-peer-id="${p.id}" title="Disconnect">
+                <i class="fas fa-xmark text-xs"></i>
+            </button>
+        </div>`).join('');
+    const countEl = document.getElementById('bandSyncConnectedCount');
+    if (countEl) countEl.textContent = connected.length ? `Connected! (${connected.length} device${connected.length === 1 ? '' : 's'})` : 'No devices connected';
+    const dot = document.getElementById('bandSyncConnectedDot');
+    if (dot) { if (connected.length) dot.classList.remove('hidden'); else dot.classList.add('hidden'); }
+}
+
+function removeBandSyncPeer(peerId) {
+    const idx = bandSync.peers.findIndex(p => p.id === peerId);
+    if (idx === -1) return;
+    const peer = bandSync.peers[idx];
+    if (peer.channel) { try { peer.channel.close(); } catch (err) {} }
+    if (peer.pc) { try { peer.pc.close(); } catch (err) {} }
+    bandSync.peers.splice(idx, 1);
+    renderBandSyncPeerList();
+    if (!bandSync.peers.length) resetBandSync();
+}
+
 function showBandSyncConnected() {
     document.getElementById('bandSyncHostFlow').classList.add('hidden'); document.getElementById('bandSyncHostFlow').classList.remove('flex');
     document.getElementById('bandSyncJoinFlow').classList.add('hidden'); document.getElementById('bandSyncJoinFlow').classList.remove('flex');
@@ -1818,18 +1918,30 @@ function showBandSyncConnected() {
     const cuesRow = document.getElementById('bandSyncUseHostCuesRow');
     if (state.bandSyncFollowSections) { cuesRow.classList.remove('hidden'); cuesRow.classList.add('flex'); }
     else { cuesRow.classList.add('hidden'); cuesRow.classList.remove('flex'); }
+    // Only the host can add more band members — a joining phone connects to just the host.
+    const addBtn = document.getElementById('bandSyncAddPeerBtn');
+    if (addBtn) { if (bandSync.role === 'host') addBtn.classList.remove('hidden'); else addBtn.classList.add('hidden'); }
+    renderBandSyncPeerList();
 }
 
 async function startBandSyncHost() {
     bandSync.role = 'host';
     document.getElementById('bandSyncRolePicker').classList.add('hidden');
+    startNewHostPairing();
+}
+
+async function startNewHostPairing() {
+    const peer = { id: Math.random().toString(36).slice(2), pc: null, channel: null, clockOffset: null, connected: false, label: `Member ${bandSync.peers.length + 1}` };
+    bandSync.peers.push(peer);
+
     const hostFlow = document.getElementById('bandSyncHostFlow');
     hostFlow.classList.remove('hidden'); hostFlow.classList.add('flex');
+    document.getElementById('bandSyncConnected').classList.add('hidden'); document.getElementById('bandSyncConnected').classList.remove('flex');
     setBandSyncStatus('Creating connection…');
 
     const pc = createBandPeerConnection();
-    bandSync.pc = pc;
-    setupBandSyncChannel(pc.createDataChannel('bandSync'));
+    peer.pc = pc;
+    setupBandSyncChannel(pc.createDataChannel('bandSync'), peer);
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -1837,17 +1949,17 @@ async function startBandSyncHost() {
 
     const payload = encodeBandSyncPayload('offer', pc.localDescription.sdp);
     renderQrCode('bandSyncQrHost', payload);
-    setBandSyncStatus(`Code ready (${payload.length} characters). Waiting for your band member to scan it, then automatically watching for their reply…`);
-    startBandSyncHostScanReply();
+    setBandSyncStatus(`Code ready (${payload.length} characters). Waiting for ${peer.label} to scan it, then automatically watching for their reply…`);
+    startBandSyncHostScanReply(peer);
 }
 
-function startBandSyncHostScanReply() {
+function startBandSyncHostScanReply(peer) {
     startQrScanner('Point your camera at your band member\'s reply code:', async data => {
         try {
             const msg = decodeBandSyncPayload(data);
             if (msg.t !== 'answer') { setBandSyncStatus('That doesn\'t look like a reply code — try again.'); return; }
             setBandSyncStatus('Connecting…');
-            await bandSync.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+            await peer.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
         } catch (err) {
             console.warn('Band Sync: failed to process reply code', err);
             setBandSyncStatus('Could not read that code — try again.');
@@ -1864,8 +1976,9 @@ async function startBandSyncJoin() {
             if (msg.t !== 'offer') { setBandSyncStatus('That doesn\'t look like a host code — try again.'); return; }
             setBandSyncStatus('Preparing reply…');
             const pc = createBandPeerConnection();
-            bandSync.pc = pc;
-            pc.ondatachannel = e => setupBandSyncChannel(e.channel);
+            const peer = { id: 'host', pc, channel: null, clockOffset: null, connected: false, label: 'Host' };
+            bandSync.peers = [peer]; // a joining phone only ever connects to the one host
+            pc.ondatachannel = e => setupBandSyncChannel(e.channel, peer);
 
             await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
             const answer = await pc.createAnswer();
@@ -1886,10 +1999,12 @@ async function startBandSyncJoin() {
 
 function resetBandSync() {
     stopQrScanner();
-    if (bandSync.channel) { try { bandSync.channel.close(); } catch (err) {} bandSync.channel = null; }
-    if (bandSync.pc) { try { bandSync.pc.close(); } catch (err) {} bandSync.pc = null; }
+    bandSync.peers.forEach(peer => {
+        if (peer.channel) { try { peer.channel.close(); } catch (err) {} }
+        if (peer.pc) { try { peer.pc.close(); } catch (err) {} }
+    });
+    bandSync.peers = [];
     bandSync.role = null;
-    bandSync.clockOffset = null;
     setBandSyncStatus('');
     document.getElementById('bandSyncMessageLog').innerHTML = '';
     const clockResultEl = document.getElementById('bandSyncClockSyncResult');
@@ -3045,23 +3160,28 @@ function selectOrPlaySong(song) {
 async function togglePlayback() {
     if (state.isPlaying) {
         stopMetronome();
-        if (bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open') broadcastBandSyncStop();
+        if (bandSync.role === 'host' && getConnectedPeers().length) broadcastBandSyncStop();
         return;
     }
     ensureAudio();
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === state.activeSongId);
-    const isBandSyncing = bandSync.role === 'host' && bandSync.channel && bandSync.channel.readyState === 'open';
+    const isBandSyncing = bandSync.role === 'host' && getConnectedPeers().length > 0;
+    if (isBandSyncing) hideBandSyncSyncAlert();
     let leadMs = BAND_SYNC_LEAD_MS;
     if (isBandSyncing) {
-        // Re-measure the clock offset right before every synced start — a manual measurement
-        // from minutes earlier can drift, and this keeps every start using a fresh reading
-        // instead of relying on the musician remembering to re-sync themselves.
-        const resyncResult = await runClockSync(4);
-        if (resyncResult) {
-            // Adapt the margin to what the network is doing RIGHT NOW — if this round's RTT is
-            // unusually high, a fixed margin might not be enough; scale up accordingly.
-            leadMs = Math.max(BAND_SYNC_LEAD_MS, resyncResult.rtt * 20 + 200);
+        // Re-measure the clock offset for EVERY connected phone right before every synced
+        // start — a manual measurement from minutes earlier can drift, and this keeps every
+        // start using a fresh reading instead of relying on the musicians remembering to
+        // re-sync themselves. Run in parallel since each peer's exchange is independent.
+        const peers = getConnectedPeers();
+        const resyncResults = await Promise.all(peers.map(p => runClockSync(p, 4)));
+        const worstRtt = Math.max(0, ...resyncResults.filter(Boolean).map(r => r.rtt));
+        if (worstRtt > 0) {
+            // Adapt the margin to what the network is doing RIGHT NOW, and to the slowest
+            // connected phone — if any one connection is having a rough moment, everyone
+            // needs the extra headroom, not just the closest device.
+            leadMs = Math.max(BAND_SYNC_LEAD_MS, worstRtt * 20 + 200);
         }
     }
     // Base lead-in before the true downbeat: minimal for a normal local start, or a network-
@@ -5137,7 +5257,7 @@ function applyViewState(view) {
         // Only clean up if leaving mid-pairing (camera open, no connection established yet).
         // A successfully connected session must survive navigating away — the whole point of
         // Stage 3 is triggering it from the main Play button, which requires leaving this screen.
-        const isConnected = bandSync.channel && bandSync.channel.readyState === 'open';
+        const isConnected = getConnectedPeers().length > 0;
         if (bandSyncEl.classList.contains('flex') && !isConnected) resetBandSync();
         bandSyncEl.classList.add('hidden'); bandSyncEl.classList.remove('flex');
     }
@@ -5203,26 +5323,35 @@ function setupEvents() {
     document.getElementById('bandSyncJoinBtn').addEventListener('click', startBandSyncJoin);
     document.getElementById('bandSyncCancelScanBtn').addEventListener('click', () => { stopQrScanner(); resetBandSync(); });
     document.getElementById('bandSyncDisconnectBtn').addEventListener('click', resetBandSync);
+    document.getElementById('bandSyncAddPeerBtn').addEventListener('click', startNewHostPairing);
+    document.getElementById('bandSyncAlertDismissBtn').addEventListener('click', hideBandSyncSyncAlert);
+    document.getElementById('bandSyncPeerList').addEventListener('click', e => {
+        const btn = e.target.closest('.band-sync-remove-peer');
+        if (btn) removeBandSyncPeer(btn.dataset.peerId);
+    });
     document.getElementById('bandSyncSendTestBtn').addEventListener('click', () => {
-        if (!bandSync.channel || bandSync.channel.readyState !== 'open') { setBandSyncStatus('Not connected.'); return; }
+        const peers = getConnectedPeers();
+        if (!peers.length) { setBandSyncStatus('Not connected.'); return; }
         const text = `ping from ${bandSync.role} @ ${new Date().toLocaleTimeString()}`;
-        bandSync.channel.send(JSON.stringify({ type: 'ping', text }));
-        logBandSyncMessage(`Sent ping: "${text}"`, 'out');
+        peers.forEach(peer => peer.channel.send(JSON.stringify({ type: 'ping', text })));
+        logBandSyncMessage(`Sent ping to ${peers.length} device${peers.length === 1 ? '' : 's'}: "${text}"`, 'out');
     });
     document.getElementById('bandSyncClockSyncBtn').addEventListener('click', async () => {
         const btn = document.getElementById('bandSyncClockSyncBtn');
         const resultEl = document.getElementById('bandSyncClockSyncResult');
-        if (!bandSync.channel || bandSync.channel.readyState !== 'open') { resultEl.textContent = 'Not connected.'; return; }
+        const peers = getConnectedPeers();
+        if (!peers.length) { resultEl.textContent = 'Not connected.'; return; }
         btn.disabled = true; btn.textContent = 'Measuring…';
         resultEl.textContent = '';
-        const result = await runClockSync();
+        const results = await Promise.all(peers.map(p => runClockSync(p)));
         btn.disabled = false; btn.textContent = 'Measure Clock Offset';
-        if (result) {
-            resultEl.textContent = `Offset: ${result.offset.toFixed(2)}ms · Best round-trip: ${result.rtt.toFixed(2)}ms (${result.sampleCount}/10 rounds succeeded)`;
-            logBandSyncMessage(`Clock synced — offset ${result.offset.toFixed(2)}ms, best RTT ${result.rtt.toFixed(2)}ms`, 'system');
-        } else {
-            resultEl.textContent = 'Could not measure — no responses received.';
-        }
+        const lines = peers.map((peer, i) => {
+            const r = results[i];
+            if (!r) return `${peer.label}: no response`;
+            logBandSyncMessage(`Clock synced with ${peer.label} — offset ${r.offset.toFixed(2)}ms, best RTT ${r.rtt.toFixed(2)}ms`, 'system');
+            return `${peer.label}: ${r.offset.toFixed(2)}ms offset, ${r.rtt.toFixed(2)}ms RTT`;
+        });
+        resultEl.textContent = lines.join(' · ');
     });
     document.getElementById('bandSyncFollowToggle').addEventListener('change', e => {
         state.bandSyncFollowSections = e.target.checked;
