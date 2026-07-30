@@ -388,7 +388,7 @@ tailwind.config = {
 </main>
 
 <div id="tempoListenIndicator" class="hidden fixed left-1/2 -translate-x-1/2 bottom-28 z-[300] bg-s2 border border-gold/40 rounded-xl px-5 py-3 text-center shadow-2xl" style="width:220px;">
-    <div class="flex items-center gap-2 justify-center text-gold text-[11px] font-display font-semibold tracking-widest">
+    <div class="flex items-center gap-2 justify-center text-gold text-[11px] font-display font-semibold tracking-widest" id="tempoListenStatusLabel">
         <i class="fas fa-microphone" style="animation:pulse-glow 1s ease-in-out infinite;"></i> LISTENING
     </div>
     <div class="font-mono text-3xl text-zinc-100 mt-1 tabular-nums" id="tempoListenValue">--</div>
@@ -1661,6 +1661,7 @@ function setupBandSyncChannel(channel, peer) {
         if (msg.type === 'sync_start') { handleBandSyncStart(msg); return; }
         if (msg.type === 'sync_stop') { handleBandSyncStop(); return; }
         if (msg.type === 'sync_ack') { handleBandSyncAck(msg, peer); return; }
+        if (msg.type === 'tempo_change') { handleBandSyncTempoChange(msg); return; }
         logBandSyncMessage(`Received: ${e.data}`, 'in');
     };
 }
@@ -1761,6 +1762,27 @@ function broadcastBandSyncStop() {
     if (!peers.length) return;
     peers.forEach(peer => peer.channel.send(JSON.stringify({ type: 'sync_stop' })));
     logBandSyncMessage('Sent sync stop', 'out');
+}
+
+function broadcastBandSyncTempo(newBpm) {
+    const peers = getConnectedPeers();
+    if (!peers.length) return;
+    peers.forEach(peer => peer.channel.send(JSON.stringify({ type: 'tempo_change', bpm: newBpm })));
+}
+
+function handleBandSyncTempoChange(msg) {
+    if (!state.isPlaying) return;
+    const clamped = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(msg.bpm)));
+    if (clamped === state.bpm) return;
+    // Mirrors setLiveBpm's own proportional section rescaling, so a phone following the
+    // host's sections stays consistent with what the host just did to its own tempo.
+    if (state.songMod.active && state.songMod.sections.length > 1 && state.bpm > 0) {
+        const ratio = clamped / state.bpm;
+        state.songMod.sections.forEach((sec, i) => {
+            sec.bpm = i === state.songMod.index ? clamped : Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(sec.bpm * ratio)));
+        });
+    }
+    state.bpm = clamped;
 }
 
 function buildFollowHostSong(hostSections, ownSong) {
@@ -3026,7 +3048,10 @@ function handleTap() {
 // read far more reliably than a quiet or very busy passage.
 let listenStream = null, listenAnalyser = null, listenRAF = null, listenActive = false;
 let listenEnergyHistory = [], listenBeatTimestamps = [], listenLastBeatTime = 0, lastDetectedBpm = null;
+let listenClusters = [], listenConfirmed = false;
 const LISTEN_REFRACTORY_MS = 250; // caps detection at 240 BPM-equivalent spacing, avoids double-firing on one hit
+const LISTEN_CLUSTER_TOLERANCE = 0.06; // intervals within 6% of each other are considered "the same tempo"
+const LISTEN_CONFIRM_COUNT = 4; // this many agreeing intervals in a row locks the result in
 
 async function startTempoListening() {
     if (listenActive) return;
@@ -3045,6 +3070,11 @@ async function startTempoListening() {
     }
     listenActive = true;
     listenEnergyHistory = []; listenBeatTimestamps = []; listenLastBeatTime = 0; lastDetectedBpm = null;
+    listenClusters = []; listenConfirmed = false;
+    const valueEl = document.getElementById('tempoListenValue');
+    if (valueEl) valueEl.classList.remove('text-[#34D399]');
+    const statusEl = document.getElementById('tempoListenStatusLabel');
+    if (statusEl) statusEl.innerHTML = '<i class="fas fa-microphone" style="animation:pulse-glow 1s ease-in-out infinite;"></i> LISTENING';
     const c = state.audioCtx;
     const source = c.createMediaStreamSource(listenStream);
     // Raw mic input picking up another device's speaker is typically quiet — boost it
@@ -3099,17 +3129,44 @@ function runBeatDetection() {
 }
 
 function updateListeningEstimate() {
-    if (listenBeatTimestamps.length < 4) return;
-    const intervals = [];
-    for (let i = 1; i < listenBeatTimestamps.length; i++) intervals.push(listenBeatTimestamps[i] - listenBeatTimestamps[i - 1]);
-    intervals.sort((a, b) => a - b);
-    const median = intervals[Math.floor(intervals.length / 2)];
-    let bpm = Math.round(60000 / median);
-    while (bpm > 200) bpm = Math.round(bpm / 2); // fold octave errors back into range
-    while (bpm < 60) bpm = Math.round(bpm * 2);
-    bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, bpm));
-    lastDetectedBpm = bpm;
-    document.getElementById('tempoListenValue').textContent = bpm;
+    if (listenConfirmed) return; // already locked in — stop reacting to further detections
+    if (listenBeatTimestamps.length < 2) return;
+    const lastInterval = listenBeatTimestamps[listenBeatTimestamps.length - 1] - listenBeatTimestamps[listenBeatTimestamps.length - 2];
+    if (lastInterval < 150) return; // implausibly fast (>400bpm) — almost certainly a double-trigger, not a real beat
+
+    let bpm = 60000 / lastInterval;
+    while (bpm > 200) bpm /= 2; // fold octave errors back into range
+    while (bpm < 60) bpm *= 2;
+
+    // Find an existing cluster this detection agrees with, or start a new one. Genuine beats
+    // reinforce the same cluster over and over; stray noise/echoes scatter across different
+    // ones and never build up enough agreement to win.
+    let cluster = listenClusters.find(c => Math.abs(c.bpm - bpm) / c.bpm < LISTEN_CLUSTER_TOLERANCE);
+    if (cluster) {
+        cluster.values.push(bpm);
+        cluster.bpm = cluster.values.reduce((a, b) => a + b, 0) / cluster.values.length;
+    } else {
+        cluster = { bpm, values: [bpm] };
+        listenClusters.push(cluster);
+    }
+
+    const best = listenClusters.reduce((a, b) => (b.values.length > a.values.length ? b : a));
+    const rounded = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(best.bpm)));
+    lastDetectedBpm = rounded;
+    document.getElementById('tempoListenValue').textContent = rounded;
+
+    if (best.values.length >= LISTEN_CONFIRM_COUNT) {
+        listenConfirmed = true;
+        lastDetectedBpm = rounded;
+        showTempoListenConfirmed(rounded);
+    }
+}
+
+function showTempoListenConfirmed(bpm) {
+    const valueEl = document.getElementById('tempoListenValue');
+    const statusEl = document.getElementById('tempoListenStatusLabel');
+    if (valueEl) valueEl.classList.add('text-[#34D399]');
+    if (statusEl) statusEl.innerHTML = '<i class="fas fa-circle-check"></i> CONFIRMED';
 }
 
 function stopTempoListening(apply) {
@@ -3122,12 +3179,13 @@ function stopTempoListening(apply) {
     if (apply) {
         if (lastDetectedBpm) {
             setLiveBpm(lastDetectedBpm);
-            showToast(`Tempo detected: ${lastDetectedBpm} BPM`);
+            showToast(listenConfirmed ? `Tempo confirmed: ${lastDetectedBpm} BPM` : `Tempo detected: ${lastDetectedBpm} BPM (best guess — hold a little longer next time for a confirmed reading)`);
         } else {
             showToast('No clear beat detected — hold closer to the sound source and try again');
         }
     }
     listenEnergyHistory = []; listenBeatTimestamps = []; lastDetectedBpm = null;
+    listenClusters = []; listenConfirmed = false;
 }
 
 // ===== TIMER =====
@@ -5490,13 +5548,15 @@ function closeBandSyncView() { history.back(); }
 // song data (and its section BPMs) is never touched.
 function setLiveBpm(newBpm) {
     const clamped = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(newBpm)));
-    if (state.isPlaying && state.songMod.active && state.songMod.sections.length > 1 && state.bpm > 0 && clamped !== state.bpm) {
+    const changed = clamped !== state.bpm;
+    if (state.isPlaying && state.songMod.active && state.songMod.sections.length > 1 && state.bpm > 0 && changed) {
         const ratio = clamped / state.bpm;
         state.songMod.sections.forEach((sec, i) => {
             sec.bpm = i === state.songMod.index ? clamped : Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(sec.bpm * ratio)));
         });
     }
     state.bpm = clamped;
+    if (changed && state.isPlaying && bandSync.role === 'host') broadcastBandSyncTempo(clamped);
 }
 
 function adjustTempo(delta) {
