@@ -387,11 +387,15 @@ tailwind.config = {
     </section>
 </main>
 
-<div id="tempoListenIndicator" class="hidden fixed left-1/2 -translate-x-1/2 bottom-28 z-[300] bg-s2 border border-gold/40 rounded-xl px-5 py-3 text-center shadow-2xl">
+<div id="tempoListenIndicator" class="hidden fixed left-1/2 -translate-x-1/2 bottom-28 z-[300] bg-s2 border border-gold/40 rounded-xl px-5 py-3 text-center shadow-2xl" style="width:220px;">
     <div class="flex items-center gap-2 justify-center text-gold text-[11px] font-display font-semibold tracking-widest">
         <i class="fas fa-microphone" style="animation:pulse-glow 1s ease-in-out infinite;"></i> LISTENING
     </div>
     <div class="font-mono text-3xl text-zinc-100 mt-1 tabular-nums" id="tempoListenValue">--</div>
+    <div class="w-full h-1.5 rounded-full bg-s3 mt-2 overflow-hidden">
+        <div id="tempoListenLevelBar" class="h-full bg-gold" style="width:0%; transition:width 0.05s linear;"></div>
+    </div>
+    <div class="text-[9px] text-zinc-700 mt-1" id="tempoListenLevelLabel">mic level</div>
     <div class="text-[10px] text-zinc-600 mt-0.5">Release to apply · move away to cancel</div>
 </div>
 
@@ -3028,7 +3032,13 @@ async function startTempoListening() {
     if (listenActive) return;
     ensureAudio();
     try {
-        listenStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        listenStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+            }
+        });
     } catch (err) {
         showToast('Microphone access denied or unavailable');
         return;
@@ -3050,6 +3060,8 @@ async function startTempoListening() {
     const el = document.getElementById('tempoListenIndicator');
     el.classList.remove('hidden');
     document.getElementById('tempoListenValue').textContent = '--';
+    const levelBar = document.getElementById('tempoListenLevelBar');
+    if (levelBar) levelBar.style.width = '0%';
     runBeatDetection();
 }
 
@@ -3060,6 +3072,8 @@ function runBeatDetection() {
     let sum = 0;
     for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
     const rms = Math.sqrt(sum / data.length);
+    const levelBar = document.getElementById('tempoListenLevelBar');
+    if (levelBar) levelBar.style.width = Math.min(100, rms * 400) + '%';
     listenEnergyHistory.push(rms);
     if (listenEnergyHistory.length > 43) listenEnergyHistory.shift();
     const avg = listenEnergyHistory.reduce((a, b) => a + b, 0) / listenEnergyHistory.length;
