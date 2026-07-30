@@ -2373,6 +2373,7 @@ function startMetronome(delayedStartTime) {
     scheduler(); updatePlayBtn();
     requestWakeLock();
     startAudioKeepAlive();
+    updateMediaSession(true);
 }
 
 function stopMetronome() {
@@ -2384,6 +2385,7 @@ function stopMetronome() {
     state.pendingLoopStartBar = null;
     releaseWakeLock();
     stopAudioKeepAlive();
+    updateMediaSession(false);
     // Stopping resets the song back to its start — a paused/resumed mid-song state (still
     // sitting mid-bridge, at whatever tempo the bridge was at) would be dangerous live, since
     // the next Play needs to reliably start the song from the top, not wherever it left off.
@@ -2415,6 +2417,31 @@ function resetToSongStart() {
 // visibility/focus handlers below — fast-forwards the click position using wall-clock
 // elapsed time (which keeps advancing even if the AudioContext itself froze during a
 // screen-off/background suspension), instead of jumping back to beat 1.
+// ===== MEDIA SESSION =====
+// Browsers exempt tabs that are recognized as actively playing media from the aggressive
+// background throttling/freezing that otherwise kicks in when switching to another app —
+// this is the official, documented way to signal that, and is a different mechanism from
+// the Wake Lock above (which only prevents the screen itself from sleeping). Also gives
+// proper lock-screen/notification playback controls as a side benefit.
+function updateMediaSession(playing) {
+    if (!('mediaSession' in navigator)) return;
+    try {
+        if (playing) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: 'Kasika Pro Metronome',
+                artist: `${Math.round(state.bpm)} BPM · ${state.timeSig}`,
+                album: 'Click Track',
+            });
+            navigator.mediaSession.playbackState = 'playing';
+            navigator.mediaSession.setActionHandler('pause', () => togglePlayback());
+            navigator.mediaSession.setActionHandler('stop', () => togglePlayback());
+            navigator.mediaSession.setActionHandler('play', () => togglePlayback());
+        } else {
+            navigator.mediaSession.playbackState = 'paused';
+        }
+    } catch (err) { console.warn('MediaSession update failed:', err); }
+}
+
 // ===== SCREEN WAKE LOCK =====
 // Prevents the screen from sleeping while the metronome is playing — this is the real fix
 // for the screen-off glitch: if the screen never sleeps during active use, the browser never
@@ -2449,7 +2476,7 @@ function startAudioKeepAlive() {
     const c = state.audioCtx;
     keepAliveOsc = c.createOscillator();
     keepAliveGain = c.createGain();
-    keepAliveGain.gain.value = 0.00001; // effectively silent
+    keepAliveGain.gain.value = 0.002; // very quiet, but a genuinely-quiet signal can still fail a browser's own silence-detection threshold — this is high enough to register as real audio output without being perceptible
     keepAliveOsc.frequency.value = 20000; // right at the edge of audibility even before the gain cut
     keepAliveOsc.connect(keepAliveGain);
     keepAliveGain.connect(c.destination); // deliberately bypassing the limiter/master bus — kept fully separate
@@ -3037,7 +3064,7 @@ function runBeatDetection() {
     if (listenEnergyHistory.length > 43) listenEnergyHistory.shift();
     const avg = listenEnergyHistory.reduce((a, b) => a + b, 0) / listenEnergyHistory.length;
     const now = performance.now();
-    if (rms > avg * 1.4 && rms > 0.05 && now - listenLastBeatTime > LISTEN_REFRACTORY_MS) {
+    if (rms > avg * 1.25 && rms > 0.025 && now - listenLastBeatTime > LISTEN_REFRACTORY_MS) {
         listenLastBeatTime = now;
         listenBeatTimestamps.push(now);
         if (listenBeatTimestamps.length > 12) listenBeatTimestamps.shift();
@@ -3067,9 +3094,13 @@ function stopTempoListening(apply) {
     if (listenStream) listenStream.getTracks().forEach(t => t.stop());
     const el = document.getElementById('tempoListenIndicator');
     el.classList.add('hidden');
-    if (apply && lastDetectedBpm) {
-        setLiveBpm(lastDetectedBpm);
-        showToast(`Tempo detected: ${lastDetectedBpm} BPM`);
+    if (apply) {
+        if (lastDetectedBpm) {
+            setLiveBpm(lastDetectedBpm);
+            showToast(`Tempo detected: ${lastDetectedBpm} BPM`);
+        } else {
+            showToast('No clear beat detected — hold closer to the sound source and try again');
+        }
     }
     listenEnergyHistory = []; listenBeatTimestamps = []; lastDetectedBpm = null;
 }
