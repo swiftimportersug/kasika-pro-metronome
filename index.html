@@ -1160,6 +1160,7 @@ const state = {
     setlists: [], activeSetlistId: null, activeSongId: null,
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
     audioCtx: null, masterBus: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
+    wallClockAnchorTime: null, wallClockAnchorClick: 0, wallClockAnchorBpm: null,
     canvas: null, ctx: null, canvasSize: 0,
     lastBeatTimestamp: 0, beatPulse: 0, currentBeatDurationMs: 500, voiceLatencyEstimateMs: 120,
     customDragId: null, dropLineEl: null,
@@ -2400,6 +2401,12 @@ function resetToSongStart() {
 function scheduler() {
     if (!state.isPlaying) return;
     if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+    // Anchor: performance.now() keeps advancing even if the AudioContext itself gets frozen
+    // during a screen-off/background suspension, so this gives us a reliable "what time is it
+    // really, and what beat were we last confirmed to be on" checkpoint to recover from.
+    state.wallClockAnchorTime = performance.now();
+    state.wallClockAnchorClick = state.currentClick;
+    state.wallClockAnchorBpm = state.bpm;
     const ct = state.audioCtx.currentTime;
     if (state.nextNoteTime < ct - 0.5) { state.nextNoteTime = ct + 0.03; state.currentClick = 0; }
     while (state.nextNoteTime < ct + SCHEDULE_AHEAD) { scheduleNote(state.currentClick, state.nextNoteTime); advanceClick(); }
@@ -2409,12 +2416,28 @@ function scheduler() {
 function recoverAudioIfNeeded() {
     if (!state.audioCtx) return;
     if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+    if (state.houseAudioCtx && state.houseAudioCtx.state === 'suspended') state.houseAudioCtx.resume();
     if (state.isPlaying) {
-        // Coming back from a background tab / locked screen can leave nextNoteTime
-        // stale by many seconds. Rather than let the catch-up logic try to replay a
-        // long silent gap, just cleanly resync to "now" on the next beat.
-        state.nextNoteTime = state.audioCtx.currentTime + 0.03;
-        state.currentClick = 0;
+        // Coming back from a background tab / locked screen can leave the scheduler's timers
+        // stale by many seconds, and AudioContext.currentTime itself can freeze during that
+        // gap — so it can't be trusted alone to tell us how much real time passed. Use
+        // performance.now() (which keeps ticking regardless) to work out how many beats
+        // should actually have elapsed, and silently fast-forward the click position to
+        // match, instead of jarringly resetting to beat 1 every time.
+        const wallGapMs = performance.now() - (state.wallClockAnchorTime || performance.now());
+        if (wallGapMs > 300) {
+            const beatDurSec = 60 / (state.wallClockAnchorBpm || state.bpm);
+            const mult = getSubdivMult();
+            const clicksElapsed = Math.round((wallGapMs / 1000) / (beatDurSec / mult));
+            const total = getBeatsPerMeasure() * mult;
+            state.currentClick = (((state.wallClockAnchorClick || 0) + clicksElapsed) % total + total) % total;
+            if (bandSync.role === 'host' && getConnectedPeers().length) {
+                showToast('Resumed after the screen was off — tap Play again for tightest band sync');
+            } else if (bandSync.role === 'join') {
+                showToast('Resumed after the screen was off — may be slightly out of sync with the host');
+            }
+        }
+        state.nextNoteTime = state.audioCtx.currentTime + 0.05;
     }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) recoverAudioIfNeeded(); });
