@@ -3047,12 +3047,23 @@ async function startTempoListening() {
     listenEnergyHistory = []; listenBeatTimestamps = []; listenLastBeatTime = 0; lastDetectedBpm = null;
     const c = state.audioCtx;
     const source = c.createMediaStreamSource(listenStream);
+    // Raw mic input picking up another device's speaker is typically quiet — boost it
+    // substantially before analysis rather than relying on the (disabled) browser AGC.
+    const gainBoost = c.createGain();
+    gainBoost.gain.value = 10;
+    // Small/phone speakers reproduce very little energy below ~150Hz, so a strict bass-only
+    // lowpass was starving the detector even with loud source material. A wide bandpass
+    // centered on low-mid "punch" (kick/snare body) captures far more of what a real-world
+    // playback device actually puts out, while still leaning toward percussive content over
+    // hiss or sibilance.
     const filter = c.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 150; // focus on bass/kick-drum range
+    filter.type = 'bandpass';
+    filter.frequency.value = 200;
+    filter.Q.value = 0.6;
     const analyser = c.createAnalyser();
     analyser.fftSize = 1024;
-    source.connect(filter);
+    source.connect(gainBoost);
+    gainBoost.connect(filter);
     filter.connect(analyser);
     listenAnalyser = analyser;
     // Deliberately NOT connected to destination — we only analyze the mic, never play it back.
