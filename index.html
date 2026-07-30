@@ -163,6 +163,7 @@ tailwind.config = {
     .edit-btn-move:disabled { opacity: 0.15; cursor: default; background: none; }
     .edit-btn-del { color: #52525b; }
     .edit-btn-lg { width: 34px; height: 34px; font-size: 13px; }
+    #headerIconRow::-webkit-scrollbar { display: none; }
     .edit-btn-del:hover { color: #f87171; background: rgba(248,113,113,0.1); }
     .drop-line {
         height: 2px; background: #D4A853; border-radius: 1px; margin: -1px 10px 0 10px;
@@ -267,52 +268,32 @@ tailwind.config = {
             <p class="text-[10px] text-zinc-500 tracking-widest uppercase">Metronome</p>
         </div>
     </div>
-    <div class="flex items-center gap-3">
-        <div class="flex items-center gap-2 text-[11px] text-zinc-600">
+    <div class="flex items-center gap-3 overflow-x-auto flex-nowrap" style="scrollbar-width:none; -ms-overflow-style:none;" id="headerIconRow">
+        <div class="flex items-center gap-2 text-[11px] text-zinc-600 flex-shrink-0">
             <span class="hidden sm:inline">Space: Play</span>
             <span class="hidden sm:inline text-zinc-700">|</span>
             <span class="hidden sm:inline">T: Tap</span>
             <span class="hidden sm:inline text-zinc-700">|</span>
             <span class="hidden sm:inline">Arrows: BPM</span>
         </div>
-        <div class="w-px h-4 bg-brd hidden sm:block"></div>
-        <button id="mainSearchBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all text-xs" title="Search set-lists and songs" aria-label="Search">
+        <div class="w-px h-4 bg-brd hidden sm:block flex-shrink-0"></div>
+        <button id="mainSearchBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all text-xs flex-shrink-0" title="Search set-lists and songs" aria-label="Search">
             <i class="fas fa-magnifying-glass"></i>
         </button>
-        <button id="openSetlistsBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-gold hover:border-gold/30 transition-all font-medium" title="Open set-lists">
+        <button id="openSetlistsBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-gold hover:border-gold/30 transition-all font-medium flex-shrink-0" title="Open set-lists">
             <i class="fas fa-list-ul text-[10px]"></i><span class="hidden sm:inline">Set-lists</span>
         </button>
-        <button id="openNotesBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all font-medium" title="Open notes">
+        <button id="openNotesBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all font-medium flex-shrink-0" title="Open notes">
             <i class="fas fa-note-sticky text-[10px]"></i><span class="hidden sm:inline">Notes</span>
         </button>
-        <button id="openCueBankBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#F472B6] hover:border-[#F472B6]/30 transition-all font-medium" title="Open voice cue bank">
+        <button id="openCueBankBtn" class="flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#F472B6] hover:border-[#F472B6]/30 transition-all font-medium flex-shrink-0" title="Open voice cue bank">
             <i class="fas fa-microphone text-[10px]"></i><span class="hidden sm:inline">Cues</span>
         </button>
-        <button id="openBandSyncBtn" class="relative flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all font-medium" title="Sync with your band's phones">
+        <button id="openBandSyncBtn" class="relative flex items-center gap-1.5 text-[11px] px-3 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-300 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all font-medium flex-shrink-0" title="Sync with your band's phones, and cloud backup">
             <i class="fas fa-people-group text-[10px]"></i><span class="hidden sm:inline">Band</span>
             <span id="bandSyncConnectedDot" class="hidden absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#34D399] border-2 border-surface"></span>
+            <span id="cloudSyncedDot" class="hidden absolute -bottom-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#2dd4bf] border-2 border-surface"></span>
         </button>
-        <div class="w-px h-4 bg-brd hidden sm:block"></div>
-        <button id="syncSignInBtn" class="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
-            <i class="fas fa-cloud-arrow-up text-[10px]"></i>
-            <span class="hidden sm:inline">Sync</span>
-        </button>
-        <div class="relative" id="syncStatusWrap">
-            <button id="syncStatus" class="hidden items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-[#2dd4bf]/10 border border-[#2dd4bf]/25 text-[#2dd4bf] hover:bg-[#2dd4bf]/20 transition-colors" title="Sync options">
-                <i class="fas fa-check-circle text-[10px]" id="syncStatusIcon"></i>
-                <span class="hidden sm:inline" id="syncStatusLabel">Synced</span>
-                <i class="fas fa-chevron-down text-[8px] opacity-60 ml-0.5"></i>
-            </button>
-            <div id="syncStatusDropdown" class="hidden flex-col absolute right-0 top-full mt-1.5 rounded-lg bg-s2 border border-brd/50 shadow-lg overflow-hidden" style="width:210px; z-index:60;">
-                <div class="px-3 py-2.5 border-b border-brd/40">
-                    <div class="text-[10px] text-zinc-600 uppercase tracking-wider">Signed in as</div>
-                    <div class="text-xs text-zinc-200 truncate mt-0.5" id="syncStatusEmail"></div>
-                </div>
-                <button id="syncSignOutBtn" class="w-full text-left px-3 py-2.5 text-xs text-red-400 hover:bg-red-400/10 transition-colors flex items-center gap-2">
-                    <i class="fas fa-right-from-bracket text-[11px]"></i>Sign Out
-                </button>
-            </div>
-        </div>
     </div>
 </header>
 
@@ -620,6 +601,31 @@ tailwind.config = {
     </div>
 
     <div class="flex-1 overflow-y-auto px-4 py-4">
+        <!-- Cloud Backup (moved here from the header to reduce icon clutter — a separate feature from peer-to-peer Band Sync below) -->
+        <div class="max-w-sm mx-auto mb-5 pb-5 border-b border-brd/30">
+            <label class="text-[10px] text-zinc-600 uppercase tracking-wider mb-2 block">Cloud Backup</label>
+            <button id="syncSignInBtn" class="w-full flex items-center justify-center gap-1.5 text-[11px] px-2.5 py-2 rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-gold hover:border-gold/30 transition-all" title="Sign in to sync across devices">
+                <i class="fas fa-cloud-arrow-up text-[10px]"></i>
+                <span>Sign in to back up set-lists &amp; notes</span>
+            </button>
+            <div class="relative" id="syncStatusWrap">
+                <button id="syncStatus" class="hidden w-full items-center justify-center gap-1.5 text-[11px] px-2.5 py-2 rounded-lg bg-[#2dd4bf]/10 border border-[#2dd4bf]/25 text-[#2dd4bf] hover:bg-[#2dd4bf]/20 transition-colors" title="Sync options">
+                    <i class="fas fa-check-circle text-[10px]" id="syncStatusIcon"></i>
+                    <span id="syncStatusLabel">Synced</span>
+                    <i class="fas fa-chevron-down text-[8px] opacity-60 ml-0.5"></i>
+                </button>
+                <div id="syncStatusDropdown" class="hidden flex-col absolute left-0 right-0 top-full mt-1.5 rounded-lg bg-s2 border border-brd/50 shadow-lg overflow-hidden" style="z-index:60;">
+                    <div class="px-3 py-2.5 border-b border-brd/40">
+                        <div class="text-[10px] text-zinc-600 uppercase tracking-wider">Signed in as</div>
+                        <div class="text-xs text-zinc-200 truncate mt-0.5" id="syncStatusEmail"></div>
+                    </div>
+                    <button id="syncSignOutBtn" class="w-full text-left px-3 py-2.5 text-xs text-red-400 hover:bg-red-400/10 transition-colors flex items-center gap-2">
+                        <i class="fas fa-right-from-bracket text-[11px]"></i>Sign Out
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Role picker -->
         <div id="bandSyncRolePicker" class="flex flex-col gap-3 max-w-sm mx-auto mt-4">
             <p class="text-xs text-zinc-500 text-center mb-1">Both phones need to be on the same WiFi or hotspot — no internet required. One phone hosts, the other joins.</p>
@@ -1027,6 +1033,7 @@ function updateSyncUI(signedIn, label) {
     const statusEl = document.getElementById('syncStatus');
     const statusLabel = document.getElementById('syncStatusLabel');
     const emailEl = document.getElementById('syncStatusEmail');
+    const cloudDot = document.getElementById('cloudSyncedDot');
     if (!signInBtn || !statusEl) return;
     if (signedIn) {
         signInBtn.classList.add('hidden');
@@ -1034,11 +1041,13 @@ function updateSyncUI(signedIn, label) {
         statusEl.title = label || '';
         if (statusLabel) statusLabel.textContent = 'Synced';
         if (emailEl) emailEl.textContent = label || '';
+        if (cloudDot) cloudDot.classList.remove('hidden');
     } else {
         signInBtn.classList.remove('hidden');
         statusEl.classList.add('hidden'); statusEl.classList.remove('flex');
         const dd = document.getElementById('syncStatusDropdown');
         if (dd) { dd.classList.add('hidden'); dd.classList.remove('flex'); }
+        if (cloudDot) cloudDot.classList.add('hidden');
     }
 }
 
@@ -2362,6 +2371,8 @@ function startMetronome(delayedStartTime) {
     state.visualClick = -1; state.lastBeatTimestamp = performance.now();
     state.nextNoteTime = delayedStartTime != null ? delayedStartTime : state.audioCtx.currentTime + 0.03;
     scheduler(); updatePlayBtn();
+    requestWakeLock();
+    startAudioKeepAlive();
 }
 
 function stopMetronome() {
@@ -2371,6 +2382,8 @@ function stopMetronome() {
     clearAllBeatBlockFlashes();
     stopLoopTrack();
     state.pendingLoopStartBar = null;
+    releaseWakeLock();
+    stopAudioKeepAlive();
     // Stopping resets the song back to its start — a paused/resumed mid-song state (still
     // sitting mid-bridge, at whatever tempo the bridge was at) would be dangerous live, since
     // the next Play needs to reliably start the song from the top, not wherever it left off.
@@ -2402,6 +2415,53 @@ function resetToSongStart() {
 // visibility/focus handlers below — fast-forwards the click position using wall-clock
 // elapsed time (which keeps advancing even if the AudioContext itself froze during a
 // screen-off/background suspension), instead of jumping back to beat 1.
+// ===== SCREEN WAKE LOCK =====
+// Prevents the screen from sleeping while the metronome is playing — this is the real fix
+// for the screen-off glitch: if the screen never sleeps during active use, the browser never
+// backgrounds/freezes the page in the first place, so there's nothing to recover from. Wake
+// locks are automatically released by the browser whenever the page becomes hidden even
+// briefly, so it needs to be re-requested on returning to visibility too.
+let wakeLockSentinel = null;
+async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+        wakeLockSentinel.addEventListener('release', () => { wakeLockSentinel = null; });
+    } catch (err) {
+        console.warn('Could not acquire wake lock:', err);
+    }
+}
+function releaseWakeLock() {
+    if (wakeLockSentinel) { wakeLockSentinel.release().catch(() => {}); wakeLockSentinel = null; }
+}
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.isPlaying && !wakeLockSentinel) requestWakeLock();
+});
+
+// A second, independent safeguard: a continuous, effectively-inaudible tone kept running
+// alongside the click while playing. Browsers are less likely to fully suspend an
+// AudioContext that has genuinely active, continuous audio processing — this covers cases
+// where the wake lock isn't granted (e.g. battery saver) or is bypassed by a manual power
+// button press.
+let keepAliveOsc = null, keepAliveGain = null;
+function startAudioKeepAlive() {
+    if (keepAliveOsc || !state.audioCtx) return;
+    const c = state.audioCtx;
+    keepAliveOsc = c.createOscillator();
+    keepAliveGain = c.createGain();
+    keepAliveGain.gain.value = 0.00001; // effectively silent
+    keepAliveOsc.frequency.value = 20000; // right at the edge of audibility even before the gain cut
+    keepAliveOsc.connect(keepAliveGain);
+    keepAliveGain.connect(c.destination); // deliberately bypassing the limiter/master bus — kept fully separate
+    keepAliveOsc.start();
+}
+function stopAudioKeepAlive() {
+    if (keepAliveOsc) {
+        try { keepAliveOsc.stop(); keepAliveOsc.disconnect(); keepAliveGain.disconnect(); } catch (err) {}
+        keepAliveOsc = null; keepAliveGain = null;
+    }
+}
+
 function fastForwardClickPosition(wallGapMs) {
     if (wallGapMs <= 300) { state.currentClick = 0; return; }
     const beatDurSec = 60 / (state.wallClockAnchorBpm || state.bpm);
