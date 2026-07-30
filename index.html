@@ -2398,17 +2398,42 @@ function resetToSongStart() {
     updateSetlistBpmDisplay();
 }
 
+// Shared recovery logic used both by the scheduler's own catch-up check and by the
+// visibility/focus handlers below — fast-forwards the click position using wall-clock
+// elapsed time (which keeps advancing even if the AudioContext itself froze during a
+// screen-off/background suspension), instead of jumping back to beat 1.
+function fastForwardClickPosition(wallGapMs) {
+    if (wallGapMs <= 300) { state.currentClick = 0; return; }
+    const beatDurSec = 60 / (state.wallClockAnchorBpm || state.bpm);
+    const mult = getSubdivMult();
+    const clicksElapsed = Math.round((wallGapMs / 1000) / (beatDurSec / mult));
+    const total = getBeatsPerMeasure() * mult;
+    state.currentClick = (((state.wallClockAnchorClick || 0) + clicksElapsed) % total + total) % total;
+    if (bandSync.role === 'host' && getConnectedPeers().length) {
+        showToast('Resumed after the screen was off — tap Play again for tightest band sync');
+    } else if (bandSync.role === 'join') {
+        showToast('Resumed after the screen was off — may be slightly out of sync with the host');
+    }
+}
+
 function scheduler() {
     if (!state.isPlaying) return;
     if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+    const ct = state.audioCtx.currentTime;
+    if (state.nextNoteTime < ct - 0.5) {
+        // The scheduler's own timer chain was throttled or fully paused (screen off,
+        // backgrounded) — read the elapsed wall-clock gap using the anchor from BEFORE this
+        // correction, then fast-forward to the correct beat instead of resetting to beat 1.
+        const wallGapMs = performance.now() - (state.wallClockAnchorTime || performance.now());
+        fastForwardClickPosition(wallGapMs);
+        state.nextNoteTime = ct + 0.03;
+    }
     // Anchor: performance.now() keeps advancing even if the AudioContext itself gets frozen
     // during a screen-off/background suspension, so this gives us a reliable "what time is it
     // really, and what beat were we last confirmed to be on" checkpoint to recover from.
     state.wallClockAnchorTime = performance.now();
     state.wallClockAnchorClick = state.currentClick;
     state.wallClockAnchorBpm = state.bpm;
-    const ct = state.audioCtx.currentTime;
-    if (state.nextNoteTime < ct - 0.5) { state.nextNoteTime = ct + 0.03; state.currentClick = 0; }
     while (state.nextNoteTime < ct + SCHEDULE_AHEAD) { scheduleNote(state.currentClick, state.nextNoteTime); advanceClick(); }
     state.schedulerTimer = setTimeout(scheduler, SCHEDULE_INTERVAL);
 }
@@ -2425,19 +2450,13 @@ function recoverAudioIfNeeded() {
         // should actually have elapsed, and silently fast-forward the click position to
         // match, instead of jarringly resetting to beat 1 every time.
         const wallGapMs = performance.now() - (state.wallClockAnchorTime || performance.now());
-        if (wallGapMs > 300) {
-            const beatDurSec = 60 / (state.wallClockAnchorBpm || state.bpm);
-            const mult = getSubdivMult();
-            const clicksElapsed = Math.round((wallGapMs / 1000) / (beatDurSec / mult));
-            const total = getBeatsPerMeasure() * mult;
-            state.currentClick = (((state.wallClockAnchorClick || 0) + clicksElapsed) % total + total) % total;
-            if (bandSync.role === 'host' && getConnectedPeers().length) {
-                showToast('Resumed after the screen was off — tap Play again for tightest band sync');
-            } else if (bandSync.role === 'join') {
-                showToast('Resumed after the screen was off — may be slightly out of sync with the host');
-            }
-        }
+        if (wallGapMs > 300) fastForwardClickPosition(wallGapMs);
         state.nextNoteTime = state.audioCtx.currentTime + 0.05;
+        // Refresh the anchor now, so if the scheduler's own catch-up check ALSO fires right
+        // around this same moment, it sees a fresh reference instead of double-correcting.
+        state.wallClockAnchorTime = performance.now();
+        state.wallClockAnchorClick = state.currentClick;
+        state.wallClockAnchorBpm = state.bpm;
     }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) recoverAudioIfNeeded(); });
