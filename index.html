@@ -4769,22 +4769,6 @@ function nextSectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.leng
 // cue for the very first row), not the section this row's own cue introduces. This is exactly
 // the section a musician needs to see named here to know "how long does THIS bit last"
 // without checking a different row.
-function getPrecedingSectionName(i) {
-    if (i === 0) {
-        if (editingIntroCue && editingIntroCue.reminderId) {
-            const rem = findReminderForCue(editingIntroCue);
-            if (rem) return escHtml(rem.name);
-        }
-        return 'Intro';
-    }
-    const prevMod = editingModulations[i - 1];
-    if (prevMod && prevMod.cue) {
-        const rem = findReminderForCue(prevMod.cue);
-        if (rem) return escHtml(rem.name);
-    }
-    return `Section ${i + 1}`;
-}
-
 function renderModulationRows() {
     const list = document.getElementById('modulationList');
     const loopRow = document.getElementById('modulationLoopRow');
@@ -4796,13 +4780,12 @@ function renderModulationRows() {
         return;
     }
     loopRow.style.display = 'flex';
-    hint.textContent = 'Each section shown here plays for its length, then leads into the next.';
+    hint.textContent = 'Add a reminder phrase to a section to give it a name here.';
     list.innerHTML = editingModulations.map((m, i) => {
         if (!m.color) m.color = nextSectionColor(i); // backward compat for sections saved before coloring existed
         const hasCue = m.cue && (m.cue.reminderId || m.cue.countIn);
         const assignedReminder = m.cue ? findReminderForCue(m.cue) : null;
-        const upcomingLabel = assignedReminder ? escHtml(assignedReminder.name) : `Section ${i + 2}`;
-        const precedingLabel = getPrecedingSectionName(i);
+        const sectionLabel = assignedReminder ? escHtml(assignedReminder.name) : `Section ${i + 2}`;
         const colorOptions = SECTION_COLORS.map(c => `<button type="button" class="mod-color-option w-6 h-6 rounded-full flex-shrink-0" style="background:${c}; border:2px solid ${m.color === c ? '#fafafa' : 'transparent'};" data-mod-idx="${i}" data-color="${c}"></button>`).join('');
         return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
@@ -4813,13 +4796,12 @@ function renderModulationRows() {
                         ${colorOptions}
                     </div>
                 </div>
-                <span class="text-[11px] text-zinc-200 font-semibold flex-shrink-0">${precedingLabel}</span>
+                <span class="text-[11px] text-zinc-200 font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned yet — add one to name this section'}">${sectionLabel}</span>
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">for</span>
                 <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
                 <input type="number" class="edit-input mod-extra-beats" style="width:36px" min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">beats →</span>
-                <span class="text-[11px] text-[#F472B6] font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned — add one to name this section'}">${upcomingLabel}</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
@@ -5061,7 +5043,6 @@ document.addEventListener('DOMContentLoaded', () => {
             editingIntroCue.reminderName = editingIntroCue.reminderId ? (state.cueBank.reminders.find(r => r.id === editingIntroCue.reminderId) || {}).name || null : null;
             if (editingIntroCue.reminderId && editingIntroCue.reminderLeadBeats == null) editingIntroCue.reminderLeadBeats = 2;
             renderIntroCueUI();
-            renderModulationRows();
             return;
         }
         const countInBox = e.target.closest('.intro-cue-countin');
