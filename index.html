@@ -355,7 +355,7 @@ tailwind.config = {
             <button id="playBtn" class="w-16 h-16 rounded-full bg-s2 border-2 border-gold/30 flex items-center justify-center text-gold text-xl hover:border-gold/60 hover:bg-gold/5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Play or stop">
                 <i class="fas fa-play ml-0.5" id="playIcon"></i>
             </button>
-            <button id="tapBtn" class="h-16 px-8 rounded-xl bg-s2 border border-brd text-zinc-300 font-display font-semibold text-sm tracking-wider hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Tap tempo">
+            <button id="tapBtn" class="h-16 px-8 rounded-xl bg-s2 border border-brd text-zinc-300 font-display font-semibold text-sm tracking-wider hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" style="user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:manipulation;" aria-label="Tap tempo">
                 TAP
             </button>
             <button id="practiceBtn" class="h-16 px-5 rounded-xl bg-s2 border border-brd text-zinc-300 flex flex-col items-center justify-center gap-1 hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Practice mode tempo ramp">
@@ -3029,6 +3029,7 @@ function handlePointerUp() { state.isDragging = false; state.canvas.classList.re
 let tapTimes = [];
 function handleTap() {
     ensureAudio(); const now = Date.now();
+    if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] < 60) return; // debounce — no human taps this fast; treat as a duplicate event
     if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > 2000) tapTimes = [];
     tapTimes.push(now); if (tapTimes.length > 8) tapTimes.shift();
     const btn = document.getElementById('tapBtn');
@@ -3049,6 +3050,7 @@ function handleTap() {
 let listenStream = null, listenAnalyser = null, listenRAF = null, listenActive = false;
 let listenEnergyHistory = [], listenBeatTimestamps = [], listenLastBeatTime = 0, lastDetectedBpm = null;
 let listenClusters = [], listenConfirmed = false;
+let listenEnergySamples = [], listenLastAutocorrelationRun = 0;
 const LISTEN_REFRACTORY_MS = 250; // caps detection at 240 BPM-equivalent spacing, avoids double-firing on one hit
 const LISTEN_CLUSTER_TOLERANCE = 0.06; // intervals within 6% of each other are considered "the same tempo"
 const LISTEN_CONFIRM_COUNT = 4; // this many agreeing intervals in a row locks the result in
@@ -3081,23 +3083,19 @@ async function startTempoListening() {
     // substantially before analysis rather than relying on the (disabled) browser AGC.
     const gainBoost = c.createGain();
     gainBoost.gain.value = 10;
-    // Small/phone speakers reproduce very little energy below ~150Hz, so a strict bass-only
-    // lowpass was starving the detector even with loud source material. A wide bandpass
-    // centered on low-mid "punch" (kick/snare body) captures far more of what a real-world
-    // playback device actually puts out, while still leaning toward percussive content over
-    // hiss or sibilance.
-    const filter = c.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 200;
-    filter.Q.value = 0.6;
     const analyser = c.createAnalyser();
     analyser.fftSize = 1024;
+    // No frequency filtering here — autocorrelation (below) is naturally robust to
+    // non-periodic content across the whole spectrum, so feeding it the full-spectrum signal
+    // gives it access to rhythmic information in basslines, strumming, vocal accents, etc.,
+    // not just isolated drum transients.
     source.connect(gainBoost);
-    gainBoost.connect(filter);
-    filter.connect(analyser);
+    gainBoost.connect(analyser);
     listenAnalyser = analyser;
     // Deliberately NOT connected to destination — we only analyze the mic, never play it back.
 
+    listenEnergySamples = [];
+    listenLastAutocorrelationRun = 0;
     const el = document.getElementById('tempoListenIndicator');
     el.classList.remove('hidden');
     document.getElementById('tempoListenValue').textContent = '--';
@@ -3115,6 +3113,11 @@ function runBeatDetection() {
     const rms = Math.sqrt(sum / data.length);
     const levelBar = document.getElementById('tempoListenLevelBar');
     if (levelBar) levelBar.style.width = Math.min(100, rms * 400) + '%';
+
+    // Two independent detection methods, both feeding the same clustering/confirmation
+    // system: onset spikes (precise when there's a clear percussive hit) and autocorrelation
+    // over the energy envelope (robust even without one — catches periodic rhythm in a
+    // bassline, strumming pattern, or vocal phrasing that never produces a sharp transient).
     listenEnergyHistory.push(rms);
     if (listenEnergyHistory.length > 43) listenEnergyHistory.shift();
     const avg = listenEnergyHistory.reduce((a, b) => a + b, 0) / listenEnergyHistory.length;
@@ -3125,22 +3128,73 @@ function runBeatDetection() {
         if (listenBeatTimestamps.length > 12) listenBeatTimestamps.shift();
         updateListeningEstimate();
     }
+
+    listenEnergySamples.push({ t: now, e: rms });
+    const cutoff = now - 4000;
+    while (listenEnergySamples.length && listenEnergySamples[0].t < cutoff) listenEnergySamples.shift();
+    if (now - listenLastAutocorrelationRun > 350) {
+        listenLastAutocorrelationRun = now;
+        runAutocorrelationEstimate();
+    }
+
     listenRAF = requestAnimationFrame(runBeatDetection);
 }
 
+// Resamples the collected energy readings onto a fixed time grid, then autocorrelates that
+// signal against time-shifted copies of itself across the plausible tempo range (60-200 BPM).
+// A genuinely periodic rhythm produces a clear correlation peak at the lag matching its beat
+// period — this works even when no single moment is a sharp, isolated "spike," which is
+// exactly where the onset detector above struggles.
+function runAutocorrelationEstimate() {
+    const SAMPLE_MS = 20;
+    if (listenEnergySamples.length < 2) return;
+    const startT = listenEnergySamples[0].t, endT = listenEnergySamples[listenEnergySamples.length - 1].t;
+    const numSamples = Math.floor((endT - startT) / SAMPLE_MS);
+    if (numSamples < 75) return; // need at least ~1.5s of data for a meaningful result
+    const grid = new Float32Array(numSamples);
+    let idx = 0;
+    for (let i = 0; i < numSamples; i++) {
+        const targetT = startT + i * SAMPLE_MS;
+        while (idx < listenEnergySamples.length - 1 && listenEnergySamples[idx + 1].t <= targetT) idx++;
+        grid[i] = listenEnergySamples[idx].e;
+    }
+    const mean = grid.reduce((a, b) => a + b, 0) / grid.length;
+    for (let i = 0; i < grid.length; i++) grid[i] -= mean; // remove DC offset so a steady volume doesn't dominate the correlation
+
+    const minLag = Math.round((60000 / 200) / SAMPLE_MS); // 200 BPM
+    const maxLag = Math.min(grid.length - 1, Math.round((60000 / 60) / SAMPLE_MS)); // 60 BPM
+    let bestLag = -1, bestScore = -Infinity;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+        let sum = 0;
+        for (let i = 0; i < grid.length - lag; i++) sum += grid[i] * grid[i + lag];
+        const norm = sum / (grid.length - lag);
+        if (norm > bestScore) { bestScore = norm; bestLag = lag; }
+    }
+    if (bestLag <= 0 || bestScore <= 0) return; // no meaningful periodicity found this round
+
+    let bpm = 60000 / (bestLag * SAMPLE_MS);
+    while (bpm > 200) bpm /= 2;
+    while (bpm < 60) bpm *= 2;
+    feedTempoEstimate(bpm);
+}
+
 function updateListeningEstimate() {
-    if (listenConfirmed) return; // already locked in — stop reacting to further detections
     if (listenBeatTimestamps.length < 2) return;
     const lastInterval = listenBeatTimestamps[listenBeatTimestamps.length - 1] - listenBeatTimestamps[listenBeatTimestamps.length - 2];
     if (lastInterval < 150) return; // implausibly fast (>400bpm) — almost certainly a double-trigger, not a real beat
-
     let bpm = 60000 / lastInterval;
     while (bpm > 200) bpm /= 2; // fold octave errors back into range
     while (bpm < 60) bpm *= 2;
+    feedTempoEstimate(bpm);
+}
 
-    // Find an existing cluster this detection agrees with, or start a new one. Genuine beats
-    // reinforce the same cluster over and over; stray noise/echoes scatter across different
-    // ones and never build up enough agreement to win.
+// Shared by both detection methods (onset spikes and autocorrelation) — each new estimate
+// joins whichever existing cluster it agrees with, or starts a new one. Genuine, consistent
+// tempo reinforces the same cluster over and over from BOTH methods simultaneously; stray
+// noise/echoes/octave errors scatter across different clusters and never build up enough
+// agreement to win.
+function feedTempoEstimate(bpm) {
+    if (listenConfirmed) return; // already locked in — stop reacting to further detections
     let cluster = listenClusters.find(c => Math.abs(c.bpm - bpm) / c.bpm < LISTEN_CLUSTER_TOLERANCE);
     if (cluster) {
         cluster.values.push(bpm);
@@ -5813,7 +5867,7 @@ function setupEvents() {
     (() => {
         const tapBtn = document.getElementById('tapBtn');
         const HOLD_THRESHOLD_MS = 450;
-        let tapHoldTimer = null, tapHoldTriggered = false;
+        let tapHoldTimer = null, tapHoldTriggered = false, touchHandled = false;
         const onDown = e => {
             tapHoldTriggered = false;
             clearTimeout(tapHoldTimer);
@@ -5828,12 +5882,17 @@ function setupEvents() {
             clearTimeout(tapHoldTimer);
             if (tapHoldTriggered) stopTempoListening(false);
         };
-        tapBtn.addEventListener('mousedown', onDown);
-        tapBtn.addEventListener('touchstart', onDown, { passive: true });
-        tapBtn.addEventListener('mouseup', onUp);
-        tapBtn.addEventListener('touchend', onUp);
-        tapBtn.addEventListener('mouseleave', onCancel);
-        tapBtn.addEventListener('touchcancel', onCancel);
+        // Touch handlers are deliberately NOT passive, and call preventDefault: this both
+        // suppresses the native long-press "select text" gesture, and stops the browser from
+        // firing synthetic compatibility mouse events after the touch sequence — without
+        // this, a single physical tap was firing handleTap() twice (once via touch, once via
+        // the phantom mouse event a moment later), corrupting the tap-tempo timing.
+        tapBtn.addEventListener('touchstart', e => { e.preventDefault(); touchHandled = true; onDown(e); }, { passive: false });
+        tapBtn.addEventListener('touchend', e => { e.preventDefault(); onUp(e); }, { passive: false });
+        tapBtn.addEventListener('touchcancel', e => { e.preventDefault(); onCancel(e); }, { passive: false });
+        tapBtn.addEventListener('mousedown', e => { if (touchHandled) return; onDown(e); });
+        tapBtn.addEventListener('mouseup', e => { if (touchHandled) { touchHandled = false; return; } onUp(e); });
+        tapBtn.addEventListener('mouseleave', e => { if (touchHandled) return; onCancel(e); });
     })();
     document.getElementById('timeSigSelect').addEventListener('click', () => {
         openTimeSigPicker(state.timeSig, val => {
