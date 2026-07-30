@@ -4779,6 +4779,8 @@ function renderModulationRows() {
     list.innerHTML = editingModulations.map((m, i) => {
         if (!m.color) m.color = nextSectionColor(i); // backward compat for sections saved before coloring existed
         const hasCue = m.cue && (m.cue.reminderId || m.cue.countIn);
+        const assignedReminder = m.cue ? findReminderForCue(m.cue) : null;
+        const sectionLabel = assignedReminder ? escHtml(assignedReminder.name) : `Sec ${i + 2}`;
         const colorOptions = SECTION_COLORS.map(c => `<button type="button" class="mod-color-option w-6 h-6 rounded-full flex-shrink-0" style="background:${c}; border:2px solid ${m.color === c ? '#fafafa' : 'transparent'};" data-mod-idx="${i}" data-color="${c}"></button>`).join('');
         return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
@@ -4789,7 +4791,7 @@ function renderModulationRows() {
                         ${colorOptions}
                     </div>
                 </div>
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">Sec ${i + 2}</span>
+                <span class="text-[10px] text-zinc-300 font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned — add one to name this section'}">${sectionLabel}</span>
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">after</span>
                 <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
