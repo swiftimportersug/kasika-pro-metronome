@@ -495,6 +495,10 @@ tailwind.config = {
                 <i class="fas fa-arrow-left text-xs"></i>
             </button>
             <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-200 uppercase flex-1">Notes</h2>
+            <button id="uploadNoteFileBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-400 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Upload image or PDF" title="Upload image or PDF">
+                <i class="fas fa-file-arrow-up text-xs"></i>
+            </button>
+            <input type="file" id="uploadNoteFileInput" accept="image/*,.pdf,application/pdf" class="hidden">
             <button id="newNoteBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-400 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all" aria-label="New note" title="New note">
                 <i class="fas fa-plus text-xs"></i>
             </button>
@@ -775,6 +779,34 @@ tailwind.config = {
     <div class="flex-1 relative overflow-hidden" id="noteContentArea">
         <div id="noteTextArea" class="absolute inset-0 w-full h-full bg-transparent text-zinc-200 text-sm leading-relaxed p-4 outline-none overflow-y-auto" contenteditable="true" data-placeholder="Write anything — lyrics, set notes, reminders..."></div>
         <canvas id="noteDrawCanvas" class="hidden absolute inset-0 w-full h-full" style="touch-action:none;"></canvas>
+    </div>
+</div>
+
+<div id="attachmentViewerView" class="fixed inset-0 z-[210] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50 px-3 py-2.5 flex items-center gap-2">
+        <button id="closeAttachmentViewerBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Back to notes" title="Back to notes">
+            <i class="fas fa-arrow-left text-xs"></i>
+        </button>
+        <span class="flex-1 min-w-0 truncate text-zinc-100 font-display font-semibold text-base" id="attachmentViewerTitle">Untitled</span>
+        <button id="linkAttachmentBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-500 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Link a second page" title="Link a second page">
+            <i class="fas fa-link text-xs"></i>
+        </button>
+        <button id="renameAttachmentBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-500 hover:text-gold hover:border-gold/30 transition-all" aria-label="Rename" title="Rename">
+            <i class="fas fa-pen text-xs"></i>
+        </button>
+        <button id="deleteAttachmentBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 transition-all" aria-label="Delete" title="Delete">
+            <i class="fas fa-trash-can text-xs"></i>
+        </button>
+    </div>
+    <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent"></div>
+</div>
+
+<div class="modal-overlay" id="linkPageModal">
+    <div class="modal-box" style="max-width:420px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link a Second Page</h3>
+        <p class="text-xs text-zinc-500 mb-4">Choose another uploaded page to always show together with this one — scrolling down will reveal it.</p>
+        <div id="linkPageList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
+        <button type="button" onclick="hideModal('linkPageModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
     </div>
 </div>
 
@@ -3949,7 +3981,7 @@ function renderNotesList(query) {
     const list = document.getElementById('notesList');
     const empty = document.getElementById('notesEmptyState');
     let items = state.notes.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    if (q) items = items.filter(n => (n.title || '').toLowerCase().includes(q) || stripHtml(n.content).toLowerCase().includes(q));
+    if (q) items = items.filter(n => (n.title || '').toLowerCase().includes(q) || (n.type !== 'attachment' && stripHtml(n.content).toLowerCase().includes(q)));
 
     if (!items.length) {
         list.innerHTML = '';
@@ -3961,10 +3993,26 @@ function renderNotesList(query) {
     empty.classList.add('hidden');
     list.innerHTML = items.map(n => {
         const title = highlightText(escHtml(n.title || 'Untitled note'), query);
+        const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+        if (n.type === 'attachment') {
+            const isLinked = n.linkedPageId || state.notes.some(other => other.linkedPageId === n.id);
+            const icon = n.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image';
+            const subtitle = (n.fileType === 'pdf' ? 'PDF' : 'Image') + (isLinked ? ' · linked 2-page spread' : '');
+            return `
+            <div class="note-item flex items-start gap-3 px-4 py-3 border-b border-brd/20" data-note-id="${n.id}" data-note-type="attachment">
+                <div class="w-9 h-9 rounded-lg bg-s3 border border-brd/50 flex items-center justify-center flex-shrink-0 text-[#60A5FA]">
+                    <i class="fas ${icon} text-xs"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium text-zinc-200 truncate">${title}</div>
+                    <div class="text-[11px] text-zinc-600 truncate mt-0.5">${subtitle}</div>
+                </div>
+                <span class="text-[10px] text-zinc-700 flex-shrink-0 mt-1">${date}</span>
+            </div>`;
+        }
         const rawSnippet = getSnippetAroundMatch(stripHtml(n.content), query, 90);
         const snippet = highlightText(escHtml(rawSnippet), query);
         const hasDrawing = !!n.drawingDataUrl;
-        const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
         return `
         <div class="note-item flex items-start gap-3 px-4 py-3 border-b border-brd/20" data-note-id="${n.id}">
             <div class="w-9 h-9 rounded-lg bg-s3 border border-brd/50 flex items-center justify-center flex-shrink-0 text-[#2dd4bf]">
@@ -3984,6 +4032,143 @@ function createNewNote() {
     state.notes.push(note);
     saveData();
     openNoteEditor(note.id);
+}
+
+// ===== NOTE ATTACHMENTS (uploaded images/PDFs) =====
+async function handleNoteFileUpload(file) {
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const isImage = file.type.startsWith('image/');
+    if (!isPdf && !isImage) { showToast('Please choose an image or PDF file'); return; }
+    const defaultName = file.name.replace(/\.[^.]+$/, '');
+    const name = prompt('Name this file:', defaultName);
+    if (name === null) return; // cancelled
+    const key = 'note_att_' + genId();
+    try {
+        await cueDbPut(key, file);
+    } catch (err) {
+        console.warn('Could not store file:', err);
+        showToast('Could not store this file — it may be too large');
+        return;
+    }
+    const note = {
+        id: genId(), type: 'attachment',
+        title: (name || defaultName).trim() || 'Untitled',
+        fileKey: key, mimeType: file.type || (isPdf ? 'application/pdf' : 'image/*'),
+        fileType: isPdf ? 'pdf' : 'image', linkedPageId: null,
+        updatedAt: Date.now(),
+    };
+    state.notes.push(note);
+    saveData();
+    renderNotesList(document.getElementById('notesSearchInput').value);
+    showToast(`"${note.title}" added`);
+}
+
+// Finds this attachment's paired page, if any — checking both directions, since the link is
+// only stored once (on whichever page was linked FROM) but should work when opening either.
+function getLinkedPage(note) {
+    if (note.linkedPageId) return state.notes.find(n => n.id === note.linkedPageId) || null;
+    const reverse = state.notes.find(n => n.linkedPageId === note.id);
+    return reverse || null;
+}
+
+async function renderAttachmentPage(note) {
+    const blob = await cueDbGet(note.fileKey).catch(() => null);
+    if (!blob) return `<div class="p-8 text-center text-zinc-600 text-sm">Could not load "${escHtml(note.title)}"</div>`;
+    const url = URL.createObjectURL(blob);
+    if (note.fileType === 'pdf') {
+        return `<div class="w-full" style="min-height:80vh;"><embed src="${url}" type="application/pdf" class="w-full" style="min-height:80vh; border:0;"></div>`;
+    }
+    return `<img src="${url}" alt="${escHtml(note.title)}" class="w-full h-auto block">`;
+}
+
+async function openAttachmentViewer(id) {
+    const note = state.notes.find(n => n.id === id);
+    if (!note) return;
+    state.activeNoteId = id;
+    document.getElementById('attachmentViewerTitle').textContent = note.title || 'Untitled';
+    const content = document.getElementById('attachmentViewerContent');
+    content.innerHTML = '<div class="p-8 text-center text-zinc-600 text-sm">Loading…</div>';
+    const linked = getLinkedPage(note);
+    // Render in the correct order: whichever note HOLDS the linkedPageId is page 1.
+    const pages = note.linkedPageId ? [note, linked] : (linked ? [linked, note] : [note]);
+    const htmlParts = await Promise.all(pages.filter(Boolean).map(p => renderAttachmentPage(p)));
+    content.innerHTML = htmlParts.map((html, i) => `<div class="w-full">${pages.length > 1 ? `<div class="text-[10px] text-zinc-600 uppercase tracking-wider px-3 pt-2">${escHtml(pages[i].title)}</div>` : ''}${html}</div>`).join('<div class="h-2 bg-brd/30"></div>');
+    pushView('attachment-viewer');
+    applyViewState('attachment-viewer');
+}
+
+function closeAttachmentViewer() { history.back(); }
+
+function openLinkPageModal() {
+    const note = state.notes.find(n => n.id === state.activeNoteId);
+    if (!note) return;
+    const others = state.notes.filter(n => n.type === 'attachment' && n.id !== note.id);
+    const list = document.getElementById('linkPageList');
+    if (!others.length) {
+        list.innerHTML = '<p class="text-xs text-zinc-600 text-center py-4">No other uploaded pages yet.</p>';
+    } else {
+        list.innerHTML = others.map(o => `
+            <button type="button" class="link-page-option w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-s3/50 border border-brd/40 hover:border-[#60A5FA]/40 transition-colors" data-note-id="${o.id}">
+                <i class="fas ${o.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image'} text-[#60A5FA] text-xs"></i>
+                <span class="text-sm text-zinc-200 truncate">${escHtml(o.title)}</span>
+            </button>`).join('');
+    }
+    const current = getLinkedPage(note);
+    if (current) {
+        list.innerHTML = `<button type="button" id="unlinkPageBtn" class="w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-red-400/10 border border-red-400/30 text-red-400 mb-2">
+            <i class="fas fa-link-slash text-xs"></i><span class="text-sm">Unlink from "${escHtml(current.title)}"</span>
+        </button>` + list.innerHTML;
+    }
+    showModal('linkPageModal');
+}
+
+function linkPages(noteId, targetId) {
+    const note = state.notes.find(n => n.id === noteId);
+    if (!note) return;
+    // Clear any existing link involving either page first, then link note -> target (note = page 1).
+    state.notes.forEach(n => { if (n.linkedPageId === noteId || n.linkedPageId === targetId) n.linkedPageId = null; });
+    note.linkedPageId = targetId;
+    saveData();
+    hideModal('linkPageModal');
+    openAttachmentViewer(noteId);
+}
+
+function unlinkPages(noteId) {
+    const note = state.notes.find(n => n.id === noteId);
+    if (!note) return;
+    state.notes.forEach(n => { if (n.id === noteId || n.linkedPageId === noteId) n.linkedPageId = null; });
+    saveData();
+    hideModal('linkPageModal');
+    openAttachmentViewer(noteId);
+}
+
+function renameAttachment() {
+    const note = state.notes.find(n => n.id === state.activeNoteId);
+    if (!note) return;
+    const name = prompt('Rename this file:', note.title);
+    if (name === null || !name.trim()) return;
+    note.title = name.trim();
+    note.updatedAt = Date.now();
+    saveData();
+    document.getElementById('attachmentViewerTitle').textContent = note.title;
+    renderNotesList(document.getElementById('notesSearchInput').value);
+}
+
+function deleteAttachment() {
+    const note = state.notes.find(n => n.id === state.activeNoteId);
+    if (!note) return;
+    document.getElementById('deleteTitle').textContent = `Delete "${note.title}"?`;
+    document.getElementById('deleteMessage').textContent = 'This cannot be undone. If it\'s linked to another page, that page will be unlinked but kept.';
+    document.getElementById('deleteConfirmBtn').onclick = () => {
+        cueDbDelete(note.fileKey).catch(() => {});
+        state.notes = state.notes.filter(n => n.id !== note.id);
+        state.notes.forEach(n => { if (n.linkedPageId === note.id) n.linkedPageId = null; });
+        saveData();
+        hideModal('deleteModal');
+        closeAttachmentViewer();
+        renderNotesList(document.getElementById('notesSearchInput').value);
+    };
+    showModal('deleteModal');
 }
 
 // Wraps every occurrence of `query` within `root`'s text content in a temporary highlight
@@ -5563,18 +5748,22 @@ function applyViewState(view) {
     const setlistsEl = document.getElementById('setlistsView');
     const notesEl = document.getElementById('notesView');
     const editorEl = document.getElementById('noteEditorView');
+    const attachmentEl = document.getElementById('attachmentViewerView');
     const cueBankEl = document.getElementById('cueBankView');
     const bandSyncEl = document.getElementById('bandSyncView');
 
     if (target === 'setlists') { setlistsEl.classList.remove('hidden'); setlistsEl.classList.add('flex'); }
     else { setlistsEl.classList.add('hidden'); setlistsEl.classList.remove('flex'); }
 
-    if (target === 'notes' || target === 'note-editor') { notesEl.classList.remove('hidden'); notesEl.classList.add('flex'); }
+    if (target === 'notes' || target === 'note-editor' || target === 'attachment-viewer') { notesEl.classList.remove('hidden'); notesEl.classList.add('flex'); }
     else { notesEl.classList.add('hidden'); notesEl.classList.remove('flex'); }
     if (target === 'notes') renderNotesList(document.getElementById('notesSearchInput').value);
 
     if (target === 'note-editor') { editorEl.classList.remove('hidden'); editorEl.classList.add('flex'); }
     else { editorEl.classList.add('hidden'); editorEl.classList.remove('flex'); }
+
+    if (target === 'attachment-viewer') { attachmentEl.classList.remove('hidden'); attachmentEl.classList.add('flex'); }
+    else { attachmentEl.classList.add('hidden'); attachmentEl.classList.remove('flex'); }
 
     if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); refreshAudioOutputDevices(); }
     else { cueBankEl.classList.add('hidden'); cueBankEl.classList.remove('flex'); }
@@ -5768,10 +5957,27 @@ function setupEvents() {
     document.getElementById('openNotesBtn').addEventListener('click', openNotesView);
     document.getElementById('closeNotesBtn').addEventListener('click', closeNotesView);
     document.getElementById('newNoteBtn').addEventListener('click', createNewNote);
+    document.getElementById('uploadNoteFileBtn').addEventListener('click', () => document.getElementById('uploadNoteFileInput').click());
+    document.getElementById('uploadNoteFileInput').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (file) handleNoteFileUpload(file);
+        e.target.value = '';
+    });
+    document.getElementById('closeAttachmentViewerBtn').addEventListener('click', closeAttachmentViewer);
+    document.getElementById('linkAttachmentBtn').addEventListener('click', openLinkPageModal);
+    document.getElementById('renameAttachmentBtn').addEventListener('click', renameAttachment);
+    document.getElementById('deleteAttachmentBtn').addEventListener('click', deleteAttachment);
+    document.getElementById('linkPageList').addEventListener('click', e => {
+        const unlinkBtn = e.target.closest('#unlinkPageBtn');
+        if (unlinkBtn) { unlinkPages(state.activeNoteId); return; }
+        const option = e.target.closest('.link-page-option');
+        if (option) linkPages(state.activeNoteId, option.dataset.noteId);
+    });
     document.getElementById('notesSearchInput').addEventListener('input', e => renderNotesList(e.target.value));
     document.getElementById('notesList').addEventListener('click', e => {
         const row = e.target.closest('.note-item');
         if (!row) return;
+        if (row.dataset.noteType === 'attachment') { openAttachmentViewer(row.dataset.noteId); return; }
         openNoteEditor(row.dataset.noteId, document.getElementById('notesSearchInput').value);
     });
     document.getElementById('closeNoteEditorBtn').addEventListener('click', closeNoteEditor);
