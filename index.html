@@ -661,6 +661,10 @@ tailwind.config = {
         <div id="bandSyncHostFlow" class="hidden flex-col items-center gap-4 max-w-sm mx-auto mt-2">
             <p class="text-xs text-zinc-500 text-center">Have your band member open Band Sync → Join and scan this:</p>
             <div id="bandSyncQrHost" class="bg-white p-3 rounded-xl w-full mx-auto" style="max-width:min(78vw,320px); aspect-ratio:1;"></div>
+            <div id="bandSyncHostCodeWrap" class="hidden w-full rounded-lg bg-s3/50 border border-brd/40 p-3 text-center">
+                <p class="text-[10px] text-zinc-600 uppercase tracking-wider mb-1.5">Camera not working? Share this code instead (needs internet)</p>
+                <div class="font-mono text-2xl tracking-[0.3em] text-gold font-bold" id="bandSyncHostCode">------</div>
+            </div>
         </div>
 
         <!-- Join flow -->
@@ -676,6 +680,15 @@ tailwind.config = {
                 <video id="bandSyncScanVideo" class="w-full h-full object-cover" playsinline muted></video>
             </div>
             <button type="button" id="bandSyncCancelScanBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">Cancel</button>
+            <button type="button" id="bandSyncEnterCodeLinkBtn" class="hidden text-[11px] text-[#60A5FA] hover:text-[#60A5FA]/80 transition-colors">Can't scan? Enter a code instead</button>
+        </div>
+
+        <!-- Manual code entry (fallback for when the camera/QR path doesn't work) -->
+        <div id="bandSyncCodeEntryArea" class="hidden flex-col items-center gap-3 max-w-sm mx-auto mt-2">
+            <p class="text-xs text-zinc-500 text-center">Enter the code shown on the host's phone (needs internet):</p>
+            <input type="text" id="bandSyncCodeInput" class="modal-input text-center font-mono text-xl tracking-[0.3em] uppercase" style="max-width:220px;" maxlength="6" placeholder="------">
+            <button type="button" id="bandSyncCodeConnectBtn" class="w-full py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors" style="max-width:220px;">Connect</button>
+            <button type="button" id="bandSyncCodeCancelBtn" class="text-[11px] text-zinc-600 hover:text-red-400 transition-colors">Cancel</button>
         </div>
 
         <!-- Connected state (shared by both roles) -->
@@ -872,6 +885,35 @@ tailwind.config = {
             <canvas id="imageEditorCanvas" style="touch-action:none; max-width:100%; display:block;"></canvas>
             <canvas id="imageEditorCropOverlay" class="absolute top-0 left-0 hidden" style="touch-action:none; max-width:100%; display:block;"></canvas>
         </div>
+    </div>
+</div>
+
+<div id="loopTrimEditorView" class="fixed inset-0 z-[220] bg-black hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50 px-3 py-2.5 flex items-center gap-2">
+        <button id="closeLoopTrimEditorBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-zinc-200 transition-all" aria-label="Done" title="Done">
+            <i class="fas fa-check text-xs"></i>
+        </button>
+        <span class="flex-1 min-w-0 truncate text-zinc-100 font-display font-semibold text-sm">Trim Loop</span>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+        <label class="text-[10px] text-zinc-600 uppercase tracking-wider">Drag the gold edges to trim — the line shows exactly where you'll land</label>
+        <canvas id="loopRulerCanvas" class="w-full block" style="height:26px;"></canvas>
+        <div id="loopWaveformWrap" class="relative rounded-lg overflow-hidden bg-s3 touch-none select-none" style="height:280px;">
+            <canvas id="loopWaveformCanvas" class="w-full h-full block"></canvas>
+            <div id="loopTrimDimLeft" class="absolute top-0 bottom-0 left-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
+            <div id="loopTrimDimRight" class="absolute top-0 bottom-0 right-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
+            <div id="loopTrimDragLine" class="hidden absolute top-0 bottom-0 bg-[#F472B6] pointer-events-none" style="width:2px; left:0%; box-shadow:0 0 6px rgba(244,114,182,0.7);"></div>
+            <div id="loopTrimHandleStart" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:16px; left:0%; margin-left:-8px;"></div>
+            <div id="loopTrimHandleEnd" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:16px; left:100%; margin-left:-8px;"></div>
+        </div>
+        <div class="flex items-center justify-between text-[12px] text-zinc-400">
+            <span id="loopTrimStartLabel">0.00s</span>
+            <span id="loopTrimDurationLabel" class="text-zinc-600">0.00s selected</span>
+            <span id="loopTrimEndLabel">0.00s</span>
+        </div>
+        <button type="button" id="loopTrimPreviewBtn" class="w-full py-3 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-sm hover:border-[#60A5FA]/40 hover:text-[#60A5FA] transition-colors">
+            <i class="fas fa-play mr-1.5" id="loopTrimPreviewIcon"></i><span id="loopTrimPreviewLabel">Preview Trimmed Section (loops)</span>
+        </button>
     </div>
 </div>
 
@@ -2084,6 +2126,87 @@ function showBandSyncConnected() {
     renderBandSyncPeerList();
 }
 
+// Short-code fallback for when a camera/QR scan won't cooperate — routes the same offer/
+// answer exchange through a short-lived Firestore document instead of a scanned image. Needs
+// internet access on both phones (unlike the QR path, which works purely over local WiFi).
+function generateBandSyncCode() {
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789'; // avoids ambiguous chars: 0/o, 1/l/i
+    let code = '';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+}
+
+let bandSyncPairingUnsub = null;
+
+async function startBandSyncHostCodeFallback(peer, offerPayload) {
+    if (bandSyncPairingUnsub) { bandSyncPairingUnsub(); bandSyncPairingUnsub = null; }
+    const wrap = document.getElementById('bandSyncHostCodeWrap');
+    if (!fbDb) { if (wrap) wrap.classList.add('hidden'); return; } // no internet path available
+    const code = generateBandSyncCode();
+    const codeEl = document.getElementById('bandSyncHostCode');
+    if (codeEl) codeEl.textContent = code.toUpperCase();
+    if (wrap) wrap.classList.remove('hidden');
+    try {
+        await fbDb.collection('bandSyncPairing').doc(code).set({ offer: offerPayload, answer: null, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    } catch (err) {
+        console.warn('Could not publish pairing code:', err);
+        if (wrap) wrap.classList.add('hidden');
+        return;
+    }
+    bandSyncPairingUnsub = fbDb.collection('bandSyncPairing').doc(code).onSnapshot(async doc => {
+        const d = doc.data();
+        if (!d || !d.answer) return;
+        try {
+            const msg = decodeBandSyncPayload(d.answer);
+            if (msg.t !== 'answer') return;
+            setBandSyncStatus('Connecting…');
+            await peer.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+            if (bandSyncPairingUnsub) { bandSyncPairingUnsub(); bandSyncPairingUnsub = null; }
+            fbDb.collection('bandSyncPairing').doc(code).delete().catch(() => {});
+        } catch (err) {
+            console.warn('Band Sync: failed to process code-based reply', err);
+        }
+    });
+}
+
+// Shared by both the QR-scan and code-entry join paths — everything after "I have the host's
+// offer SDP" is identical either way.
+async function processHostOfferSdp(sdp) {
+    const pc = createBandPeerConnection();
+    const peer = { id: 'host', pc, channel: null, clockOffset: null, connected: false, label: 'Host' };
+    bandSync.peers = [peer]; // a joining phone only ever connects to the one host
+    pc.ondatachannel = e => setupBandSyncChannel(e.channel, peer);
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitForIceGatheringComplete(pc);
+    return pc.localDescription.sdp;
+}
+
+async function startBandSyncJoinByCode(code) {
+    if (!fbDb) { setBandSyncStatus('Code-based connecting needs internet access.'); return; }
+    setBandSyncStatus('Looking up code…');
+    try {
+        const doc = await fbDb.collection('bandSyncPairing').doc(code).get();
+        if (!doc.exists || !doc.data().offer) { setBandSyncStatus('That code wasn\'t found — check it and try again.'); return; }
+        const msg = decodeBandSyncPayload(doc.data().offer);
+        if (msg.t !== 'offer') { setBandSyncStatus('That code doesn\'t look valid — try again.'); return; }
+        setBandSyncStatus('Preparing reply…');
+        const answerSdp = await processHostOfferSdp(msg.sdp);
+        const answerPayload = encodeBandSyncPayload('answer', answerSdp);
+        await fbDb.collection('bandSyncPairing').doc(code).set({ answer: answerPayload }, { merge: true });
+        stopQrScanner();
+        const scanArea = document.getElementById('bandSyncScanArea');
+        scanArea.classList.add('hidden'); scanArea.classList.remove('flex');
+        const entryArea = document.getElementById('bandSyncCodeEntryArea');
+        entryArea.classList.add('hidden'); entryArea.classList.remove('flex');
+        setBandSyncStatus('Connecting…');
+    } catch (err) {
+        console.warn('Band Sync: code join failed', err);
+        setBandSyncStatus('Could not connect with that code — try again.');
+    }
+}
+
 async function startBandSyncHost() {
     bandSync.role = 'host';
     document.getElementById('bandSyncRolePicker').classList.add('hidden');
@@ -2109,8 +2232,9 @@ async function startNewHostPairing() {
 
     const payload = encodeBandSyncPayload('offer', pc.localDescription.sdp);
     renderQrCode('bandSyncQrHost', payload);
-    setBandSyncStatus(`Code ready (${payload.length} characters). Waiting for ${peer.label} to scan it, then automatically watching for their reply…`);
+    setBandSyncStatus(`Code ready. Waiting for ${peer.label} to scan it or enter the code below…`);
     startBandSyncHostScanReply(peer);
+    startBandSyncHostCodeFallback(peer, payload);
 }
 
 function startBandSyncHostScanReply(peer) {
@@ -2135,17 +2259,8 @@ async function startBandSyncJoin() {
             const msg = decodeBandSyncPayload(data);
             if (msg.t !== 'offer') { setBandSyncStatus('That doesn\'t look like a host code — try again.'); return; }
             setBandSyncStatus('Preparing reply…');
-            const pc = createBandPeerConnection();
-            const peer = { id: 'host', pc, channel: null, clockOffset: null, connected: false, label: 'Host' };
-            bandSync.peers = [peer]; // a joining phone only ever connects to the one host
-            pc.ondatachannel = e => setupBandSyncChannel(e.channel, peer);
-
-            await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await waitForIceGatheringComplete(pc);
-
-            const payload = encodeBandSyncPayload('answer', pc.localDescription.sdp);
+            const answerSdp = await processHostOfferSdp(msg.sdp);
+            const payload = encodeBandSyncPayload('answer', answerSdp);
             const joinFlow = document.getElementById('bandSyncJoinFlow');
             joinFlow.classList.remove('hidden'); joinFlow.classList.add('flex');
             renderQrCode('bandSyncQrJoin', payload);
@@ -2155,10 +2270,13 @@ async function startBandSyncJoin() {
             setBandSyncStatus('Could not read that code — try again.');
         }
     });
+    const codeLink = document.getElementById('bandSyncEnterCodeLinkBtn');
+    if (codeLink) codeLink.classList.remove('hidden');
 }
 
 function resetBandSync() {
     stopQrScanner();
+    if (bandSyncPairingUnsub) { bandSyncPairingUnsub(); bandSyncPairingUnsub = null; }
     bandSync.peers.forEach(peer => {
         if (peer.channel) { try { peer.channel.close(); } catch (err) {} }
         if (peer.pc) { try { peer.pc.close(); } catch (err) {} }
@@ -2174,6 +2292,8 @@ function resetBandSync() {
     document.getElementById('bandSyncRolePicker').classList.remove('hidden');
     document.getElementById('bandSyncHostFlow').classList.add('hidden'); document.getElementById('bandSyncHostFlow').classList.remove('flex');
     document.getElementById('bandSyncJoinFlow').classList.add('hidden'); document.getElementById('bandSyncJoinFlow').classList.remove('flex');
+    document.getElementById('bandSyncScanArea').classList.add('hidden'); document.getElementById('bandSyncScanArea').classList.remove('flex');
+    document.getElementById('bandSyncCodeEntryArea').classList.add('hidden'); document.getElementById('bandSyncCodeEntryArea').classList.remove('flex');
     document.getElementById('bandSyncConnected').classList.add('hidden'); document.getElementById('bandSyncConnected').classList.remove('flex');
 }
 
@@ -4157,6 +4277,8 @@ function base64ToBlob(base64, mimeType) {
     return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
 }
 
+let firestorePermissionWarningShown = false;
+
 async function pushAttachmentToCloud(fileKey, blob, mimeType) {
     if (!syncEnabled || !fbDb || !fbAuth || !fbAuth.currentUser) return false;
     if (blob.size > ATTACHMENT_SYNC_LIMIT_BYTES) return false; // too large to fit as a Firestore document
@@ -4168,6 +4290,10 @@ async function pushAttachmentToCloud(fileKey, blob, mimeType) {
         return true;
     } catch (err) {
         console.warn('Could not sync attachment to cloud:', err);
+        if (err.code === 'permission-denied' && !firestorePermissionWarningShown) {
+            firestorePermissionWarningShown = true;
+            showToast('File sync is blocked by your Firestore security rules — see setup notes');
+        }
         return false;
     }
 }
@@ -4181,6 +4307,10 @@ async function fetchAttachmentFromCloud(fileKey) {
         return base64ToBlob(d.data, d.mimeType);
     } catch (err) {
         console.warn('Could not fetch attachment from cloud:', err);
+        if (err.code === 'permission-denied' && !firestorePermissionWarningShown) {
+            firestorePermissionWarningShown = true;
+            showToast('File sync is blocked by your Firestore security rules — see setup notes');
+        }
         return null;
     }
 }
@@ -5250,25 +5380,13 @@ function renderLoopTrackHtml() {
             <span class="text-sm text-zinc-200 truncate min-w-0"><i class="fas fa-file-audio text-[#60A5FA] mr-1.5"></i>${escHtml(lt.fileName || 'Loop file')}</span>
             <button type="button" id="loopTrackRemoveBtn" class="w-7 h-7 rounded-md bg-s3 border border-brd/50 text-zinc-500 hover:text-red-400 hover:border-red-400/30 flex-shrink-0 flex items-center justify-center" title="Remove"><i class="fas fa-trash-can text-[10px]"></i></button>
         </div>
-        <div class="flex flex-col gap-1.5">
-            <label class="text-[10px] text-zinc-600 uppercase tracking-wider">Trim (drag the edges)</label>
-            <canvas id="loopRulerCanvas" class="w-full block" style="height:16px;"></canvas>
-            <div id="loopWaveformWrap" class="relative rounded-lg overflow-hidden bg-s3 touch-none select-none" style="height:72px;">
-                <canvas id="loopWaveformCanvas" class="w-full h-full block"></canvas>
-                <div id="loopTrimDimLeft" class="absolute top-0 bottom-0 left-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
-                <div id="loopTrimDimRight" class="absolute top-0 bottom-0 right-0 bg-black/65 pointer-events-none" style="width:0%;"></div>
-                <div id="loopTrimHandleStart" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:8px; left:0%; margin-left:-4px;"></div>
-                <div id="loopTrimHandleEnd" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:8px; left:100%; margin-left:-4px;"></div>
-            </div>
-            <div class="flex items-center justify-between text-[10px] text-zinc-500">
-                <span id="loopTrimStartLabel">0.00s</span>
-                <span id="loopTrimDurationLabel" class="text-zinc-600">0.00s selected</span>
-                <span id="loopTrimEndLabel">0.00s</span>
-            </div>
-            <button type="button" id="loopTrimPreviewBtn" class="w-full py-2 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xs hover:border-[#60A5FA]/40 hover:text-[#60A5FA] transition-colors">
-                <i class="fas fa-play mr-1.5" id="loopTrimPreviewIcon"></i><span id="loopTrimPreviewLabel">Preview Trimmed Section (loops)</span>
-            </button>
-        </div>
+        <button type="button" id="loopTrimEditBtn" class="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg bg-s3/50 border border-brd/40 hover:border-[#60A5FA]/40 transition-colors text-left">
+            <span class="text-xs text-zinc-400 flex items-center gap-1.5">
+                <i class="fas fa-waveform-lines text-[#60A5FA]"></i>
+                <span id="loopTrimSummaryLabel">${lt.duration ? (Math.max(0.05, (lt.trimEnd ?? lt.duration) - (lt.trimStart ?? 0))).toFixed(2) + 's selected' : 'Tap to trim'}</span>
+            </span>
+            <span class="text-[10px] text-[#60A5FA] flex-shrink-0">Edit Trim <i class="fas fa-chevron-right ml-1"></i></span>
+        </button>
         <div class="flex items-center gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none">
                 <input type="radio" name="loopStartMode" class="loop-start-mode" value="afterIntro" ${lt.startMode !== 'atBar' ? 'checked' : ''} style="accent-color:#60A5FA;">
@@ -5278,6 +5396,14 @@ function renderLoopTrackHtml() {
                 <input type="radio" name="loopStartMode" class="loop-start-mode" value="atBar" ${lt.startMode === 'atBar' ? 'checked' : ''} style="accent-color:#60A5FA;">
                 Start at bar
                 <input type="number" id="loopStartBarInput" class="edit-input" style="width:52px" min="1" max="999" value="${lt.startBar || 8}" ${lt.startMode === 'atBar' ? '' : 'disabled'}>
+            </label>
+        </div>
+        <div class="flex items-center gap-1.5 flex-wrap">
+            <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none">
+                <input type="checkbox" id="loopStopAfterEnabled" ${lt.stopAfterBars ? 'checked' : ''} style="accent-color:#60A5FA;">
+                Stop after
+                <input type="number" id="loopStopAfterBarsInput" class="edit-input" style="width:52px" min="1" max="999" value="${lt.stopAfterBars || 32}" ${lt.stopAfterBars ? '' : 'disabled'}>
+                bars
             </label>
         </div>
         <div class="flex items-center gap-2">
@@ -5296,7 +5422,14 @@ function renderLoopTrackHtml() {
 function renderLoopTrackUI() {
     const container = document.getElementById('loopTrackContainer');
     if (container) container.innerHTML = renderLoopTrackHtml();
-    if (editingLoopTrack && editingLoopTrack.key) renderLoopWaveform();
+    if (editingLoopTrack && editingLoopTrack.key) renderLoopWaveform().then(updateLoopTrimSummaryLabel);
+}
+
+function updateLoopTrimSummaryLabel() {
+    const label = document.getElementById('loopTrimSummaryLabel');
+    if (!label || !editingLoopTrack || !editingLoopTrack.duration) return;
+    const sel = Math.max(0.05, (editingLoopTrack.trimEnd ?? editingLoopTrack.duration) - (editingLoopTrack.trimStart ?? 0));
+    label.textContent = sel.toFixed(2) + 's selected';
 }
 
 async function renderLoopWaveform() {
@@ -5346,7 +5479,7 @@ async function renderLoopWaveform() {
 // Draws tick marks at each beat across the loop's duration, using the song currently being
 // edited (its BPM and time signature) — a longer tick on beat 1 of each bar, shorter ticks on
 // the others, so the loop can be trimmed to land exactly on bar/beat boundaries.
-function drawLoopRuler(durationSec) {
+function drawLoopRuler(durationSec, dragLineTimeSec) {
     const canvas = document.getElementById('loopRulerCanvas');
     if (!canvas || !durationSec) return;
     const bpm = parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm || 120;
@@ -5373,6 +5506,15 @@ function drawLoopRuler(durationSec) {
         ctx.stroke();
         beatIdx++;
     }
+    if (dragLineTimeSec != null) {
+        const x = (dragLineTimeSec / durationSec) * width;
+        ctx.strokeStyle = '#F472B6';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+    }
 }
 
 function updateLoopTrimHandlesUI() {
@@ -5396,11 +5538,13 @@ function setupLoopTrimDragHandlers() {
     const wrap = document.getElementById('loopWaveformWrap');
     const startHandle = document.getElementById('loopTrimHandleStart');
     const endHandle = document.getElementById('loopTrimHandleEnd');
+    const dragLine = document.getElementById('loopTrimDragLine');
     if (!wrap || !startHandle || !endHandle) return;
     function makeDraggable(handle, isStart) {
         handle.onpointerdown = e => {
             e.preventDefault();
             handle.setPointerCapture(e.pointerId);
+            if (dragLine) dragLine.classList.remove('hidden');
             function onMove(e2) {
                 const rect = wrap.getBoundingClientRect();
                 let pct = (e2.clientX - rect.left) / rect.width;
@@ -5409,10 +5553,17 @@ function setupLoopTrimDragHandlers() {
                 if (isStart) editingLoopTrack.trimStart = Math.max(0, Math.min(time, editingLoopTrack.trimEnd - 0.05));
                 else editingLoopTrack.trimEnd = Math.min(editingLoopTrack.duration, Math.max(time, editingLoopTrack.trimStart + 0.05));
                 updateLoopTrimHandlesUI();
+                const currentTime = isStart ? editingLoopTrack.trimStart : editingLoopTrack.trimEnd;
+                const linePct = (currentTime / editingLoopTrack.duration) * 100;
+                if (dragLine) dragLine.style.left = linePct + '%';
+                drawLoopRuler(editingLoopTrack.duration, currentTime);
             }
             function onUp() {
                 document.removeEventListener('pointermove', onMove);
                 document.removeEventListener('pointerup', onUp);
+                if (dragLine) dragLine.classList.add('hidden');
+                drawLoopRuler(editingLoopTrack.duration);
+                updateLoopTrimSummaryLabel();
             }
             document.addEventListener('pointermove', onMove);
             document.addEventListener('pointerup', onUp);
@@ -5511,7 +5662,15 @@ async function startLoopTrack(song, stageStartTime) {
     p.pan.value = Math.max(-1, Math.min(1, song.loopTrack.pan || 0));
     src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
     const houseStartTime = stageTimeToHouseTime(stageStartTime);
-    src.start(Math.max(houseStartTime, c.currentTime), trimStart);
+    const actualStart = Math.max(houseStartTime, c.currentTime);
+    src.start(actualStart, trimStart);
+    if (song.loopTrack.stopAfterBars) {
+        const beatsPerBar = parseInt(String(song.timeSig).split('/')[0], 10) || 4;
+        const beatDur = 60 / (song.bpm || 120);
+        const stopDurationSec = song.loopTrack.stopAfterBars * beatsPerBar * beatDur;
+        try { src.stop(actualStart + stopDurationSec); } catch (err) {}
+    }
+    src.onended = () => { if (state.activeLoopNodes && state.activeLoopNodes.src === src) state.activeLoopNodes = null; };
     state.activeLoopNodes = { src, g, p };
 }
 
@@ -5877,8 +6036,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- Backing Loop ----
     document.getElementById('loopTrackContainer').addEventListener('click', e => {
         if (e.target.closest('#loopTrackImportBtn')) { document.getElementById('loopTrackFileInput').click(); return; }
-        if (e.target.closest('#loopTrimPreviewBtn')) { toggleLoopPreview(); return; }
         if (e.target.closest('#loopTrackRemoveBtn')) { removeLoopTrack(); return; }
+        if (e.target.closest('#loopTrimEditBtn')) {
+            if (!editingLoopTrack || !editingLoopTrack.key) return;
+            pushView('loop-trim-editor');
+            applyViewState('loop-trim-editor');
+            renderLoopWaveform().then(updateLoopTrimSummaryLabel);
+            return;
+        }
     });
     document.getElementById('loopTrackContainer').addEventListener('change', e => {
         if (e.target.id === 'loopTrackFileInput') {
@@ -5896,6 +6061,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.id === 'loopStartBarInput') {
             if (!editingLoopTrack) return;
             editingLoopTrack.startBar = Math.max(1, parseInt(e.target.value, 10) || 1);
+            return;
+        }
+        if (e.target.id === 'loopStopAfterEnabled') {
+            if (!editingLoopTrack) return;
+            editingLoopTrack.stopAfterBars = e.target.checked ? (parseInt(document.getElementById('loopStopAfterBarsInput')?.value, 10) || 32) : null;
+            renderLoopTrackUI();
+            return;
+        }
+        if (e.target.id === 'loopStopAfterBarsInput') {
+            if (!editingLoopTrack) return;
+            editingLoopTrack.stopAfterBars = Math.max(1, parseInt(e.target.value, 10) || 1);
             return;
         }
     });
@@ -6491,6 +6667,7 @@ function applyViewState(view) {
     const editorEl = document.getElementById('noteEditorView');
     const attachmentEl = document.getElementById('attachmentViewerView');
     const imageEditorEl = document.getElementById('imageEditorView');
+    const loopTrimEditorEl = document.getElementById('loopTrimEditorView');
     const cueBankEl = document.getElementById('cueBankView');
     const bandSyncEl = document.getElementById('bandSyncView');
 
@@ -6509,6 +6686,9 @@ function applyViewState(view) {
 
     if (target === 'image-editor') { imageEditorEl.classList.remove('hidden'); imageEditorEl.classList.add('flex'); }
     else { imageEditorEl.classList.add('hidden'); imageEditorEl.classList.remove('flex'); }
+
+    if (target === 'loop-trim-editor') { loopTrimEditorEl.classList.remove('hidden'); loopTrimEditorEl.classList.add('flex'); }
+    else { loopTrimEditorEl.classList.add('hidden'); loopTrimEditorEl.classList.remove('flex'); }
 
     if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); refreshAudioOutputDevices(); }
     else { cueBankEl.classList.add('hidden'); cueBankEl.classList.remove('flex'); }
@@ -6585,6 +6765,29 @@ function setupEvents() {
     document.getElementById('bandSyncHostBtn').addEventListener('click', startBandSyncHost);
     document.getElementById('bandSyncJoinBtn').addEventListener('click', startBandSyncJoin);
     document.getElementById('bandSyncCancelScanBtn').addEventListener('click', () => { stopQrScanner(); resetBandSync(); });
+    document.getElementById('bandSyncEnterCodeLinkBtn').addEventListener('click', () => {
+        stopQrScanner();
+        const scanArea = document.getElementById('bandSyncScanArea');
+        scanArea.classList.add('hidden'); scanArea.classList.remove('flex');
+        const entryArea = document.getElementById('bandSyncCodeEntryArea');
+        entryArea.classList.remove('hidden'); entryArea.classList.add('flex');
+        const input = document.getElementById('bandSyncCodeInput');
+        input.value = '';
+        setTimeout(() => input.focus(), 100);
+    });
+    document.getElementById('bandSyncCodeConnectBtn').addEventListener('click', () => {
+        const code = document.getElementById('bandSyncCodeInput').value.trim().toLowerCase();
+        if (!code) { setBandSyncStatus('Enter the code shown on the host\'s phone first.'); return; }
+        startBandSyncJoinByCode(code);
+    });
+    document.getElementById('bandSyncCodeInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); document.getElementById('bandSyncCodeConnectBtn').click(); }
+    });
+    document.getElementById('bandSyncCodeCancelBtn').addEventListener('click', () => {
+        const entryArea = document.getElementById('bandSyncCodeEntryArea');
+        entryArea.classList.add('hidden'); entryArea.classList.remove('flex');
+        resetBandSync();
+    });
     document.getElementById('bandSyncDisconnectBtn').addEventListener('click', resetBandSync);
     document.getElementById('bandSyncAddPeerBtn').addEventListener('click', startNewHostPairing);
     document.getElementById('bandSyncAlertDismissBtn').addEventListener('click', hideBandSyncSyncAlert);
@@ -6742,6 +6945,12 @@ function setupEvents() {
         if (editBtn) openImageEditor(editBtn.dataset.noteId);
     });
     document.getElementById('closeImageEditorBtn').addEventListener('click', () => closeImageEditor(false));
+    document.getElementById('closeLoopTrimEditorBtn').addEventListener('click', () => {
+        stopLoopPreview();
+        history.back();
+        renderLoopTrackUI();
+    });
+    document.getElementById('loopTrimPreviewBtn').addEventListener('click', toggleLoopPreview);
     document.getElementById('imageEditorSaveBtn').addEventListener('click', saveImageEdit);
     document.getElementById('imgToolPencilBtn').addEventListener('click', () => setImageEditorTool('pencil'));
     document.getElementById('imgToolCropBtn').addEventListener('click', () => setImageEditorTool('crop'));
@@ -7072,6 +7281,7 @@ function setupEvents() {
                 pan: editingLoopTrack.pan || 0,
                 trimStart: editingLoopTrack.trimStart || 0,
                 trimEnd: editingLoopTrack.trimEnd != null ? editingLoopTrack.trimEnd : null,
+                stopAfterBars: editingLoopTrack.stopAfterBars || null,
             } : null,
             linkedNoteId: editingSongLinkedNoteId || null,
         };
