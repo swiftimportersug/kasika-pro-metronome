@@ -1176,10 +1176,10 @@ function startRemoteSync(uid) {
     fbUnsub = docRef.onSnapshot(snap => {
         if (!snap.exists) {
             // First time this account has synced: push whatever is currently local up to the cloud.
-            // NOTE: cueBank is intentionally excluded — see below.
             docRef.set({
                 setlists: state.setlists, activeSetlistId: state.activeSetlistId,
                 soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
+                cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
             return;
@@ -1192,16 +1192,20 @@ function startRemoteSync(uid) {
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
         if (Array.isArray(d.notes)) { state.notes = d.notes; syncMissingAttachments(); }
-        // Cue Bank is deliberately NOT synced here. Without Firebase Storage configured, its
-        // audio bytes only ever live in each device's own local IndexedDB — syncing just the
-        // metadata (names/keys) would let one device's import overwrite another's working
-        // pointers with keys that don't exist in ITS local storage, breaking playback on both.
-        // Each device manages its own Cue Bank independently until Storage is set up.
+        // Cue Bank now syncs the same way note attachments do — metadata (names/keys) here,
+        // with the actual audio bytes synced separately as base64 text in Firestore (see
+        // pushCueAudioToCloud / syncMissingCueAudio below). Now that the audio itself follows
+        // the metadata, one device's keys no longer risk pointing at bytes another device
+        // doesn't have.
+        if (d.cueBank) { state.cueBank = d.cueBank; syncMissingCueAudio(); }
+        if (d.cueVolume != null) state.cueVolume = d.cueVolume;
+        if (d.cuePan != null) state.cuePan = d.cuePan;
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan }));
         renderSetlistSelect(); renderSongs();
         document.getElementById('soundKitSelect').value = state.soundKit;
         renderBeatBlocks();
         renderNotesList();
+        renderCueBankUI();
         applyingRemoteUpdate = false;
     }, err => console.warn('Sync listener error:', err));
 }
@@ -1217,6 +1221,7 @@ function pushToCloud() {
         fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).set({
             setlists: state.setlists, activeSetlistId: state.activeSetlistId,
             soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
+            cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         }, { merge: true }).catch(err => console.warn('Cloud save failed:', err));
     }, 600);
@@ -2347,12 +2352,11 @@ async function loadCueBuffer(key, url) {
     if (state.cueBufferCache[key]) return state.cueBufferCache[key];
     try {
         let blob = await cueDbGet(key);
-        if (!blob && url) {
-            // Not cached locally yet — fetch it live from Storage right now rather than
+        if (!blob) {
+            // Not cached locally yet — fetch it live from the cloud right now rather than
             // waiting on background sync to eventually catch up.
-            const res = await fetch(url);
-            blob = await res.blob();
-            await cueDbPut(key, blob).catch(() => {});
+            blob = await fetchAttachmentFromCloud(key);
+            if (blob) await cueDbPut(key, blob).catch(() => {});
         }
         if (!blob) return null;
         const arrayBuf = await blob.arrayBuffer();
@@ -2409,31 +2413,21 @@ async function importCueFile(file, displayName) {
     } catch (err) {
         console.warn('Could not decode cue audio (still saved locally):', err);
     }
-    const entry = { id: genId(), name: displayName || file.name.replace(/\.[^.]+$/, ''), key, duration, url: null };
-    uploadCueToCloud(entry, blob);
+    const entry = { id: genId(), name: displayName || file.name.replace(/\.[^.]+$/, ''), key, duration };
+    if (syncEnabled && fbAuth && fbAuth.currentUser) pushAttachmentToCloud(key, blob, blob.type);
     return entry;
 }
 
-function uploadCueToCloud(entry, blob) {
-    if (!syncEnabled || !fbAuth || !fbAuth.currentUser || !fbStorage) return; // Cue Bank works fully per-device regardless
-    const path = `cueAudio/${fbAuth.currentUser.uid}/${entry.id}.dat`;
-    fbStorage.ref(path).put(blob).then(snap => snap.ref.getDownloadURL()).then(url => {
-        entry.url = url;
-        saveData();
-    }).catch(err => console.warn('Cue upload failed (not critical — Cue Bank works fully per-device regardless):', err));
-}
-
-// Some clips may have been imported before sign-in ever succeeded, so they were never
-// uploaded to Storage and other devices have no way to fetch them. Called on sign-in to
-// catch those up retroactively.
+// Some clips may have been imported before sign-in ever succeeded, so they were never pushed
+// to the cloud and other devices have no way to fetch them. Called on sign-in to catch those
+// up retroactively — re-pushing an already-synced clip is harmless (just a redundant write).
 async function uploadMissingCueAudio() {
-    if (!syncEnabled || !fbStorage || !fbAuth || !fbAuth.currentUser) return;
+    if (!syncEnabled || !fbAuth || !fbAuth.currentUser) return;
     const all = [...state.cueBank.numbers.filter(Boolean), ...state.cueBank.reminders];
     for (const entry of all) {
-        if (entry.url) continue; // already uploaded
         try {
             const blob = await cueDbGet(entry.key);
-            if (blob) uploadCueToCloud(entry, blob);
+            if (blob) await pushAttachmentToCloud(entry.key, blob, blob.type);
         } catch (err) {
             console.warn('Could not re-upload cue audio for', entry.name, err);
         }
@@ -2441,22 +2435,16 @@ async function uploadMissingCueAudio() {
 }
 
 // When a cue reference arrives from another device (via Firestore sync) that we don't have
-// the audio bytes for yet, fetch it from Storage and cache it locally so playback works offline.
+// the audio bytes for yet, fetch it and cache it locally so playback works offline afterward.
 async function ensureCueCachedLocally(entry) {
     if (!entry || !entry.key) return;
     const existing = await cueDbGet(entry.key);
     if (existing) return;
-    if (!entry.url) return;
-    try {
-        const res = await fetch(entry.url);
-        const blob = await res.blob();
-        await cueDbPut(entry.key, blob);
-    } catch (err) {
-        console.warn('Could not download synced cue audio yet:', err);
-    }
+    const blob = await fetchAttachmentFromCloud(entry.key);
+    if (blob) await cueDbPut(entry.key, blob).catch(() => {});
 }
 
-function syncAllCueAudioLocally() {
+function syncMissingCueAudio() {
     const all = [...state.cueBank.numbers.filter(Boolean), ...state.cueBank.reminders];
     all.forEach(ensureCueCachedLocally);
 }
@@ -3854,6 +3842,7 @@ function removeCueNumber(slot) {
     const entry = state.cueBank.numbers[slot];
     if (!entry) return;
     cueDbDelete(entry.key).catch(() => {});
+    deleteAttachmentFromCloud(entry.key);
     delete state.cueBufferCache[entry.key];
     state.cueBank.numbers[slot] = null;
     saveData();
@@ -3864,6 +3853,7 @@ function removeCueReminder(id) {
     const entry = state.cueBank.reminders.find(r => r.id === id);
     if (!entry) return;
     cueDbDelete(entry.key).catch(() => {});
+    deleteAttachmentFromCloud(entry.key);
     delete state.cueBufferCache[entry.key];
     state.cueBank.reminders = state.cueBank.reminders.filter(r => r.id !== id);
     saveData();
@@ -5561,6 +5551,9 @@ function renderModulationRows() {
         return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
             <div class="flex items-center gap-1.5 flex-wrap">
+                <div class="drag-handle flex-shrink-0" data-mod-grip="${i}" title="Drag to reorder — insert this section between others">
+                    <i class="fas fa-grip-vertical text-[10px]"></i>
+                </div>
                 <div class="relative flex-shrink-0">
                     <button type="button" class="mod-color-swatch w-5 h-5 rounded-full border border-white/25" style="background:${m.color};" data-mod-idx="${i}" title="Section color"></button>
                     <div class="mod-color-picker hidden absolute left-0 top-full mt-1.5 p-2 rounded-lg bg-s2 border border-brd/50 shadow-lg grid-cols-5 gap-1.5" data-mod-idx="${i}" style="width:172px; z-index:30;">
@@ -6250,6 +6243,129 @@ function setupCustomDrag() {
         list.querySelectorAll('.edit-row').forEach(r => { r.style.transform = ''; r.classList.remove('dragging-row'); });
         if (dragClone) { dragClone.remove(); dragClone = null; }
         state.customDragId = null;
+        hasMoved = false;
+        dragOriginalRects = [];
+        dragOriginalIndex = -1; dragTargetIndex = -1;
+    }
+
+    list.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    list.addEventListener('touchstart', onDown, { passive: false });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onUp);
+}
+
+// ===== MODULATION SECTION DRAG REORDER =====
+// Lets a forgotten section be inserted between two already-created ones, rather than only
+// ever being appended at the end. Index-based rather than ID-based (modulation entries have
+// no stable ID) — safe because the whole operation is self-contained between pointerdown and
+// pointerup, with no re-render happening in between to invalidate the captured indices.
+function setupModulationDrag() {
+    const list = document.getElementById('modulationList');
+    let dragClone = null, dragOffsetY = 0, dragStartY = 0, hasMoved = false, dragActive = false;
+    let dragOriginalRects = [];
+    let dragOriginalIndex = -1, dragTargetIndex = -1;
+
+    function getGrip(e) {
+        const target = e.target.closest('[data-mod-grip]');
+        if (!target) return null;
+        return target.closest('[data-mod-idx]');
+    }
+    function getY(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
+
+    function makeClone(row) {
+        const rect = row.getBoundingClientRect();
+        const clone = row.cloneNode(true);
+        clone.style.position = 'fixed';
+        clone.style.left = rect.left + 'px';
+        clone.style.top = rect.top + 'px';
+        clone.style.width = rect.width + 'px';
+        clone.style.pointerEvents = 'none';
+        clone.style.zIndex = '600';
+        clone.style.opacity = '0.95';
+        clone.style.boxShadow = '0 10px 28px rgba(0,0,0,0.55), 0 0 0 1px rgba(212,168,83,0.25)';
+        clone.style.transform = 'scale(1.01)';
+        document.body.appendChild(clone);
+        return clone;
+    }
+
+    function onDown(e) {
+        const row = getGrip(e);
+        if (!row || !list.contains(row)) return;
+        e.preventDefault();
+        const y = getY(e);
+        const rect = row.getBoundingClientRect();
+        dragActive = true;
+        dragOffsetY = y - rect.top;
+        dragStartY = y;
+        hasMoved = false;
+        row.style.opacity = '0.3';
+        dragClone = makeClone(row);
+
+        const rows = Array.from(list.children);
+        dragOriginalRects = rows.map(r => {
+            const rr = r.getBoundingClientRect();
+            return { idx: parseInt(r.dataset.modIdx, 10), top: rr.top, height: rr.height };
+        });
+        dragOriginalIndex = parseInt(row.dataset.modIdx, 10);
+        dragTargetIndex = dragOriginalIndex;
+
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+    }
+
+    function applyLiveShift() {
+        Array.from(list.children).forEach(row => {
+            const origIdx = parseInt(row.dataset.modIdx, 10);
+            if (origIdx === dragOriginalIndex) { row.style.transform = ''; return; }
+            const rectInfo = dragOriginalRects.find(r => r.idx === origIdx);
+            if (!rectInfo) return;
+            const rowHeight = rectInfo.height;
+            let shift = 0;
+            if (dragOriginalIndex < dragTargetIndex && origIdx > dragOriginalIndex && origIdx < dragTargetIndex) shift = -rowHeight;
+            else if (dragOriginalIndex > dragTargetIndex && origIdx < dragOriginalIndex && origIdx >= dragTargetIndex) shift = rowHeight;
+            row.style.transform = shift ? `translateY(${shift}px)` : '';
+        });
+    }
+
+    function onMove(e) {
+        if (!dragActive) return;
+        e.preventDefault();
+        const y = getY(e);
+        if (Math.abs(y - dragStartY) > 2) hasMoved = true;
+        if (dragClone) dragClone.style.top = (y - dragOffsetY) + 'px';
+
+        let targetIndex = dragOriginalRects.length;
+        for (let i = 0; i < dragOriginalRects.length; i++) {
+            const r = dragOriginalRects[i];
+            if (y < r.top + r.height / 2) { targetIndex = i; break; }
+        }
+        if (targetIndex !== dragTargetIndex) {
+            dragTargetIndex = targetIndex;
+            applyLiveShift();
+        }
+    }
+
+    function onUp() {
+        if (!dragActive) return;
+        document.body.style.userSelect = '';
+        document.body.style.webkitUserSelect = '';
+        if (hasMoved && dragOriginalIndex !== -1 && dragTargetIndex !== -1) {
+            let finalIdx = dragTargetIndex > dragOriginalIndex ? dragTargetIndex - 1 : dragTargetIndex;
+            if (finalIdx !== dragOriginalIndex) {
+                const [moved] = editingModulations.splice(dragOriginalIndex, 1);
+                editingModulations.splice(finalIdx, 0, moved);
+            }
+        }
+        cleanup();
+        renderModulationRows();
+    }
+
+    function cleanup() {
+        Array.from(list.children).forEach(r => { r.style.transform = ''; r.style.opacity = ''; });
+        if (dragClone) { dragClone.remove(); dragClone = null; }
+        dragActive = false;
         hasMoved = false;
         dragOriginalRects = [];
         dragOriginalIndex = -1; dragTargetIndex = -1;
@@ -7142,7 +7258,7 @@ function init() {
         if (wrap.contains(e.target)) return;
         dd.classList.add('hidden'); dd.classList.remove('flex');
     });
-    setupEvents(); setupCustomDrag();
+    setupEvents(); setupCustomDrag(); setupModulationDrag();
     if (window.speechSynthesis) window.speechSynthesis.getVoices();
     requestAnimationFrame(animationLoop);
 }
