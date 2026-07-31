@@ -662,7 +662,7 @@ tailwind.config = {
             <p class="text-xs text-zinc-500 text-center">Have your band member open Band Sync → Join and scan this:</p>
             <div id="bandSyncQrHost" class="bg-white p-3 rounded-xl w-full mx-auto" style="max-width:min(78vw,320px); aspect-ratio:1;"></div>
             <div id="bandSyncHostCodeWrap" class="hidden w-full rounded-lg bg-s3/50 border border-brd/40 p-3 text-center">
-                <p class="text-[10px] text-zinc-600 uppercase tracking-wider mb-1.5">Camera not working? Share this code instead (needs internet)</p>
+                <p class="text-[10px] text-zinc-600 uppercase tracking-wider mb-1.5" id="bandSyncHostCodeNote">Camera not working? Share this code instead (needs internet)</p>
                 <div class="font-mono text-2xl tracking-[0.3em] text-gold font-bold" id="bandSyncHostCode">------</div>
             </div>
         </div>
@@ -888,7 +888,7 @@ tailwind.config = {
     </div>
 </div>
 
-<div id="loopTrimEditorView" class="fixed inset-0 z-[220] bg-black hidden flex-col">
+<div id="loopTrimEditorView" class="fixed inset-0 z-[600] bg-black hidden flex-col">
     <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50 px-3 py-2.5 flex items-center gap-2">
         <button id="closeLoopTrimEditorBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-zinc-200 transition-all" aria-label="Done" title="Done">
             <i class="fas fa-check text-xs"></i>
@@ -2141,16 +2141,26 @@ let bandSyncPairingUnsub = null;
 async function startBandSyncHostCodeFallback(peer, offerPayload) {
     if (bandSyncPairingUnsub) { bandSyncPairingUnsub(); bandSyncPairingUnsub = null; }
     const wrap = document.getElementById('bandSyncHostCodeWrap');
+    const codeEl = document.getElementById('bandSyncHostCode');
+    const noteEl = document.getElementById('bandSyncHostCodeNote');
     if (!fbDb) { if (wrap) wrap.classList.add('hidden'); return; } // no internet path available
     const code = generateBandSyncCode();
-    const codeEl = document.getElementById('bandSyncHostCode');
-    if (codeEl) codeEl.textContent = code.toUpperCase();
+    if (codeEl) { codeEl.textContent = code.toUpperCase(); codeEl.classList.remove('hidden'); }
+    if (noteEl) { noteEl.textContent = 'Camera not working? Share this code instead (needs internet)'; noteEl.classList.remove('text-red-400'); noteEl.classList.add('text-zinc-600'); }
     if (wrap) wrap.classList.remove('hidden');
     try {
         await fbDb.collection('bandSyncPairing').doc(code).set({ offer: offerPayload, answer: null, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     } catch (err) {
         console.warn('Could not publish pairing code:', err);
-        if (wrap) wrap.classList.add('hidden');
+        // Stay visible and explain what went wrong, rather than silently vanishing — this was
+        // previously hiding itself immediately on failure, which looked like a flash-and-disappear bug.
+        if (codeEl) codeEl.classList.add('hidden');
+        if (noteEl) {
+            noteEl.classList.remove('text-zinc-600'); noteEl.classList.add('text-red-400');
+            noteEl.textContent = err.code === 'permission-denied'
+                ? 'Code sharing needs a Firestore rules update — see setup notes'
+                : 'Could not set up the code — check your connection and try again';
+        }
         return;
     }
     bandSyncPairingUnsub = fbDb.collection('bandSyncPairing').doc(code).onSnapshot(async doc => {
