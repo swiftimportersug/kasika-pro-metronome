@@ -801,15 +801,6 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent"></div>
 </div>
 
-<div class="modal-overlay" id="songLinkedNoteModal">
-    <div class="modal-box" style="max-width:420px;">
-        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link Sheet Music / Notes</h3>
-        <p class="text-xs text-zinc-500 mb-4">Choose a note, drawing, image, or PDF to view alongside this song's metronome.</p>
-        <div id="songLinkedNoteList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
-        <button type="button" onclick="hideModal('songLinkedNoteModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
-    </div>
-</div>
-
 <div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10] border-t border-brd/50 px-4 py-3 items-center gap-3 shadow-2xl" style="padding-bottom:calc(0.75rem + env(safe-area-inset-bottom));">
     <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold-bright transition-colors">
         <i class="fas fa-play ml-0.5" id="miniPlayerPlayIcon"></i>
@@ -994,6 +985,15 @@ tailwind.config = {
                 <button type="button" onclick="stopLoopPreview(); hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
             </div>
         </form>
+    </div>
+</div>
+
+<div class="modal-overlay" id="songLinkedNoteModal">
+    <div class="modal-box" style="max-width:420px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link Sheet Music / Notes</h3>
+        <p class="text-xs text-zinc-500 mb-4">Choose a note, drawing, image, or PDF to view alongside this song's metronome.</p>
+        <div id="songLinkedNoteList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
+        <button type="button" onclick="hideModal('songLinkedNoteModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
     </div>
 </div>
 
@@ -5551,8 +5551,8 @@ function renderModulationRows() {
         return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
             <div class="flex items-center gap-1.5 flex-wrap">
-                <div class="drag-handle flex-shrink-0" data-mod-grip="${i}" title="Drag to reorder — insert this section between others">
-                    <i class="fas fa-grip-vertical text-[10px]"></i>
+                <div class="drag-handle flex-shrink-0 w-6 h-6 rounded-md bg-s2/80 border border-brd/40 flex items-center justify-center" data-mod-grip="${i}" title="Drag to reorder — insert this section between others">
+                    <i class="fas fa-grip-vertical text-[11px]"></i>
                 </div>
                 <div class="relative flex-shrink-0">
                     <button type="button" class="mod-color-swatch w-5 h-5 rounded-full border border-white/25" style="background:${m.color};" data-mod-idx="${i}" title="Section color"></button>
