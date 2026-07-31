@@ -801,6 +801,18 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent"></div>
 </div>
 
+<div class="modal-overlay" id="nameFileModal">
+    <div class="modal-box" style="max-width:380px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1" id="nameFileModalTitle">Name This File</h3>
+        <p class="text-xs text-zinc-500 mb-4" id="nameFileModalSubtitle"></p>
+        <input type="text" id="nameFileModalInput" class="modal-input mb-4" placeholder="File name">
+        <div class="flex gap-3">
+            <button type="button" id="nameFileModalCancelBtn" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            <button type="button" id="nameFileModalOkBtn" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">OK</button>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay" id="linkPageModal">
     <div class="modal-box" style="max-width:420px;">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link Pages Together</h3>
@@ -4011,11 +4023,28 @@ function getSnippetAroundMatch(text, query, maxLen) {
     return snippet;
 }
 
+function collapseAttachmentGroups(notes) {
+    const seen = new Set();
+    const result = [];
+    for (const n of notes) {
+        if (n.type === 'attachment' && n.groupId) {
+            if (seen.has(n.groupId)) continue;
+            seen.add(n.groupId);
+            const groupMembers = state.notes.filter(x => x.groupId === n.groupId);
+            const earliest = groupMembers.reduce((a, b) => (b.groupOrder || 0) < (a.groupOrder || 0) ? b : a);
+            result.push(earliest);
+        } else {
+            result.push(n);
+        }
+    }
+    return result;
+}
+
 function renderNotesList(query) {
     const q = (query || '').trim().toLowerCase();
     const list = document.getElementById('notesList');
     const empty = document.getElementById('notesEmptyState');
-    let items = state.notes.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    let items = collapseAttachmentGroups(state.notes.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
     if (q) items = items.filter(n => (n.title || '').toLowerCase().includes(q) || (n.type !== 'attachment' && stripHtml(n.content).toLowerCase().includes(q)));
 
     if (!items.length) {
@@ -4030,9 +4059,9 @@ function renderNotesList(query) {
         const title = highlightText(escHtml(n.title || 'Untitled note'), query);
         const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
         if (n.type === 'attachment') {
-            const isLinked = !!n.groupId;
+            const groupCount = n.groupId ? state.notes.filter(x => x.groupId === n.groupId).length : 1;
             const icon = n.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image';
-            const subtitle = (n.fileType === 'pdf' ? 'PDF' : 'Image') + (isLinked ? ' · linked 2-page spread' : '');
+            const subtitle = (n.fileType === 'pdf' ? 'PDF' : 'Image') + (groupCount > 1 ? ` · ${groupCount} linked pages` : '');
             return `
             <div class="note-item flex items-start gap-3 px-4 py-3 border-b border-brd/20" data-note-id="${n.id}" data-note-type="attachment">
                 <div class="w-9 h-9 rounded-lg bg-s3 border border-brd/50 flex items-center justify-center flex-shrink-0 text-[#60A5FA]">
@@ -4070,18 +4099,59 @@ function createNewNote() {
 }
 
 // ===== NOTE ATTACHMENTS (uploaded images/PDFs) =====
+// Custom, app-branded replacement for the native prompt() dialog — browsers always show
+// their own "[site] says" chrome around prompt()/alert()/confirm() as a security measure
+// that can't be overridden by any website, so a real in-app modal is the only way to control
+// the branding here.
+function askForFileName(defaultName, subtitle) {
+    return new Promise(resolve => {
+        const input = document.getElementById('nameFileModalInput');
+        const subtitleEl = document.getElementById('nameFileModalSubtitle');
+        const okBtn = document.getElementById('nameFileModalOkBtn');
+        const cancelBtn = document.getElementById('nameFileModalCancelBtn');
+        input.value = defaultName || '';
+        subtitleEl.textContent = subtitle || '';
+        showModal('nameFileModal');
+        setTimeout(() => { input.focus(); input.select(); }, 100);
+        function cleanup() {
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            input.removeEventListener('keydown', onKeydown);
+            hideModal('nameFileModal');
+        }
+        function onOk() { const val = input.value.trim(); cleanup(); resolve(val || defaultName || null); }
+        function onCancel() { cleanup(); resolve(null); }
+        function onKeydown(e) { if (e.key === 'Enter') { e.preventDefault(); onOk(); } else if (e.key === 'Escape') { onCancel(); } }
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        input.addEventListener('keydown', onKeydown);
+    });
+}
+
 async function handleNoteFilesUpload(fileList) {
     const files = Array.from(fileList).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf') || f.type.startsWith('image/'));
     if (!files.length) { showToast('Please choose image or PDF files'); return; }
+
+    let sharedName = null;
+    if (files.length > 1) {
+        const defaultName = files[0].name.replace(/\.[^.]+$/, '');
+        sharedName = await askForFileName(defaultName, `Linking these ${files.length} pages as one file — they'll always open together.`);
+        if (sharedName === null) return; // cancelled entirely
+    }
+
     const groupId = files.length > 1 ? ('grp_' + genId()) : null;
     const newNotes = [];
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
         const defaultName = file.name.replace(/\.[^.]+$/, '');
-        const promptLabel = files.length > 1 ? `Name page ${i + 1} of ${files.length}:` : 'Name this file:';
-        const name = prompt(promptLabel, defaultName);
-        if (name === null) continue; // skipped, but keep going with the rest
+        let name;
+        if (files.length > 1) {
+            name = sharedName; // one shared name for every page in the linked set — not asked per-page
+        } else {
+            name = await askForFileName(defaultName, 'Name this file:');
+            if (name === null) return;
+        }
         const key = 'note_att_' + genId();
         try {
             await cueDbPut(key, file);
@@ -4103,7 +4173,7 @@ async function handleNoteFilesUpload(fileList) {
     state.notes.push(...newNotes);
     saveData();
     renderNotesList(document.getElementById('notesSearchInput').value);
-    showToast(newNotes.length > 1 ? `${newNotes.length} pages added and linked together` : `"${newNotes[0].title}" added`);
+    showToast(newNotes.length > 1 ? `"${sharedName}" added (${newNotes.length} linked pages)` : `"${newNotes[0].title}" added`);
 }
 
 // All pages sharing a note's groupId, in display order — a group can hold any number of
@@ -4379,7 +4449,7 @@ function linkPages(noteId, targetId) {
         target.groupId = note.groupId;
     }
     const members = state.notes.filter(n => n.groupId === note.groupId);
-    members.forEach((n, i) => { n.groupOrder = i; });
+    members.forEach((n, i) => { n.groupOrder = i; n.title = note.title; }); // one shared name for the whole linked set
     saveData();
     hideModal('linkPageModal');
     openAttachmentViewer(noteId);
@@ -4401,13 +4471,16 @@ function unlinkPages(noteId) {
 function renameAttachment() {
     const note = state.notes.find(n => n.id === state.activeNoteId);
     if (!note) return;
-    const name = prompt('Rename this file:', note.title);
-    if (name === null || !name.trim()) return;
-    note.title = name.trim();
-    note.updatedAt = Date.now();
-    saveData();
-    document.getElementById('attachmentViewerTitle').textContent = note.title;
-    renderNotesList(document.getElementById('notesSearchInput').value);
+    askForFileName(note.title, 'Rename this file:').then(name => {
+        if (name === null || !name.trim()) return;
+        const trimmed = name.trim();
+        const members = note.groupId ? state.notes.filter(n => n.groupId === note.groupId) : [note];
+        members.forEach(n => { n.title = trimmed; n.updatedAt = Date.now(); });
+        saveData();
+        document.getElementById('attachmentViewerTitle').textContent = trimmed;
+        renderNotesList(document.getElementById('notesSearchInput').value);
+        refreshAttachmentViewerContent(note.id);
+    });
 }
 
 function deleteAttachment() {
