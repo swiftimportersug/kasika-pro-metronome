@@ -498,7 +498,7 @@ tailwind.config = {
             <button id="uploadNoteFileBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-400 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Upload image or PDF" title="Upload image or PDF">
                 <i class="fas fa-file-arrow-up text-xs"></i>
             </button>
-            <input type="file" id="uploadNoteFileInput" accept="image/*,.pdf,application/pdf" class="hidden">
+            <input type="file" id="uploadNoteFileInput" accept="image/*,.pdf,application/pdf" multiple class="hidden">
             <button id="newNoteBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-400 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all" aria-label="New note" title="New note">
                 <i class="fas fa-plus text-xs"></i>
             </button>
@@ -803,10 +803,45 @@ tailwind.config = {
 
 <div class="modal-overlay" id="linkPageModal">
     <div class="modal-box" style="max-width:420px;">
-        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link a Second Page</h3>
-        <p class="text-xs text-zinc-500 mb-4">Choose another uploaded page to always show together with this one — scrolling down will reveal it.</p>
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link Pages Together</h3>
+        <p class="text-xs text-zinc-500 mb-4">Linked pages always open together — scrolling down reveals the next one.</p>
         <div id="linkPageList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
         <button type="button" onclick="hideModal('linkPageModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+    </div>
+</div>
+
+<div id="imageEditorView" class="fixed inset-0 z-[220] bg-black hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50 px-3 py-2.5 flex items-center gap-2">
+        <button id="closeImageEditorBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-zinc-200 transition-all" aria-label="Cancel editing" title="Cancel editing">
+            <i class="fas fa-xmark text-xs"></i>
+        </button>
+        <span class="flex-1 min-w-0 truncate text-zinc-100 font-display font-semibold text-sm">Edit Image</span>
+        <button id="imageEditorSaveBtn" class="px-3.5 py-1.5 rounded-lg bg-gold text-surface text-xs font-semibold hover:bg-gold-bright transition-colors">Save</button>
+    </div>
+    <div class="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-brd/30 bg-s2/40 overflow-x-auto">
+        <button type="button" class="note-mode-btn active" data-imgtool="pencil" id="imgToolPencilBtn"><i class="fas fa-pencil mr-1.5"></i>Pencil</button>
+        <button type="button" class="note-mode-btn" data-imgtool="crop" id="imgToolCropBtn"><i class="fas fa-crop mr-1.5"></i>Crop</button>
+        <div class="flex-1"></div>
+        <div id="imgPencilTools" class="flex items-center gap-1.5 flex-shrink-0">
+            <button type="button" id="imgDrawUndoBtn" class="text-fmt-btn" title="Undo last stroke"><i class="fas fa-rotate-left"></i></button>
+            <div class="w-px h-4 bg-brd mx-0.5"></div>
+            <button type="button" class="color-swatch active" data-img-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+            <button type="button" class="color-swatch" data-img-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+            <button type="button" class="color-swatch" data-img-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+            <button type="button" class="color-swatch" data-img-color="#fafafa" style="background:#fafafa" title="White"></button>
+            <button type="button" class="color-swatch" data-img-color="#f87171" style="background:#f87171" title="Red"></button>
+            <button type="button" class="color-swatch" data-img-color="#32CD32" style="background:#32CD32" title="Lime Green"></button>
+        </div>
+        <div id="imgCropTools" class="hidden items-center gap-2 flex-shrink-0">
+            <span class="text-[11px] text-zinc-500">Drag to select an area</span>
+            <button type="button" id="imgCropApplyBtn" class="px-2.5 py-1 rounded-md bg-[#2dd4bf]/15 text-[#2dd4bf] text-xs border border-[#2dd4bf]/30 hover:bg-[#2dd4bf]/25 transition-colors">Apply Crop</button>
+        </div>
+    </div>
+    <div class="flex-1 overflow-auto flex items-start justify-center bg-[#0a0a0c] p-2" id="imageEditorCanvasWrap">
+        <div class="relative" id="imageEditorCanvasStack">
+            <canvas id="imageEditorCanvas" style="touch-action:none; max-width:100%; display:block;"></canvas>
+            <canvas id="imageEditorCropOverlay" class="absolute top-0 left-0 hidden" style="touch-action:none; max-width:100%; display:block;"></canvas>
+        </div>
     </div>
 </div>
 
@@ -3995,7 +4030,7 @@ function renderNotesList(query) {
         const title = highlightText(escHtml(n.title || 'Untitled note'), query);
         const date = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
         if (n.type === 'attachment') {
-            const isLinked = n.linkedPageId || state.notes.some(other => other.linkedPageId === n.id);
+            const isLinked = !!n.groupId;
             const icon = n.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image';
             const subtitle = (n.fileType === 'pdf' ? 'PDF' : 'Image') + (isLinked ? ' · linked 2-page spread' : '');
             return `
@@ -4035,40 +4070,47 @@ function createNewNote() {
 }
 
 // ===== NOTE ATTACHMENTS (uploaded images/PDFs) =====
-async function handleNoteFileUpload(file) {
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-    const isImage = file.type.startsWith('image/');
-    if (!isPdf && !isImage) { showToast('Please choose an image or PDF file'); return; }
-    const defaultName = file.name.replace(/\.[^.]+$/, '');
-    const name = prompt('Name this file:', defaultName);
-    if (name === null) return; // cancelled
-    const key = 'note_att_' + genId();
-    try {
-        await cueDbPut(key, file);
-    } catch (err) {
-        console.warn('Could not store file:', err);
-        showToast('Could not store this file — it may be too large');
-        return;
+async function handleNoteFilesUpload(fileList) {
+    const files = Array.from(fileList).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf') || f.type.startsWith('image/'));
+    if (!files.length) { showToast('Please choose image or PDF files'); return; }
+    const groupId = files.length > 1 ? ('grp_' + genId()) : null;
+    const newNotes = [];
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+        const defaultName = file.name.replace(/\.[^.]+$/, '');
+        const promptLabel = files.length > 1 ? `Name page ${i + 1} of ${files.length}:` : 'Name this file:';
+        const name = prompt(promptLabel, defaultName);
+        if (name === null) continue; // skipped, but keep going with the rest
+        const key = 'note_att_' + genId();
+        try {
+            await cueDbPut(key, file);
+        } catch (err) {
+            console.warn('Could not store file:', err);
+            showToast(`Could not store "${defaultName}" — it may be too large`);
+            continue;
+        }
+        newNotes.push({
+            id: genId(), type: 'attachment',
+            title: (name || defaultName).trim() || 'Untitled',
+            fileKey: key, mimeType: file.type || (isPdf ? 'application/pdf' : 'image/*'),
+            fileType: isPdf ? 'pdf' : 'image',
+            groupId, groupOrder: i,
+            updatedAt: Date.now(),
+        });
     }
-    const note = {
-        id: genId(), type: 'attachment',
-        title: (name || defaultName).trim() || 'Untitled',
-        fileKey: key, mimeType: file.type || (isPdf ? 'application/pdf' : 'image/*'),
-        fileType: isPdf ? 'pdf' : 'image', linkedPageId: null,
-        updatedAt: Date.now(),
-    };
-    state.notes.push(note);
+    if (!newNotes.length) return;
+    state.notes.push(...newNotes);
     saveData();
     renderNotesList(document.getElementById('notesSearchInput').value);
-    showToast(`"${note.title}" added`);
+    showToast(newNotes.length > 1 ? `${newNotes.length} pages added and linked together` : `"${newNotes[0].title}" added`);
 }
 
-// Finds this attachment's paired page, if any — checking both directions, since the link is
-// only stored once (on whichever page was linked FROM) but should work when opening either.
-function getLinkedPage(note) {
-    if (note.linkedPageId) return state.notes.find(n => n.id === note.linkedPageId) || null;
-    const reverse = state.notes.find(n => n.linkedPageId === note.id);
-    return reverse || null;
+// All pages sharing a note's groupId, in display order — a group can hold any number of
+// pages (not just two), letting a multi-page score be linked as one continuous scroll.
+function getLinkedGroup(note) {
+    if (!note.groupId) return [note];
+    return state.notes.filter(n => n.groupId === note.groupId).sort((a, b) => (a.groupOrder || 0) - (b.groupOrder || 0));
 }
 
 async function renderAttachmentPage(note) {
@@ -4078,7 +4120,19 @@ async function renderAttachmentPage(note) {
     if (note.fileType === 'pdf') {
         return `<div class="w-full" style="min-height:80vh;"><embed src="${url}" type="application/pdf" class="w-full" style="min-height:80vh; border:0;"></div>`;
     }
-    return `<img src="${url}" alt="${escHtml(note.title)}" class="w-full h-auto block">`;
+    return `<div class="relative"><img src="${url}" alt="${escHtml(note.title)}" class="w-full h-auto block">
+        <button type="button" class="attachment-edit-btn absolute top-2 right-2 w-8 h-8 rounded-lg bg-black/60 border border-white/20 text-white flex items-center justify-center hover:bg-black/80 transition-colors" data-note-id="${note.id}" title="Edit this page">
+            <i class="fas fa-pencil text-xs"></i>
+        </button></div>`;
+}
+
+async function refreshAttachmentViewerContent(noteId) {
+    const note = state.notes.find(n => n.id === noteId);
+    if (!note) return;
+    const pages = getLinkedGroup(note);
+    const htmlParts = await Promise.all(pages.map(p => renderAttachmentPage(p)));
+    const content = document.getElementById('attachmentViewerContent');
+    content.innerHTML = htmlParts.map((html, i) => `<div class="w-full">${pages.length > 1 ? `<div class="text-[10px] text-zinc-600 uppercase tracking-wider px-3 pt-2">Page ${i + 1}: ${escHtml(pages[i].title)}</div>` : ''}${html}</div>`).join('<div class="h-2 bg-brd/30"></div>');
 }
 
 async function openAttachmentViewer(id) {
@@ -4086,48 +4140,246 @@ async function openAttachmentViewer(id) {
     if (!note) return;
     state.activeNoteId = id;
     document.getElementById('attachmentViewerTitle').textContent = note.title || 'Untitled';
-    const content = document.getElementById('attachmentViewerContent');
-    content.innerHTML = '<div class="p-8 text-center text-zinc-600 text-sm">Loading…</div>';
-    const linked = getLinkedPage(note);
-    // Render in the correct order: whichever note HOLDS the linkedPageId is page 1.
-    const pages = note.linkedPageId ? [note, linked] : (linked ? [linked, note] : [note]);
-    const htmlParts = await Promise.all(pages.filter(Boolean).map(p => renderAttachmentPage(p)));
-    content.innerHTML = htmlParts.map((html, i) => `<div class="w-full">${pages.length > 1 ? `<div class="text-[10px] text-zinc-600 uppercase tracking-wider px-3 pt-2">${escHtml(pages[i].title)}</div>` : ''}${html}</div>`).join('<div class="h-2 bg-brd/30"></div>');
+    document.getElementById('attachmentViewerContent').innerHTML = '<div class="p-8 text-center text-zinc-600 text-sm">Loading…</div>';
+    await refreshAttachmentViewerContent(id);
     pushView('attachment-viewer');
     applyViewState('attachment-viewer');
 }
 
 function closeAttachmentViewer() { history.back(); }
 
+// ===== IMAGE EDITOR (pencil annotation + crop) =====
+let imageEditorState = { noteId: null, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
+
+async function openImageEditor(noteId) {
+    const note = state.notes.find(n => n.id === noteId);
+    if (!note || note.fileType !== 'image') { showToast('Editing is currently supported for images only'); return; }
+    const blob = await cueDbGet(note.fileKey).catch(() => null);
+    if (!blob) { showToast('Could not load this image'); return; }
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+        const canvas = document.getElementById('imageEditorCanvas');
+        const ctx = canvas.getContext('2d');
+        const MAX_DIM = 2000; // cap resolution for reasonable performance on large phone photos
+        let w = img.naturalWidth, h = img.naturalHeight;
+        const scale = Math.min(1, MAX_DIM / Math.max(w, h));
+        w = Math.round(w * scale); h = Math.round(h * scale);
+        canvas.width = w; canvas.height = h;
+        canvas.style.width = ''; canvas.style.height = '';
+        ctx.drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+
+        imageEditorState = { noteId, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
+        setImageEditorTool('pencil');
+        setupImageEditorDrawing();
+        setupImageEditorCrop();
+
+        pushView('image-editor');
+        applyViewState('image-editor');
+    };
+    img.onerror = () => showToast('Could not load this image');
+    img.src = url;
+}
+
+function setImageEditorTool(tool) {
+    imageEditorState.tool = tool;
+    document.getElementById('imgToolPencilBtn').classList.toggle('active', tool === 'pencil');
+    document.getElementById('imgToolCropBtn').classList.toggle('active', tool === 'crop');
+    const pencilTools = document.getElementById('imgPencilTools');
+    const cropTools = document.getElementById('imgCropTools');
+    pencilTools.classList.toggle('hidden', tool !== 'pencil'); pencilTools.classList.toggle('flex', tool === 'pencil');
+    cropTools.classList.toggle('hidden', tool !== 'crop'); cropTools.classList.toggle('flex', tool === 'crop');
+    const overlay = document.getElementById('imageEditorCropOverlay');
+    const canvas = document.getElementById('imageEditorCanvas');
+    if (tool === 'crop') {
+        overlay.width = canvas.width; overlay.height = canvas.height;
+        overlay.style.width = getComputedStyle(canvas).width;
+        overlay.style.height = getComputedStyle(canvas).height;
+        overlay.classList.remove('hidden');
+    } else {
+        overlay.classList.add('hidden');
+    }
+}
+
+function saveImageEditorUndoSnapshot() {
+    const canvas = document.getElementById('imageEditorCanvas');
+    imageEditorState.undoStack.push(canvas.toDataURL());
+    if (imageEditorState.undoStack.length > 20) imageEditorState.undoStack.shift();
+}
+
+function setupImageEditorDrawing() {
+    const canvas = document.getElementById('imageEditorCanvas');
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    function getPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+    }
+    canvas.onpointerdown = e => {
+        if (imageEditorState.tool !== 'pencil') return;
+        e.preventDefault();
+        saveImageEditorUndoSnapshot();
+        drawing = true;
+        const p = getPos(e);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y);
+    };
+    canvas.onpointermove = e => {
+        if (!drawing || imageEditorState.tool !== 'pencil') return;
+        e.preventDefault();
+        const p = getPos(e);
+        ctx.strokeStyle = imageEditorState.drawColor;
+        ctx.lineWidth = Math.max(2, canvas.width / 300);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.lineTo(p.x, p.y); ctx.stroke();
+    };
+    canvas.onpointerup = () => { drawing = false; };
+    canvas.onpointerleave = () => { drawing = false; };
+}
+
+function setupImageEditorCrop() {
+    const overlay = document.getElementById('imageEditorCropOverlay');
+    const octx = overlay.getContext('2d');
+    let dragging = false, startX = 0, startY = 0, curRect = null;
+    function getPos(e) {
+        const rect = overlay.getBoundingClientRect();
+        const scaleX = overlay.width / rect.width, scaleY = overlay.height / rect.height;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+    }
+    function drawOverlay() {
+        octx.clearRect(0, 0, overlay.width, overlay.height);
+        if (!curRect) return;
+        octx.fillStyle = 'rgba(0,0,0,0.55)';
+        octx.fillRect(0, 0, overlay.width, overlay.height);
+        octx.clearRect(curRect.x, curRect.y, curRect.w, curRect.h);
+        octx.strokeStyle = '#D4A853'; octx.lineWidth = 2;
+        octx.strokeRect(curRect.x, curRect.y, curRect.w, curRect.h);
+    }
+    overlay.onpointerdown = e => {
+        if (imageEditorState.tool !== 'crop') return;
+        e.preventDefault();
+        dragging = true;
+        const p = getPos(e);
+        startX = p.x; startY = p.y;
+        curRect = { x: startX, y: startY, w: 0, h: 0 };
+    };
+    overlay.onpointermove = e => {
+        if (!dragging || imageEditorState.tool !== 'crop') return;
+        e.preventDefault();
+        const p = getPos(e);
+        curRect = { x: Math.min(startX, p.x), y: Math.min(startY, p.y), w: Math.abs(p.x - startX), h: Math.abs(p.y - startY) };
+        drawOverlay();
+    };
+    overlay.onpointerup = () => { dragging = false; imageEditorState.cropRect = curRect; };
+    overlay.onpointerleave = () => { dragging = false; };
+}
+
+function applyImageCrop() {
+    const rect = imageEditorState.cropRect;
+    if (!rect || rect.w < 5 || rect.h < 5) { showToast('Drag to select an area to crop first'); return; }
+    saveImageEditorUndoSnapshot();
+    const canvas = document.getElementById('imageEditorCanvas');
+    const ctx = canvas.getContext('2d');
+    const x = Math.round(rect.x), y = Math.round(rect.y), w = Math.round(rect.w), h = Math.round(rect.h);
+    const cropped = ctx.getImageData(x, y, w, h);
+    canvas.width = w; canvas.height = h;
+    ctx.putImageData(cropped, 0, 0);
+    imageEditorState.cropRect = null;
+    const overlay = document.getElementById('imageEditorCropOverlay');
+    overlay.width = w; overlay.height = h;
+    overlay.style.width = getComputedStyle(canvas).width;
+    overlay.style.height = getComputedStyle(canvas).height;
+    overlay.getContext('2d').clearRect(0, 0, w, h);
+    showToast('Crop applied — tap Save to keep it');
+}
+
+function undoImageEdit() {
+    if (!imageEditorState.undoStack.length) return;
+    const dataUrl = imageEditorState.undoStack.pop();
+    const canvas = document.getElementById('imageEditorCanvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = () => {
+        if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+            canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+            const overlay = document.getElementById('imageEditorCropOverlay');
+            overlay.width = canvas.width; overlay.height = canvas.height;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+    };
+    img.src = dataUrl;
+}
+
+async function saveImageEdit() {
+    const note = state.notes.find(n => n.id === imageEditorState.noteId);
+    if (!note) return;
+    const canvas = document.getElementById('imageEditorCanvas');
+    const outputType = note.mimeType && note.mimeType.startsWith('image/') ? note.mimeType : 'image/png';
+    canvas.toBlob(async blob => {
+        if (!blob) { showToast('Could not save this edit'); return; }
+        try {
+            await cueDbPut(note.fileKey, blob);
+            note.updatedAt = Date.now();
+            saveData();
+            showToast('Image saved');
+            closeImageEditor(true);
+        } catch (err) {
+            console.warn('Could not save image edit:', err);
+            showToast('Could not save this edit');
+        }
+    }, outputType);
+}
+
+function closeImageEditor(didSave) {
+    const noteId = imageEditorState.noteId;
+    history.back();
+    if (didSave && noteId) setTimeout(() => refreshAttachmentViewerContent(noteId), 60);
+}
+
 function openLinkPageModal() {
     const note = state.notes.find(n => n.id === state.activeNoteId);
     if (!note) return;
-    const others = state.notes.filter(n => n.type === 'attachment' && n.id !== note.id);
+    const groupIds = new Set(getLinkedGroup(note).map(n => n.id));
+    const others = state.notes.filter(n => n.type === 'attachment' && !groupIds.has(n.id));
     const list = document.getElementById('linkPageList');
+    let html = '';
+    if (note.groupId) {
+        html += `<button type="button" id="unlinkPageBtn" class="w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-red-400/10 border border-red-400/30 text-red-400 mb-2">
+            <i class="fas fa-link-slash text-xs"></i><span class="text-sm">Remove this page from the linked set</span>
+        </button>`;
+    }
     if (!others.length) {
-        list.innerHTML = '<p class="text-xs text-zinc-600 text-center py-4">No other uploaded pages yet.</p>';
+        html += '<p class="text-xs text-zinc-600 text-center py-4">No other unlinked pages available — upload another image or PDF first, then come back here.</p>';
     } else {
-        list.innerHTML = others.map(o => `
+        html += others.map(o => `
             <button type="button" class="link-page-option w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-s3/50 border border-brd/40 hover:border-[#60A5FA]/40 transition-colors" data-note-id="${o.id}">
                 <i class="fas ${o.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image'} text-[#60A5FA] text-xs"></i>
                 <span class="text-sm text-zinc-200 truncate">${escHtml(o.title)}</span>
             </button>`).join('');
     }
-    const current = getLinkedPage(note);
-    if (current) {
-        list.innerHTML = `<button type="button" id="unlinkPageBtn" class="w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-red-400/10 border border-red-400/30 text-red-400 mb-2">
-            <i class="fas fa-link-slash text-xs"></i><span class="text-sm">Unlink from "${escHtml(current.title)}"</span>
-        </button>` + list.innerHTML;
-    }
+    list.innerHTML = html;
     showModal('linkPageModal');
 }
 
 function linkPages(noteId, targetId) {
     const note = state.notes.find(n => n.id === noteId);
-    if (!note) return;
-    // Clear any existing link involving either page first, then link note -> target (note = page 1).
-    state.notes.forEach(n => { if (n.linkedPageId === noteId || n.linkedPageId === targetId) n.linkedPageId = null; });
-    note.linkedPageId = targetId;
+    const target = state.notes.find(n => n.id === targetId);
+    if (!note || !target) return;
+    if (!note.groupId) note.groupId = 'grp_' + genId();
+    if (target.groupId && target.groupId !== note.groupId) {
+        // Target already belongs to a different group — merge that whole group into this one.
+        state.notes.forEach(n => { if (n.groupId === target.groupId) n.groupId = note.groupId; });
+    } else {
+        target.groupId = note.groupId;
+    }
+    const members = state.notes.filter(n => n.groupId === note.groupId);
+    members.forEach((n, i) => { n.groupOrder = i; });
     saveData();
     hideModal('linkPageModal');
     openAttachmentViewer(noteId);
@@ -4135,8 +4387,12 @@ function linkPages(noteId, targetId) {
 
 function unlinkPages(noteId) {
     const note = state.notes.find(n => n.id === noteId);
-    if (!note) return;
-    state.notes.forEach(n => { if (n.id === noteId || n.linkedPageId === noteId) n.linkedPageId = null; });
+    if (!note || !note.groupId) return;
+    const groupId = note.groupId;
+    note.groupId = null; note.groupOrder = 0;
+    const remaining = state.notes.filter(n => n.groupId === groupId);
+    if (remaining.length === 1) { remaining[0].groupId = null; remaining[0].groupOrder = 0; }
+    else remaining.forEach((n, i) => { n.groupOrder = i; });
     saveData();
     hideModal('linkPageModal');
     openAttachmentViewer(noteId);
@@ -4158,11 +4414,16 @@ function deleteAttachment() {
     const note = state.notes.find(n => n.id === state.activeNoteId);
     if (!note) return;
     document.getElementById('deleteTitle').textContent = `Delete "${note.title}"?`;
-    document.getElementById('deleteMessage').textContent = 'This cannot be undone. If it\'s linked to another page, that page will be unlinked but kept.';
+    document.getElementById('deleteMessage').textContent = 'This cannot be undone. If it\'s linked with other pages, they\'ll stay linked to each other and just lose this one.';
     document.getElementById('deleteConfirmBtn').onclick = () => {
         cueDbDelete(note.fileKey).catch(() => {});
+        const groupId = note.groupId;
         state.notes = state.notes.filter(n => n.id !== note.id);
-        state.notes.forEach(n => { if (n.linkedPageId === note.id) n.linkedPageId = null; });
+        if (groupId) {
+            const remaining = state.notes.filter(n => n.groupId === groupId);
+            if (remaining.length === 1) { remaining[0].groupId = null; remaining[0].groupOrder = 0; }
+            else remaining.forEach((n, i) => { n.groupOrder = i; });
+        }
         saveData();
         hideModal('deleteModal');
         closeAttachmentViewer();
@@ -5749,6 +6010,7 @@ function applyViewState(view) {
     const notesEl = document.getElementById('notesView');
     const editorEl = document.getElementById('noteEditorView');
     const attachmentEl = document.getElementById('attachmentViewerView');
+    const imageEditorEl = document.getElementById('imageEditorView');
     const cueBankEl = document.getElementById('cueBankView');
     const bandSyncEl = document.getElementById('bandSyncView');
 
@@ -5764,6 +6026,9 @@ function applyViewState(view) {
 
     if (target === 'attachment-viewer') { attachmentEl.classList.remove('hidden'); attachmentEl.classList.add('flex'); }
     else { attachmentEl.classList.add('hidden'); attachmentEl.classList.remove('flex'); }
+
+    if (target === 'image-editor') { imageEditorEl.classList.remove('hidden'); imageEditorEl.classList.add('flex'); }
+    else { imageEditorEl.classList.add('hidden'); imageEditorEl.classList.remove('flex'); }
 
     if (target === 'cuebank') { cueBankEl.classList.remove('hidden'); cueBankEl.classList.add('flex'); renderCueBankUI(); refreshAudioOutputDevices(); }
     else { cueBankEl.classList.add('hidden'); cueBankEl.classList.remove('flex'); }
@@ -5959,8 +6224,7 @@ function setupEvents() {
     document.getElementById('newNoteBtn').addEventListener('click', createNewNote);
     document.getElementById('uploadNoteFileBtn').addEventListener('click', () => document.getElementById('uploadNoteFileInput').click());
     document.getElementById('uploadNoteFileInput').addEventListener('change', e => {
-        const file = e.target.files[0];
-        if (file) handleNoteFileUpload(file);
+        if (e.target.files && e.target.files.length) handleNoteFilesUpload(e.target.files);
         e.target.value = '';
     });
     document.getElementById('closeAttachmentViewerBtn').addEventListener('click', closeAttachmentViewer);
@@ -5972,6 +6236,23 @@ function setupEvents() {
         if (unlinkBtn) { unlinkPages(state.activeNoteId); return; }
         const option = e.target.closest('.link-page-option');
         if (option) linkPages(state.activeNoteId, option.dataset.noteId);
+    });
+    document.getElementById('attachmentViewerContent').addEventListener('click', e => {
+        const editBtn = e.target.closest('.attachment-edit-btn');
+        if (editBtn) openImageEditor(editBtn.dataset.noteId);
+    });
+    document.getElementById('closeImageEditorBtn').addEventListener('click', () => closeImageEditor(false));
+    document.getElementById('imageEditorSaveBtn').addEventListener('click', saveImageEdit);
+    document.getElementById('imgToolPencilBtn').addEventListener('click', () => setImageEditorTool('pencil'));
+    document.getElementById('imgToolCropBtn').addEventListener('click', () => setImageEditorTool('crop'));
+    document.getElementById('imgDrawUndoBtn').addEventListener('click', undoImageEdit);
+    document.getElementById('imgCropApplyBtn').addEventListener('click', applyImageCrop);
+    document.getElementById('imgPencilTools').addEventListener('click', e => {
+        const swatch = e.target.closest('.color-swatch[data-img-color]');
+        if (!swatch) return;
+        imageEditorState.drawColor = swatch.dataset.imgColor;
+        document.querySelectorAll('#imgPencilTools .color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
     });
     document.getElementById('notesSearchInput').addEventListener('input', e => renderNotesList(e.target.value));
     document.getElementById('notesList').addEventListener('click', e => {
