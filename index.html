@@ -801,6 +801,28 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent"></div>
 </div>
 
+<div class="modal-overlay" id="songLinkedNoteModal">
+    <div class="modal-box" style="max-width:420px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Link Sheet Music / Notes</h3>
+        <p class="text-xs text-zinc-500 mb-4">Choose a note, drawing, image, or PDF to view alongside this song's metronome.</p>
+        <div id="songLinkedNoteList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
+        <button type="button" onclick="hideModal('songLinkedNoteModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+    </div>
+</div>
+
+<div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10] border-t border-brd/50 px-4 py-3 items-center gap-3 shadow-2xl" style="padding-bottom:calc(0.75rem + env(safe-area-inset-bottom));">
+    <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold-bright transition-colors">
+        <i class="fas fa-play ml-0.5" id="miniPlayerPlayIcon"></i>
+    </button>
+    <div class="flex-1 min-w-0">
+        <div class="text-sm font-semibold text-zinc-100 truncate" id="miniPlayerSongName"></div>
+        <div class="text-[11px] text-zinc-500" id="miniPlayerSongInfo"></div>
+    </div>
+    <button id="miniPlayerCloseBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-500 flex items-center justify-center flex-shrink-0 hover:text-zinc-300 transition-colors" aria-label="Close player" title="Close player">
+        <i class="fas fa-xmark text-xs"></i>
+    </button>
+</div>
+
 <div class="modal-overlay" id="nameFileModal">
     <div class="modal-box" style="max-width:380px;">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1" id="nameFileModalTitle">Name This File</h3>
@@ -931,6 +953,13 @@ tailwind.config = {
             <div>
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Notes (optional)</label>
                 <textarea id="songNotesInput" class="modal-input resize-none" rows="2" placeholder="Set changes, cues, reminders..."></textarea>
+            </div>
+            <div>
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Linked Sheet Music / Notes (optional)</label>
+                <button type="button" id="songLinkedNoteBtn" class="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg bg-s3/50 border border-brd/40 hover:border-[#60A5FA]/40 transition-colors text-left">
+                    <span class="text-sm text-zinc-300 truncate flex items-center gap-2" id="songLinkedNoteLabel"><i class="fas fa-link text-zinc-600 text-xs"></i>None — tap to link a note or image</span>
+                    <i class="fas fa-chevron-right text-zinc-600 text-xs flex-shrink-0"></i>
+                </button>
             </div>
 
             <div class="border-t border-brd/50 pt-4">
@@ -1105,6 +1134,7 @@ function initFirebase() {
                 startRemoteSync(user.uid);
                 updateSyncUI(true, user.email || user.displayName || 'Signed in');
                 uploadMissingCueAudio();
+                pushMissingAttachmentsToCloud();
             } else {
                 stopRemoteSync();
                 updateSyncUI(false);
@@ -1161,7 +1191,7 @@ function startRemoteSync(uid) {
         if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
-        if (Array.isArray(d.notes)) state.notes = d.notes;
+        if (Array.isArray(d.notes)) { state.notes = d.notes; syncMissingAttachments(); }
         // Cue Bank is deliberately NOT synced here. Without Firebase Storage configured, its
         // audio bytes only ever live in each device's own local IndexedDB — syncing just the
         // metadata (names/keys) would let one device's import overwrite another's working
@@ -1283,6 +1313,7 @@ const state = {
     activeLoopNodes: null, songAbsoluteBar: 0, pendingLoopStartBar: null,
     houseAudioCtx: null, houseBus: null, stageOutputDeviceId: '', houseOutputDeviceId: '',
     bandSyncFollowSections: false, bandSyncUseHostCues: false,
+    miniPlayerSongId: null,
 };
 
 const MIN_BPM = 40, MAX_BPM = 400;
@@ -3721,6 +3752,8 @@ function openSongEditModal(id) {
     renderIntroCueUI();
     editingLoopTrack = song.loopTrack ? { ...song.loopTrack } : null;
     renderLoopTrackUI();
+    editingSongLinkedNoteId = song.linkedNoteId || null;
+    updateSongLinkedNoteLabel();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
     showModal('songModal');
@@ -4110,6 +4143,98 @@ function createNewNote() {
 // the branding here.
 // Compresses an image file if it's over 1MB — downscales excessive resolution (a 12MP phone
 // photo has far more pixels than a phone screen can even show) and re-encodes as JPEG at a
+// ===== ATTACHMENT CLOUD SYNC (images/PDFs across devices, no Firebase Storage needed) =====
+// Firestore only stores JSON-like data, not files — but a COMPRESSED image, base64-encoded,
+// is just text, and text is exactly what Firestore is good at. Each attachment gets its own
+// document (not crammed into the main synced payload) specifically to stay under Firestore's
+// 1MB-per-document cap — base64 adds about 33% overhead, so this only works for files that
+// compress down small enough to survive that translation.
+const ATTACHMENT_SYNC_LIMIT_BYTES = 700 * 1024; // leaves margin under the 1MB cap once base64-encoded
+
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]); // strip the "data:...;base64," prefix
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+function base64ToBlob(base64, mimeType) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+}
+
+async function pushAttachmentToCloud(fileKey, blob, mimeType) {
+    if (!syncEnabled || !fbDb || !fbAuth || !fbAuth.currentUser) return false;
+    if (blob.size > ATTACHMENT_SYNC_LIMIT_BYTES) return false; // too large to fit as a Firestore document
+    try {
+        const base64 = await blobToBase64(blob);
+        await fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey).set({
+            data: base64, mimeType, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+        return true;
+    } catch (err) {
+        console.warn('Could not sync attachment to cloud:', err);
+        return false;
+    }
+}
+
+async function fetchAttachmentFromCloud(fileKey) {
+    if (!fbDb || !fbAuth || !fbAuth.currentUser) return null;
+    try {
+        const doc = await fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey).get();
+        if (!doc.exists) return null;
+        const d = doc.data();
+        return base64ToBlob(d.data, d.mimeType);
+    } catch (err) {
+        console.warn('Could not fetch attachment from cloud:', err);
+        return null;
+    }
+}
+
+function deleteAttachmentFromCloud(fileKey) {
+    if (!fbDb || !fbAuth || !fbAuth.currentUser) return;
+    fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey).delete().catch(() => {});
+}
+
+// Runs after every incoming sync — pulls down any attachment file bytes this device doesn't
+// have locally yet for notes that just appeared/changed. Fire-and-forget from the caller's
+// perspective; refreshes the visible screen if the newly-arrived file is what's on screen.
+// Retroactively pushes any locally-held attachments that were uploaded before cloud sync was
+// available (or before this feature existed) — mirrors the same catch-up pattern already used
+// for cue audio. Re-pushing an already-synced attachment is harmless, just a redundant write.
+async function pushMissingAttachmentsToCloud() {
+    if (!syncEnabled || !fbAuth || !fbAuth.currentUser) return;
+    const attachmentNotes = state.notes.filter(n => n.type === 'attachment' && n.fileKey);
+    for (const note of attachmentNotes) {
+        const blob = await cueDbGet(note.fileKey).catch(() => null);
+        if (!blob) continue; // don't have it locally either — nothing to push from this device
+        await pushAttachmentToCloud(note.fileKey, blob, note.mimeType);
+    }
+}
+
+async function syncMissingAttachments() {
+    if (!fbAuth || !fbAuth.currentUser) return;
+    const attachmentNotes = state.notes.filter(n => n.type === 'attachment' && n.fileKey);
+    for (const note of attachmentNotes) {
+        const existing = await cueDbGet(note.fileKey).catch(() => null);
+        if (existing) continue;
+        const blob = await fetchAttachmentFromCloud(note.fileKey);
+        if (!blob) continue;
+        await cueDbPut(note.fileKey, blob).catch(() => {});
+        if (currentAppView === 'notes') renderNotesList(document.getElementById('notesSearchInput').value);
+        if (currentAppView === 'attachment-viewer' && state.activeNoteId) {
+            const activeNote = state.notes.find(n => n.id === state.activeNoteId);
+            if (activeNote && getLinkedGroup(activeNote).some(p => p.fileKey === note.fileKey)) {
+                refreshAttachmentViewerContent(state.activeNoteId);
+            }
+        }
+    }
+}
+
 // high quality setting, stepping down only as much as needed. PDFs are left untouched —
 // meaningfully compressing a PDF needs re-encoding everything embedded inside it, which isn't
 // realistically achievable with browser APIs alone.
@@ -4201,6 +4326,10 @@ async function handleNoteFilesUpload(fileList) {
             showToast(`Could not store "${defaultName}" — it may be too large`);
             continue;
         }
+        if (syncEnabled && fbAuth && fbAuth.currentUser) {
+            const synced = await pushAttachmentToCloud(key, storedFile, storedFile.type);
+            if (!synced) showToast(`"${(name || defaultName).trim()}" saved on this device, but is too large to sync across devices (${(storedFile.size / 1024).toFixed(0)}KB)`);
+        }
         newNotes.push({
             id: genId(), type: 'attachment',
             title: (name || defaultName).trim() || 'Untitled',
@@ -4225,8 +4354,12 @@ function getLinkedGroup(note) {
 }
 
 async function renderAttachmentPage(note) {
-    const blob = await cueDbGet(note.fileKey).catch(() => null);
-    if (!blob) return `<div class="p-8 text-center text-zinc-600 text-sm">Could not load "${escHtml(note.title)}"</div>`;
+    let blob = await cueDbGet(note.fileKey).catch(() => null);
+    if (!blob) {
+        blob = await fetchAttachmentFromCloud(note.fileKey);
+        if (blob) await cueDbPut(note.fileKey, blob).catch(() => {});
+    }
+    if (!blob) return `<div class="p-8 text-center text-zinc-600 text-sm">Could not load "${escHtml(note.title)}" — it may still be syncing, or was too large to sync to this device</div>`;
     const url = URL.createObjectURL(blob);
     if (note.fileType === 'pdf') {
         return `<div class="w-full" style="min-height:80vh;"><embed src="${url}" type="application/pdf" class="w-full" style="min-height:80vh; border:0;"></div>`;
@@ -4468,6 +4601,10 @@ async function uploadAndLinkNewPage(file) {
         showToast('Could not store this file — it may be too large');
         return;
     }
+    if (syncEnabled && fbAuth && fbAuth.currentUser) {
+        const synced = await pushAttachmentToCloud(key, storedFile, storedFile.type);
+        if (!synced) showToast(`Saved on this device, but too large to sync across devices (${(storedFile.size / 1024).toFixed(0)}KB)`);
+    }
     if (!note.groupId) note.groupId = 'grp_' + genId();
     const groupMembers = state.notes.filter(n => n.groupId === note.groupId);
     const newNote = {
@@ -4483,6 +4620,46 @@ async function uploadAndLinkNewPage(file) {
     renderNotesList(document.getElementById('notesSearchInput').value);
     openAttachmentViewer(note.id);
     showToast('Page added and linked');
+}
+
+function updateSongLinkedNoteLabel() {
+    const label = document.getElementById('songLinkedNoteLabel');
+    if (!label) return;
+    if (!editingSongLinkedNoteId) {
+        label.innerHTML = '<i class="fas fa-link text-zinc-600 text-xs"></i>None — tap to link a note or image';
+        return;
+    }
+    const note = state.notes.find(n => n.id === editingSongLinkedNoteId);
+    if (!note) {
+        label.innerHTML = '<i class="fas fa-triangle-exclamation text-red-400 text-xs"></i>Linked note not found';
+        return;
+    }
+    const icon = note.type === 'attachment' ? (note.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image') : (note.drawingDataUrl ? 'fa-pencil' : 'fa-note-sticky');
+    label.innerHTML = `<i class="fas ${icon} text-[#60A5FA] text-xs"></i>${escHtml(note.title || 'Untitled note')}`;
+}
+
+function openSongLinkedNoteModal() {
+    const items = collapseAttachmentGroups(state.notes.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+    const list = document.getElementById('songLinkedNoteList');
+    let html = '';
+    if (editingSongLinkedNoteId) {
+        html += `<button type="button" id="songUnlinkNoteBtn" class="w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-red-400/10 border border-red-400/30 text-red-400 mb-2">
+            <i class="fas fa-link-slash text-xs"></i><span class="text-sm">Remove link</span>
+        </button>`;
+    }
+    if (!items.length) {
+        html += '<p class="text-xs text-zinc-600 text-center py-4">No notes yet — create or upload one first.</p>';
+    } else {
+        html += items.map(n => {
+            const icon = n.type === 'attachment' ? (n.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image') : (n.drawingDataUrl ? 'fa-pencil' : 'fa-note-sticky');
+            return `<button type="button" class="song-link-note-option w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-s3/50 border border-brd/40 hover:border-[#60A5FA]/40 transition-colors" data-note-id="${n.id}">
+                <i class="fas ${icon} text-[#60A5FA] text-xs flex-shrink-0"></i>
+                <span class="text-sm text-zinc-200 truncate">${escHtml(n.title || 'Untitled note')}</span>
+            </button>`;
+        }).join('');
+    }
+    list.innerHTML = html;
+    showModal('songLinkedNoteModal');
 }
 
 function openLinkPageModal() {
@@ -4563,6 +4740,7 @@ function deleteAttachment() {
     document.getElementById('deleteMessage').textContent = 'This cannot be undone. If it\'s linked with other pages, they\'ll stay linked to each other and just lose this one.';
     document.getElementById('deleteConfirmBtn').onclick = () => {
         cueDbDelete(note.fileKey).catch(() => {});
+        deleteAttachmentFromCloud(note.fileKey);
         const groupId = note.groupId;
         state.notes = state.notes.filter(n => n.id !== note.id);
         if (groupId) {
@@ -5065,6 +5243,7 @@ function renderIntroCueUI() {
 
 // ===== BACKING LOOP =====
 let editingLoopTrack = null;
+let editingSongLinkedNoteId = null;
 
 function renderLoopTrackHtml() {
     const lt = editingLoopTrack;
@@ -5786,6 +5965,7 @@ function renderPlayMode(container, sl) {
                 ${song.notes ? `<div class="text-[11px] text-[#2dd4bf]/70 truncate mt-0.5">${escHtml(song.notes)}</div>` : ''}
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
+                ${song.linkedNoteId ? `<button type="button" class="song-view-notes-btn w-7 h-7 rounded-md bg-s3 border border-brd/50 text-[#60A5FA] flex items-center justify-center hover:border-[#60A5FA]/50 transition-colors" data-song-id="${song.id}" title="View linked notes/sheet music"><i class="fas fa-image text-[10px]"></i></button>` : ''}
                 <span class="font-mono text-sm ${isA ? 'text-gold-bright' : 'text-zinc-400'}">${song.bpm}</span>
                 <span class="text-[11px] px-1.5 py-0.5 rounded bg-s3 text-zinc-500">${song.timeSig}</span>
                 ${sub ? `<span class="sub-badge">${(SUBDIVISIONS[song.subdivision] || {}).short || ''}</span>` : ''}
@@ -5902,6 +6082,44 @@ function updatePlayBtn() {
         icon.className = 'fas fa-play ml-0.5'; btn.classList.remove('play-active'); btn.style.borderColor = '';
         if (icon2) { icon2.className = 'fas fa-play ml-0.5'; btn2.classList.remove('play-active'); btn2.style.borderColor = ''; }
     }
+    updateMiniPlayerPlayState();
+}
+
+// ===== MINI PLAYER (play a song while viewing its linked notes/sheet music) =====
+function showMiniPlayer(song) {
+    state.miniPlayerSongId = song.id;
+    document.getElementById('miniPlayerSongName').textContent = song.name;
+    document.getElementById('miniPlayerSongInfo').textContent = `${song.bpm} BPM · ${song.timeSig}`;
+    const bar = document.getElementById('miniPlayerBar');
+    bar.classList.remove('hidden'); bar.classList.add('flex');
+    document.getElementById('attachmentViewerContent').style.paddingBottom = '84px';
+    document.getElementById('noteContentArea').style.paddingBottom = '84px';
+    updateMiniPlayerPlayState();
+}
+
+function hideMiniPlayer() {
+    const bar = document.getElementById('miniPlayerBar');
+    bar.classList.add('hidden'); bar.classList.remove('flex');
+    document.getElementById('attachmentViewerContent').style.paddingBottom = '';
+    document.getElementById('noteContentArea').style.paddingBottom = '';
+    state.miniPlayerSongId = null;
+}
+
+function updateMiniPlayerPlayState() {
+    const icon = document.getElementById('miniPlayerPlayIcon');
+    if (icon) icon.className = state.isPlaying ? 'fas fa-stop' : 'fas fa-play ml-0.5';
+}
+
+// Arms the song (if not already active) and opens its linked note/attachment, with the mini
+// player showing so playback controls stay reachable while reading.
+function openSongWithNotes(song) {
+    if (!song.linkedNoteId) { showToast('This song has no linked notes yet — link one from the song editor'); return; }
+    const note = state.notes.find(n => n.id === song.linkedNoteId);
+    if (!note) { showToast('Linked note not found — it may have been deleted'); return; }
+    if (!state.isPlaying && state.activeSongId !== song.id) armSong(song);
+    showMiniPlayer(song);
+    if (note.type === 'attachment') openAttachmentViewer(note.id);
+    else openNoteEditor(note.id);
 }
 
 function showModal(id) { document.getElementById(id).classList.add('active'); }
@@ -6384,6 +6602,20 @@ function setupEvents() {
         if (option) linkPages(state.activeNoteId, option.dataset.noteId);
     });
     document.getElementById('linkPageUploadBtn').addEventListener('click', () => document.getElementById('linkPageUploadInput').click());
+    document.getElementById('songLinkedNoteBtn').addEventListener('click', openSongLinkedNoteModal);
+    document.getElementById('songLinkedNoteList').addEventListener('click', e => {
+        const unlinkBtn = e.target.closest('#songUnlinkNoteBtn');
+        if (unlinkBtn) { editingSongLinkedNoteId = null; updateSongLinkedNoteLabel(); hideModal('songLinkedNoteModal'); return; }
+        const option = e.target.closest('.song-link-note-option');
+        if (option) { editingSongLinkedNoteId = option.dataset.noteId; updateSongLinkedNoteLabel(); hideModal('songLinkedNoteModal'); }
+    });
+    document.getElementById('miniPlayerPlayBtn').addEventListener('click', () => {
+        const sl = getActiveSetlist();
+        const song = sl?.songs.find(s => s.id === state.miniPlayerSongId);
+        if (song && state.activeSongId !== song.id && !state.isPlaying) armSong(song);
+        togglePlayback();
+    });
+    document.getElementById('miniPlayerCloseBtn').addEventListener('click', hideMiniPlayer);
     document.getElementById('linkPageUploadInput').addEventListener('change', e => {
         const file = e.target.files[0];
         if (file) uploadAndLinkNewPage(file);
@@ -6623,6 +6855,8 @@ function setupEvents() {
         renderIntroCueUI();
         editingLoopTrack = null;
         renderLoopTrackUI();
+        editingSongLinkedNoteId = null;
+        updateSongLinkedNoteLabel();
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
         showModal('songModal');
@@ -6723,6 +6957,7 @@ function setupEvents() {
                 trimStart: editingLoopTrack.trimStart || 0,
                 trimEnd: editingLoopTrack.trimEnd != null ? editingLoopTrack.trimEnd : null,
             } : null,
+            linkedNoteId: editingSongLinkedNoteId || null,
         };
         if (!d.name || isNaN(d.bpm)) return;
         d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
@@ -6768,6 +7003,12 @@ function setupEvents() {
                 document.getElementById('deleteConfirmBtn').onclick = () => { deleteSong(sid); hideModal('deleteModal'); };
                 showModal('deleteModal');
             }
+            return;
+        }
+        const viewNotesBtn = e.target.closest('.song-view-notes-btn');
+        if (viewNotesBtn) {
+            const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === viewNotesBtn.dataset.songId);
+            if (song) openSongWithNotes(song);
             return;
         }
         const row = e.target.closest('.song-play-row');
