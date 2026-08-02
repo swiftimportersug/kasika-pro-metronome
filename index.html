@@ -814,14 +814,20 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent"></div>
 </div>
 
-<div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10] border-t border-brd/50 px-4 py-3 items-center gap-3 shadow-2xl" style="padding-bottom:calc(0.75rem + env(safe-area-inset-bottom));">
-    <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold-bright transition-colors">
+<div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10] border-t border-brd/50 px-4 py-3 items-center gap-2.5 shadow-2xl" style="padding-bottom:calc(0.75rem + env(safe-area-inset-bottom));">
+    <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold-bright transition-colors" style="transition:background 0.08s, box-shadow 0.08s;">
         <i class="fas fa-play ml-0.5" id="miniPlayerPlayIcon"></i>
     </button>
     <div class="flex-1 min-w-0">
         <div class="text-sm font-semibold text-zinc-100 truncate" id="miniPlayerSongName"></div>
         <div class="text-[11px] text-zinc-500" id="miniPlayerSongInfo"></div>
     </div>
+    <button id="miniPlayerTempoDownBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
+        <i class="fas fa-minus text-[10px]"></i>
+    </button>
+    <button id="miniPlayerTempoUpBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Increase tempo" title="Increase tempo">
+        <i class="fas fa-plus text-[10px]"></i>
+    </button>
     <button id="miniPlayerCloseBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-500 flex items-center justify-center flex-shrink-0 hover:text-zinc-300 transition-colors" aria-label="Close player" title="Close player">
         <i class="fas fa-xmark text-xs"></i>
     </button>
@@ -1475,6 +1481,26 @@ function clearAllBeatBlockFlashes() {
     });
 }
 
+// Flashes the mini player's play button with the current beat's tone color — this is the
+// substitute for the beat blocks visualization while viewing linked sheet music, since that
+// full view isn't on screen (and the blocks themselves are deliberately gated to the setlists
+// view only).
+let miniPlayerFlashTimer = null;
+function flashMiniPlayerButton(mainBeatIdx, durationMs) {
+    if (!state.miniPlayerSongId) return;
+    const btn = document.getElementById('miniPlayerPlayBtn');
+    if (!btn) return;
+    const tone = state.beatTones[mainBeatIdx] || 2;
+    const color = TONE_COLORS[tone];
+    btn.style.background = color;
+    btn.style.boxShadow = `0 0 18px ${color}aa`;
+    clearTimeout(miniPlayerFlashTimer);
+    miniPlayerFlashTimer = setTimeout(() => {
+        btn.style.background = '';
+        btn.style.boxShadow = '';
+    }, durationMs);
+}
+
 function getTempoMarking(b) {
     if (b < 50) return 'Grave'; if (b < 60) return 'Largo'; if (b < 66) return 'Larghetto';
     if (b < 76) return 'Adagio'; if (b < 108) return 'Andante'; if (b < 120) return 'Moderato';
@@ -1754,6 +1780,7 @@ async function startQrScanner(label, onDecode) {
     }
     video.srcObject = bandSync.scanStream;
     await video.play();
+    scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
     // Prefer the OS's own barcode detector (e.g. Google Play Services on Android) — the
     // same underlying tech most dedicated scanner apps use, and far more robust than a
@@ -2665,6 +2692,9 @@ function stopMetronome() {
     state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     clearAllBeatBlockFlashes();
+    clearTimeout(miniPlayerFlashTimer);
+    const miniBtn = document.getElementById('miniPlayerPlayBtn');
+    if (miniBtn) { miniBtn.style.background = ''; miniBtn.style.boxShadow = ''; }
     stopLoopTrack();
     state.pendingLoopStartBar = null;
     releaseWakeLock();
@@ -2854,6 +2884,7 @@ function scheduleNote(ci, time) {
         const mainBeatDurMs = 60000 / state.bpm;
         const flashDur = Math.max(BLOCK_MIN_FLASH_MS, mainBeatDurMs - BLOCK_GAP_BEFORE_NEXT_MS);
         setTimeout(() => flashBeatBlock(mb, flashDur), blockDelay);
+        setTimeout(() => flashMiniPlayerButton(mb, flashDur), blockDelay);
     }
 }
 
@@ -6783,6 +6814,10 @@ function updateSetlistBpmDisplay() {
     if (el) el.textContent = state.bpm;
     const elMain = document.getElementById('bpmDisplayMain');
     if (elMain) elMain.textContent = state.bpm;
+    if (state.miniPlayerSongId) {
+        const infoEl = document.getElementById('miniPlayerSongInfo');
+        if (infoEl) infoEl.textContent = `${state.bpm} BPM · ${state.timeSig}`;
+    }
 }
 
 // ===== VIEW NAVIGATION (History API — makes phone/browser Back close the current view instead of leaving the app) =====
@@ -7074,6 +7109,8 @@ function setupEvents() {
         togglePlayback();
     });
     document.getElementById('miniPlayerCloseBtn').addEventListener('click', hideMiniPlayer);
+    document.getElementById('miniPlayerTempoDownBtn').addEventListener('click', () => adjustTempo(-1));
+    document.getElementById('miniPlayerTempoUpBtn').addEventListener('click', () => adjustTempo(1));
     document.getElementById('linkPageUploadInput').addEventListener('change', e => {
         const file = e.target.files[0];
         if (file) uploadAndLinkNewPage(file);
