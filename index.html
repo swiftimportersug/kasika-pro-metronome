@@ -814,22 +814,16 @@ tailwind.config = {
     <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent"></div>
 </div>
 
-<div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10] border-t border-brd/50 px-4 py-3 items-center gap-2.5 shadow-2xl" style="padding-bottom:calc(0.75rem + env(safe-area-inset-bottom));">
+<div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10]/75 backdrop-blur-md border-t border-brd/50 px-3 py-2.5 items-center gap-2 shadow-2xl" style="padding-bottom:calc(0.625rem + env(safe-area-inset-bottom));">
     <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold-bright transition-colors" style="transition:background 0.08s, box-shadow 0.08s;">
         <i class="fas fa-play ml-0.5" id="miniPlayerPlayIcon"></i>
     </button>
-    <div class="flex-1 min-w-0">
-        <div class="text-sm font-semibold text-zinc-100 truncate" id="miniPlayerSongName"></div>
-        <div class="text-[11px] text-zinc-500" id="miniPlayerSongInfo"></div>
-    </div>
-    <button id="miniPlayerTempoDownBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
-        <i class="fas fa-minus text-[10px]"></i>
+    <div id="miniPlayerSongList" class="flex-1 min-w-0 overflow-y-auto flex flex-col rounded-lg" style="height:64px;"></div>
+    <button id="miniPlayerTempoDownBtn" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
+        <i class="fas fa-minus text-xs"></i>
     </button>
-    <button id="miniPlayerTempoUpBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Increase tempo" title="Increase tempo">
-        <i class="fas fa-plus text-[10px]"></i>
-    </button>
-    <button id="miniPlayerCloseBtn" class="w-8 h-8 rounded-lg bg-s3 border border-brd/50 text-zinc-500 flex items-center justify-center flex-shrink-0 hover:text-zinc-300 transition-colors" aria-label="Close player" title="Close player">
-        <i class="fas fa-xmark text-xs"></i>
+    <button id="miniPlayerTempoUpBtn" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Increase tempo" title="Increase tempo">
+        <i class="fas fa-plus text-xs"></i>
     </button>
 </div>
 
@@ -1486,7 +1480,7 @@ function clearAllBeatBlockFlashes() {
 // full view isn't on screen (and the blocks themselves are deliberately gated to the setlists
 // view only).
 let miniPlayerFlashTimer = null;
-function flashMiniPlayerButton(mainBeatIdx, durationMs) {
+function flashMiniPlayerButton(mainBeatIdx) {
     if (!state.miniPlayerSongId) return;
     const btn = document.getElementById('miniPlayerPlayBtn');
     if (!btn) return;
@@ -1495,10 +1489,15 @@ function flashMiniPlayerButton(mainBeatIdx, durationMs) {
     btn.style.background = color;
     btn.style.boxShadow = `0 0 18px ${color}aa`;
     clearTimeout(miniPlayerFlashTimer);
+    // A short, sharp flash right at the start of the beat, off well before the next one —
+    // the long sustained duration used for the beat blocks reads as "always on" here, since
+    // this button is much smaller and more central to what the eye is tracking.
+    const mainBeatDurMs = 60000 / state.bpm;
+    const shortFlash = Math.max(40, Math.min(110, mainBeatDurMs * 0.3));
     miniPlayerFlashTimer = setTimeout(() => {
         btn.style.background = '';
         btn.style.boxShadow = '';
-    }, durationMs);
+    }, shortFlash);
 }
 
 function getTempoMarking(b) {
@@ -2884,7 +2883,7 @@ function scheduleNote(ci, time) {
         const mainBeatDurMs = 60000 / state.bpm;
         const flashDur = Math.max(BLOCK_MIN_FLASH_MS, mainBeatDurMs - BLOCK_GAP_BEFORE_NEXT_MS);
         setTimeout(() => flashBeatBlock(mb, flashDur), blockDelay);
-        setTimeout(() => flashMiniPlayerButton(mb, flashDur), blockDelay);
+        setTimeout(() => flashMiniPlayerButton(mb), blockDelay);
     }
 }
 
@@ -6427,13 +6426,51 @@ function updatePlayBtn() {
 // ===== MINI PLAYER (play a song while viewing its linked notes/sheet music) =====
 function showMiniPlayer(song) {
     state.miniPlayerSongId = song.id;
-    document.getElementById('miniPlayerSongName').textContent = song.name;
-    document.getElementById('miniPlayerSongInfo').textContent = `${song.bpm} BPM · ${song.timeSig}`;
+    renderMiniPlayerSongList();
     const bar = document.getElementById('miniPlayerBar');
     bar.classList.remove('hidden'); bar.classList.add('flex');
     document.getElementById('attachmentViewerContent').style.paddingBottom = '84px';
     document.getElementById('noteContentArea').style.paddingBottom = '84px';
     updateMiniPlayerPlayState();
+}
+
+function renderMiniPlayerSongList() {
+    const sl = getActiveSetlist();
+    const container = document.getElementById('miniPlayerSongList');
+    if (!sl || !container) return;
+    container.innerHTML = sl.songs.map(s => {
+        const isActive = s.id === state.miniPlayerSongId;
+        return `<button type="button" class="mini-player-song-row w-full flex items-center justify-between gap-2 px-2.5 flex-shrink-0 text-left transition-colors ${isActive ? 'bg-gold/10' : 'hover:bg-white/5'}" style="height:32px;" data-song-id="${s.id}">
+            <span class="text-xs font-medium truncate ${isActive ? 'text-gold' : 'text-zinc-300'}">${escHtml(s.name)}</span>
+            <span class="text-[10px] ${isActive ? 'text-gold/70' : 'text-zinc-600'} flex-shrink-0 ml-1">${s.bpm}</span>
+        </button>`;
+    }).join('');
+    const activeRow = container.querySelector(`.mini-player-song-row[data-song-id="${state.miniPlayerSongId}"]`);
+    if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
+}
+
+function switchMiniPlayerSong(song) {
+    if (song.id === state.miniPlayerSongId) return;
+    if (!state.isPlaying) armSong(song);
+    state.miniPlayerSongId = song.id;
+    renderMiniPlayerSongList();
+    if (song.linkedNoteId) {
+        const note = state.notes.find(n => n.id === song.linkedNoteId);
+        if (!note) { showToast('Linked note not found for this song'); return; }
+        if (note.type === 'attachment') {
+            if (currentAppView === 'attachment-viewer') {
+                state.activeNoteId = note.id;
+                document.getElementById('attachmentViewerTitle').textContent = note.title || 'Untitled';
+                refreshAttachmentViewerContent(note.id);
+            } else {
+                openAttachmentViewer(note.id);
+            }
+        } else {
+            openNoteEditor(note.id);
+        }
+    } else {
+        showToast(`"${song.name}" has no linked notes`);
+    }
 }
 
 function hideMiniPlayer() {
@@ -6815,8 +6852,9 @@ function updateSetlistBpmDisplay() {
     const elMain = document.getElementById('bpmDisplayMain');
     if (elMain) elMain.textContent = state.bpm;
     if (state.miniPlayerSongId) {
-        const infoEl = document.getElementById('miniPlayerSongInfo');
-        if (infoEl) infoEl.textContent = `${state.bpm} BPM · ${state.timeSig}`;
+        const container = document.getElementById('miniPlayerSongList');
+        const activeRow = container && container.querySelector(`.mini-player-song-row[data-song-id="${state.miniPlayerSongId}"] span:last-child`);
+        if (activeRow) activeRow.textContent = state.bpm;
     }
 }
 
@@ -6833,6 +6871,9 @@ function applyViewState(view) {
     if (currentAppView === 'note-editor' && target !== 'note-editor') {
         saveActiveNote(true);
         state.activeNoteId = null;
+    }
+    if (state.miniPlayerSongId && target !== 'attachment-viewer' && target !== 'note-editor' && target !== 'image-editor') {
+        hideMiniPlayer();
     }
     currentAppView = target;
 
@@ -7108,7 +7149,13 @@ function setupEvents() {
         if (song && state.activeSongId !== song.id && !state.isPlaying) armSong(song);
         togglePlayback();
     });
-    document.getElementById('miniPlayerCloseBtn').addEventListener('click', hideMiniPlayer);
+    document.getElementById('miniPlayerSongList').addEventListener('click', e => {
+        const row = e.target.closest('.mini-player-song-row');
+        if (!row) return;
+        const sl = getActiveSetlist();
+        const song = sl?.songs.find(s => s.id === row.dataset.songId);
+        if (song) switchMiniPlayerSong(song);
+    });
     document.getElementById('miniPlayerTempoDownBtn').addEventListener('click', () => adjustTempo(-1));
     document.getElementById('miniPlayerTempoUpBtn').addEventListener('click', () => adjustTempo(1));
     document.getElementById('linkPageUploadInput').addEventListener('change', e => {
