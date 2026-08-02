@@ -815,14 +815,14 @@ tailwind.config = {
 </div>
 
 <div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10]/75 backdrop-blur-md border-t border-brd/50 px-3 py-2.5 items-center gap-2 shadow-2xl" style="padding-bottom:calc(0.625rem + env(safe-area-inset-bottom));">
-    <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold-bright transition-colors" style="transition:background 0.08s, box-shadow 0.08s;">
+    <button id="miniPlayerPlayBtn" class="w-11 h-11 rounded-full bg-gold/45 text-surface flex items-center justify-center flex-shrink-0 text-sm hover:bg-gold/60 transition-colors" style="transition:background 0.08s, box-shadow 0.08s;">
         <i class="fas fa-play ml-0.5" id="miniPlayerPlayIcon"></i>
     </button>
     <div id="miniPlayerSongList" class="flex-1 min-w-0 overflow-y-auto flex flex-col rounded-lg" style="height:64px;"></div>
-    <button id="miniPlayerTempoDownBtn" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
+    <button id="miniPlayerTempoDownBtn" class="w-11 h-11 rounded-lg bg-s3 border border-red-500/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-red-500/80 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
         <i class="fas fa-minus text-xs"></i>
     </button>
-    <button id="miniPlayerTempoUpBtn" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-gold/30 transition-colors" aria-label="Increase tempo" title="Increase tempo">
+    <button id="miniPlayerTempoUpBtn" class="w-11 h-11 rounded-lg bg-s3 border border-green-500/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-green-500/80 transition-colors" aria-label="Increase tempo" title="Increase tempo">
         <i class="fas fa-plus text-xs"></i>
     </button>
 </div>
@@ -4599,12 +4599,21 @@ async function refreshAttachmentViewerContent(noteId) {
     content.innerHTML = htmlParts.map((html, i) => `<div class="w-full">${pages.length > 1 ? `<div class="text-[10px] text-zinc-600 uppercase tracking-wider px-3 pt-2">Page ${i + 1}: ${escHtml(pages[i].title)}</div>` : ''}${html}</div>`).join('<div class="h-2 bg-brd/30"></div>');
 }
 
+function updateAttachmentHeaderControlsVisibility() {
+    const hide = !!state.miniPlayerSongId;
+    ['linkAttachmentBtn', 'renameAttachmentBtn', 'deleteAttachmentBtn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.classList.toggle('hidden', hide);
+    });
+}
+
 async function openAttachmentViewer(id) {
     const note = state.notes.find(n => n.id === id);
     if (!note) return;
     state.activeNoteId = id;
     document.getElementById('attachmentViewerTitle').textContent = note.title || 'Untitled';
     document.getElementById('attachmentViewerContent').innerHTML = '<div class="p-8 text-center text-zinc-600 text-sm">Loading…</div>';
+    updateAttachmentHeaderControlsVisibility();
     await refreshAttachmentViewerContent(id);
     pushView('attachment-viewer');
     applyViewState('attachment-viewer');
@@ -6431,6 +6440,7 @@ function showMiniPlayer(song) {
     bar.classList.remove('hidden'); bar.classList.add('flex');
     document.getElementById('attachmentViewerContent').style.paddingBottom = '84px';
     document.getElementById('noteContentArea').style.paddingBottom = '84px';
+    updateAttachmentHeaderControlsVisibility();
     updateMiniPlayerPlayState();
 }
 
@@ -6440,9 +6450,9 @@ function renderMiniPlayerSongList() {
     if (!sl || !container) return;
     container.innerHTML = sl.songs.map(s => {
         const isActive = s.id === state.miniPlayerSongId;
-        return `<button type="button" class="mini-player-song-row w-full flex items-center justify-between gap-2 px-2.5 flex-shrink-0 text-left transition-colors ${isActive ? 'bg-gold/10' : 'hover:bg-white/5'}" style="height:32px;" data-song-id="${s.id}">
-            <span class="text-xs font-medium truncate ${isActive ? 'text-gold' : 'text-zinc-300'}">${escHtml(s.name)}</span>
-            <span class="text-[10px] ${isActive ? 'text-gold/70' : 'text-zinc-600'} flex-shrink-0 ml-1">${s.bpm}</span>
+        return `<button type="button" class="mini-player-song-row w-full flex items-center justify-between gap-2 px-2.5 flex-shrink-0 text-left transition-colors ${isActive ? 'bg-[#60A5FA]/10' : 'hover:bg-white/5'}" style="height:32px;" data-song-id="${s.id}">
+            <span class="text-xs font-medium truncate ${isActive ? 'text-[#60A5FA]' : 'text-zinc-300'}">${escHtml(s.name)}</span>
+            <span class="text-[10px] ${isActive ? 'text-[#60A5FA]/70' : 'text-zinc-600'} flex-shrink-0 ml-1">${s.bpm}</span>
         </button>`;
     }).join('');
     const activeRow = container.querySelector(`.mini-player-song-row[data-song-id="${state.miniPlayerSongId}"]`);
@@ -6451,7 +6461,7 @@ function renderMiniPlayerSongList() {
 
 function switchMiniPlayerSong(song) {
     if (song.id === state.miniPlayerSongId) return;
-    if (!state.isPlaying) armSong(song);
+    selectOrPlaySong(song); // same logic setlists already use: switches seamlessly if playing, arms if stopped
     state.miniPlayerSongId = song.id;
     renderMiniPlayerSongList();
     if (song.linkedNoteId) {
@@ -6479,6 +6489,7 @@ function hideMiniPlayer() {
     document.getElementById('attachmentViewerContent').style.paddingBottom = '';
     document.getElementById('noteContentArea').style.paddingBottom = '';
     state.miniPlayerSongId = null;
+    updateAttachmentHeaderControlsVisibility();
 }
 
 function updateMiniPlayerPlayState() {
