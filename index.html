@@ -1055,7 +1055,7 @@ tailwind.config = {
 
             <div class="flex gap-3 mt-3 sticky bottom-0 z-20 bg-s2" style="margin: 0 -28px; padding: 14px 28px 20px; box-shadow: 0 -8px 12px -4px rgba(0,0,0,0.3);">
                 <button type="submit" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
-                <button type="button" onclick="stopLoopPreview(); hideModal('songModal')" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+                <button type="button" onclick="stopLoopPreview(); closeSongModal()" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
             </div>
         </form>
     </div>
@@ -1067,6 +1067,18 @@ tailwind.config = {
         <p class="text-xs text-zinc-500 mb-4">Choose a note, drawing, image, or PDF to view alongside this song's metronome.</p>
         <div id="songLinkedNoteList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
         <button type="button" onclick="hideModal('songLinkedNoteModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+    </div>
+</div>
+
+<div class="modal-overlay" id="songUnsavedChangesModal">
+    <div class="modal-box" style="max-width:380px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Unsaved Changes</h3>
+        <p class="text-xs text-zinc-500 mb-4">You have unsaved changes to this song. Save them before leaving?</p>
+        <div class="flex flex-col gap-2.5">
+            <button type="button" id="songUnsavedSaveBtn" class="w-full py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
+            <button type="button" id="songUnsavedDiscardBtn" class="w-full py-2.5 rounded-xl bg-s3 border border-red-400/30 text-red-400 text-sm hover:bg-red-400/10 transition-colors">Leave Without Saving</button>
+            <button type="button" id="songUnsavedCancelBtn" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+        </div>
     </div>
 </div>
 
@@ -2568,6 +2580,12 @@ async function loadCueBuffer(key, url) {
     }
 }
 
+// Tracks every currently-playing/scheduled cue clip (count-ins, reminders) so they can be
+// explicitly stopped — without this, stopping the metronome only prevented new clicks from
+// being scheduled, but any cue clip already playing (e.g. a multi-second count-in) would
+// keep playing through to its natural end regardless.
+let activeCueSources = new Set();
+
 function playCueClip(buffer, time, volumePct, pan) {
     if (!buffer) return;
     const c = state.audioCtx;
@@ -2579,8 +2597,15 @@ function playCueClip(buffer, time, volumePct, pan) {
     p.pan.value = Math.max(-1, Math.min(1, pan || 0));
     src.connect(g); g.connect(p); p.connect(state.masterBus || c.destination);
     const t = Math.max(time, c.currentTime);
+    activeCueSources.add(src);
+    src.onended = () => { activeCueSources.delete(src); };
     src.start(t);
     return src;
+}
+
+function stopAllActiveCues() {
+    activeCueSources.forEach(src => { try { src.stop(); } catch (err) {} });
+    activeCueSources.clear();
 }
 
 // Imports a user-picked audio file: stores the raw blob in IndexedDB (source of truth on
@@ -2707,6 +2732,7 @@ function stopMetronome() {
     state.isPlaying = false; clearTimeout(state.schedulerTimer);
     state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
+    stopAllActiveCues();
     clearAllBeatBlockFlashes();
     clearTimeout(miniPlayerFlashTimer);
     const miniBtn = document.getElementById('miniPlayerPlayBtn');
@@ -3645,6 +3671,26 @@ function applySongUpdateEverywhere(songName, excludeSetlistId, updateData) {
 }
 
 let pendingSongSave = null;
+let songFormDirty = false;
+let songModalHistoryActive = false;
+
+// All song-modal closes route through here so history stays consistent regardless of how it
+// was closed (Save, Cancel, suggestion actions, or back-button — the back-button path handles
+// its own history separately in the popstate listener and calls hideModal directly instead).
+function closeSongModal() {
+    hideModal('songModal');
+    if (songModalHistoryActive) {
+        songModalHistoryActive = false;
+        history.back();
+    }
+}
+
+function openSongModalTracked() {
+    songFormDirty = false;
+    showModal('songModal');
+    songModalHistoryActive = true;
+    history.pushState({ songModal: true }, '', location.hash || '#');
+}
 
 function finalizeSongSave(eid, d, applyEverywhere, originalName, excludeSetlistId) {
     eid ? updateSong(eid, d) : addSong(d);
@@ -3654,7 +3700,7 @@ function finalizeSongSave(eid, d, applyEverywhere, originalName, excludeSetlistI
     }
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
-    hideModal('songModal');
+    closeSongModal();
 }
 
 function addSong(d) {
@@ -3981,7 +4027,7 @@ function openSongEditModal(id) {
     updateSongLinkedNoteLabel();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
-    showModal('songModal');
+    openSongModalTracked();
 }
 
 // ===== VOICE CUE BANK UI =====
@@ -6827,6 +6873,7 @@ function setupModulationDrag() {
             if (finalIdx !== dragOriginalIndex) {
                 const [moved] = editingModulations.splice(dragOriginalIndex, 1);
                 editingModulations.splice(finalIdx, 0, moved);
+                songFormDirty = true;
             }
         }
         cleanup();
@@ -7016,6 +7063,20 @@ function applyViewState(view) {
 }
 
 window.addEventListener('popstate', e => {
+    const songModalOpen = document.getElementById('songModal').classList.contains('active');
+    if (songModalHistoryActive && songModalOpen && !(e.state && e.state.songModal)) {
+        if (!songFormDirty) {
+            songModalHistoryActive = false;
+            stopLoopPreview();
+            hideModal('songModal');
+        } else {
+            // Cancel the perceived back navigation until the user decides — re-push the same
+            // marker state, since popstate itself can't be prevented, only worked around.
+            history.pushState({ songModal: true }, '', location.hash || '#');
+            showModal('songUnsavedChangesModal');
+        }
+        return;
+    }
     applyViewState(e.state ? e.state.view : 'main');
 });
 
@@ -7521,7 +7582,7 @@ function setupEvents() {
         updateSongLinkedNoteLabel();
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
-        showModal('songModal');
+        openSongModalTracked();
         setTimeout(() => document.getElementById('songNameInput').focus(), 200);
     });
 
@@ -7592,7 +7653,7 @@ function setupEvents() {
         const song = sourceSl?.songs.find(s => s.id === songId);
         if (!song) return;
         if (e.target.closest('.suggest-play-btn')) {
-            hideModal('songModal');
+            closeSongModal();
             loadAndPlaySong(song);
             return;
         }
@@ -7606,11 +7667,32 @@ function setupEvents() {
             const { id, ...rest } = song;
             targetSl.songs.push({ id: genId(), ...rest });
             saveData(); renderSetlistSelect(); renderSongs();
-            hideModal('songModal');
+            closeSongModal();
             showToast(`Added "${song.name}" to "${targetSl.name}"`);
         }
     });
 
+    document.getElementById('songUnsavedSaveBtn').addEventListener('click', () => {
+        hideModal('songUnsavedChangesModal');
+        // songModalHistoryActive stays true — the save flow's own closeSongModal() call
+        // (inside finalizeSongSave) will pop the re-pushed history entry once the save
+        // actually completes, whether that's immediate or after an "apply everywhere" prompt.
+        document.getElementById('songForm').requestSubmit();
+    });
+    document.getElementById('songUnsavedDiscardBtn').addEventListener('click', () => {
+        hideModal('songUnsavedChangesModal');
+        stopLoopPreview();
+        closeSongModal();
+    });
+    document.getElementById('songUnsavedCancelBtn').addEventListener('click', () => {
+        hideModal('songUnsavedChangesModal'); // stay on the song editor — the history marker was already re-pushed
+    });
+    document.getElementById('songForm').addEventListener('input', () => { songFormDirty = true; });
+    document.getElementById('songForm').addEventListener('change', () => { songFormDirty = true; });
+    document.getElementById('songForm').addEventListener('click', e => {
+        const btn = e.target.closest('button');
+        if (btn && btn.type === 'button') songFormDirty = true; // covers add/remove/color-pick/etc — excludes the Save (submit) button
+    });
     document.getElementById('songForm').addEventListener('submit', e => {
         e.preventDefault();
         stopLoopPreview();
@@ -7808,6 +7890,7 @@ function setupEvents() {
     document.querySelectorAll('.modal-overlay').forEach(o => {
         o.addEventListener('click', e => {
             if (e.target !== o) return;
+            if (o.id === 'songModal') { stopLoopPreview(); closeSongModal(); return; }
             hideModal(o.id);
             if (o.id === 'songConflictModal' && currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
         });
@@ -7815,6 +7898,7 @@ function setupEvents() {
     document.addEventListener('keydown', e => {
         if (e.code !== 'Escape') return;
         document.querySelectorAll('.modal-overlay.active').forEach(m => {
+            if (m.id === 'songModal') { stopLoopPreview(); closeSongModal(); return; }
             hideModal(m.id);
             if (m.id === 'songConflictModal' && currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
         });
