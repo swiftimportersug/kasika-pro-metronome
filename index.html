@@ -495,6 +495,9 @@ tailwind.config = {
                 <i class="fas fa-arrow-left text-xs"></i>
             </button>
             <h2 class="font-display font-semibold text-sm tracking-wider text-zinc-200 uppercase flex-1">Notes</h2>
+            <button id="compressionSettingsBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-500 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Image compression settings" title="Image compression settings">
+                <i class="fas fa-gear text-xs"></i>
+            </button>
             <button id="uploadNoteFileBtn" class="w-8 h-8 flex items-center justify-center rounded-lg bg-s3 border border-brd/50 text-zinc-400 hover:text-[#60A5FA] hover:border-[#60A5FA]/30 transition-all" aria-label="Upload image or PDF" title="Upload image or PDF">
                 <i class="fas fa-file-arrow-up text-xs"></i>
             </button>
@@ -825,6 +828,20 @@ tailwind.config = {
     <button id="miniPlayerTempoUpBtn" class="w-11 h-11 rounded-lg bg-s3 border border-green-500/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-green-500/80 transition-colors" aria-label="Increase tempo" title="Increase tempo">
         <i class="fas fa-plus text-xs"></i>
     </button>
+</div>
+
+<div class="modal-overlay" id="compressionSettingsModal">
+    <div class="modal-box" style="max-width:380px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Image Compression</h3>
+        <p class="text-xs text-zinc-500 mb-4">Images under 1MB are never touched or upscaled. Images over 1MB get compressed down to the target size below.</p>
+        <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Target size for compressed images (KB)</label>
+        <input type="number" id="compressionTargetInput" class="modal-input mb-2" min="30" max="5000" step="10">
+        <p class="text-[11px] text-zinc-600 mb-4">Smaller targets mean smaller files but more visible quality loss on detailed images — very aggressive targets (under ~100KB) may show some softening on dense sheet music.</p>
+        <div class="flex gap-3">
+            <button type="button" id="compressionSettingsCancelBtn" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            <button type="button" id="compressionSettingsSaveBtn" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
+        </div>
+    </div>
 </div>
 
 <div class="modal-overlay" id="nameFileModal">
@@ -4462,29 +4479,46 @@ async function syncMissingAttachments() {
 // high quality setting, stepping down only as much as needed. PDFs are left untouched —
 // meaningfully compressing a PDF needs re-encoding everything embedded inside it, which isn't
 // realistically achievable with browser APIs alone.
+function getImageCompressionTargetBytes() {
+    const kb = parseInt(localStorage.getItem('kasika-image-compression-target-kb'), 10);
+    return (kb && kb > 0 ? kb : 1024) * 1024;
+}
+
 async function compressImageIfNeeded(file) {
-    const ONE_MB = 1024 * 1024;
+    const ONE_MB = 1024 * 1024; // trigger threshold — stays fixed regardless of the target size setting
+    const targetBytes = getImageCompressionTargetBytes();
     if (!file.type.startsWith('image/') || file.size <= ONE_MB) return file;
     try {
         const bitmap = await createImageBitmap(file);
-        const MAX_DIM = 2000;
-        let w = bitmap.width, h = bitmap.height;
-        const scale = Math.min(1, MAX_DIM / Math.max(w, h));
-        w = Math.round(w * scale); h = Math.round(h * scale);
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(bitmap, 0, 0, w, h);
+        let maxDim = 2000;
+        let blob = null;
+
+        // Two levers: quality first (preserves detail best), and only if an aggressive
+        // target still can't be hit at a reasonable quality floor, progressively reduce
+        // resolution too and retry — for small targets, a slightly smaller but crisp image
+        // usually looks better than a full-resolution image crushed down to very low quality.
+        for (let attempt = 0; attempt < 4; attempt++) {
+            let w = bitmap.width, h = bitmap.height;
+            const scale = Math.min(1, maxDim / Math.max(w, h));
+            w = Math.round(w * scale); h = Math.round(h * scale);
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(bitmap, 0, 0, w, h);
+
+            let quality = 0.9; // start high to genuinely preserve quality, only step down if still needed
+            blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+            while (blob && blob.size > targetBytes && quality > 0.5) {
+                quality -= 0.1;
+                blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+            }
+            if (blob && blob.size <= targetBytes) break; // hit the target — stop here
+            maxDim = Math.round(maxDim * 0.75); // still too big — shrink resolution and try again
+        }
         if (bitmap.close) bitmap.close();
 
-        let quality = 0.9; // start high to genuinely preserve quality, only step down if still needed
-        let blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
-        while (blob && blob.size > ONE_MB && quality > 0.5) {
-            quality -= 0.1;
-            blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
-        }
         if (!blob || blob.size >= file.size) return file; // compression didn't actually help — keep the original
-        showToast(`Compressed "${file.name}" from ${(file.size / 1024 / 1024).toFixed(1)}MB to ${(blob.size / 1024 / 1024).toFixed(1)}MB`);
+        showToast(`Compressed "${file.name}" from ${(file.size / 1024).toFixed(0)}KB to ${(blob.size / 1024).toFixed(0)}KB`);
         return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
     } catch (err) {
         console.warn('Compression failed, using original file:', err);
@@ -7158,6 +7192,18 @@ function setupEvents() {
     document.getElementById('closeNotesBtn').addEventListener('click', closeNotesView);
     document.getElementById('newNoteBtn').addEventListener('click', createNewNote);
     document.getElementById('uploadNoteFileBtn').addEventListener('click', () => document.getElementById('uploadNoteFileInput').click());
+    document.getElementById('compressionSettingsBtn').addEventListener('click', () => {
+        const currentKB = Math.round(getImageCompressionTargetBytes() / 1024);
+        document.getElementById('compressionTargetInput').value = currentKB;
+        showModal('compressionSettingsModal');
+    });
+    document.getElementById('compressionSettingsCancelBtn').addEventListener('click', () => hideModal('compressionSettingsModal'));
+    document.getElementById('compressionSettingsSaveBtn').addEventListener('click', () => {
+        const kb = Math.max(30, Math.min(5000, parseInt(document.getElementById('compressionTargetInput').value, 10) || 1024));
+        localStorage.setItem('kasika-image-compression-target-kb', String(kb));
+        hideModal('compressionSettingsModal');
+        showToast(`Images over 1MB will now be compressed down to about ${kb}KB`);
+    });
     document.getElementById('uploadNoteFileInput').addEventListener('change', e => {
         if (e.target.files && e.target.files.length) handleNoteFilesUpload(e.target.files);
         e.target.value = '';
