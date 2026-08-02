@@ -123,7 +123,7 @@ tailwind.config = {
     .modal-input::placeholder { color: #52525b; }
     .song-play-row { transition: background 0.15s; cursor: pointer; }
     .song-play-row:hover { background: rgba(212,168,83,0.06); }
-    .song-active { border-left: 2px solid #D4A853 !important; background: rgba(212,168,83,0.06) !important; box-shadow: inset 0 0 0 1px rgba(212,168,83,0.4) !important; }
+    .song-active { border-left: 2px solid #D4A853 !important; background: rgba(212,168,83,0.06) !important; box-shadow: inset 0 0 0 1px rgba(212,168,83,0.25) !important; border-radius: 8px; }
     .edit-row { transition: background 0.15s, transform 0.15s ease; }
     .edit-row:hover { background: rgba(255,255,255,0.015); }
     .edit-row.dragging-row { opacity: 0.45; }
@@ -1203,7 +1203,7 @@ const firebaseConfig = {
 };
 
 let fbApp = null, fbAuth = null, fbDb = null, fbStorage = null, fbUnsub = null;
-let syncEnabled = false, applyingRemoteUpdate = false, saveDebounceTimer = null;
+let syncEnabled = false, applyingRemoteUpdate = false, saveDebounceTimer = null, suppressRemoteSetlistApply = false;
 
 function initFirebase() {
     if (firebaseConfig.apiKey === "PASTE_YOUR_KEY_HERE") return; // sync disabled until configured
@@ -1271,7 +1271,7 @@ function startRemoteSync(uid) {
         if (snap.metadata.hasPendingWrites) return; // this is an echo of our own write, ignore
         const d = snap.data();
         applyingRemoteUpdate = true;
-        if (d.setlists) state.setlists = d.setlists;
+        if (d.setlists && !suppressRemoteSetlistApply) state.setlists = d.setlists;
         if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
@@ -4211,9 +4211,11 @@ function findSongByNameAnywhere(name, excludeSetlistId) {
     return null;
 }
 
-async function resolveAndAddSongs(songsToAdd, targetSetlist) {
+async function resolveAndAddSongs(songsToAdd, targetSetlistId) {
     let addedCount = 0;
     for (const parsed of songsToAdd) {
+        let targetSetlist = state.setlists.find(sl => sl.id === targetSetlistId);
+        if (!targetSetlist) break; // set-list no longer exists — stop safely rather than mutate a stale reference
         const conflict = findSongByNameAnywhere(parsed.name, targetSetlist.id);
         if (!conflict) {
             targetSetlist.songs.push({ id: genId(), ...parsed });
@@ -4221,6 +4223,12 @@ async function resolveAndAddSongs(songsToAdd, targetSetlist) {
             continue;
         }
         const choice = await promptSongConflict(parsed.name, conflict.setlistName);
+        // Re-fetch after the await — state.setlists could have been replaced wholesale by an
+        // incoming sync while the user was answering the prompt (these can take many seconds
+        // across several conflicts), which would otherwise leave us mutating an object that's
+        // no longer actually part of state.setlists.
+        targetSetlist = state.setlists.find(sl => sl.id === targetSetlistId);
+        if (!targetSetlist) break;
         if (choice === 'existing') {
             const { id, ...rest } = conflict.song;
             targetSetlist.songs.push({ id: genId(), ...rest });
@@ -4252,10 +4260,18 @@ async function convertNoteToSetlist(note) {
             showToast(`"${targetSetlist.name}" is already up to date — no new songs found`);
             return;
         }
-        const added = await resolveAndAddSongs(newOnes, targetSetlist);
-        state.activeSetlistId = targetSetlist.id;
+        const targetSetlistId = targetSetlist.id;
+        suppressRemoteSetlistApply = true;
+        let added;
+        try {
+            added = await resolveAndAddSongs(newOnes, targetSetlistId);
+        } finally {
+            suppressRemoteSetlistApply = false;
+        }
+        state.activeSetlistId = targetSetlistId;
         saveData(); renderSetlistSelect(); renderSongs();
-        if (added) showToast(`Added ${added} new song${added !== 1 ? 's' : ''} to "${targetSetlist.name}"`);
+        const finalSl = state.setlists.find(sl => sl.id === targetSetlistId);
+        if (added) showToast(`Added ${added} new song${added !== 1 ? 's' : ''} to "${finalSl ? finalSl.name : targetSetlist.name}"`);
     } else {
         const defaultName = (note.title && note.title.trim()) || 'Imported Set-list';
         const name = window.prompt(`Create a set-list from ${parsedSongs.length} song${parsedSongs.length !== 1 ? 's' : ''} found in this note. Name it:`, defaultName);
@@ -4264,9 +4280,18 @@ async function convertNoteToSetlist(note) {
         state.setlists.push(sl);
         state.activeSetlistId = sl.id;
         note.linkedSetlistId = sl.id;
-        const added = await resolveAndAddSongs(parsedSongs, sl);
+        saveData(); // persist the new (still-empty) set-list immediately, before any conflict prompts —
+                    // so an incoming sync mid-process reflects its true current state rather than racing it
+        const slId = sl.id, slName = sl.name;
+        suppressRemoteSetlistApply = true;
+        let added;
+        try {
+            added = await resolveAndAddSongs(parsedSongs, slId);
+        } finally {
+            suppressRemoteSetlistApply = false;
+        }
         saveData(); renderSetlistSelect(); renderSongs();
-        showToast(`Created "${sl.name}" with ${added} song${added !== 1 ? 's' : ''}`);
+        showToast(`Created "${slName}" with ${added} song${added !== 1 ? 's' : ''}`);
     }
     currentAppView = 'setlists';
     history.replaceState({ view: 'setlists' }, '', '#setlists');
