@@ -315,7 +315,10 @@ tailwind.config = {
         <div id="activeSongNotesPanel" class="hidden w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-3.5 py-2.5 mt-2.5">
             <div class="flex items-center gap-1.5 mb-1">
                 <i class="fas fa-music text-gold text-[10px] flex-shrink-0"></i>
-                <span class="text-xs font-medium text-zinc-100 truncate" id="activeSongNotesTitle"></span>
+                <span class="text-xs font-medium text-zinc-100 truncate flex-1" id="activeSongNotesTitle"></span>
+                <button type="button" id="detachActiveSongBtn" class="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded-md text-zinc-500 hover:text-red-400 hover:bg-red-400/10 transition-colors" aria-label="Close — detach this song from the main screen" title="Close — detach this song from the main screen">
+                    <i class="fas fa-xmark text-[11px]"></i>
+                </button>
             </div>
             <div class="flex items-center gap-1.5 mb-1">
                 <i class="fas fa-note-sticky text-[#2dd4bf] text-[9px] flex-shrink-0"></i>
@@ -1687,9 +1690,11 @@ async function refreshAudioOutputDevices() {
         stageSel.value = state.stageOutputDeviceId || '';
         houseSel.value = state.houseOutputDeviceId || '';
         if (statusEl) {
-            statusEl.textContent = outputs.length > 1
-                ? `${outputs.length} output devices available.`
-                : 'Only one output device currently available — connect a multi-output interface to route these separately.';
+            if (outputs.length > 1) {
+                statusEl.textContent = `${outputs.length} output devices available.`;
+            } else {
+                statusEl.innerHTML = 'Only "Default" is available. If you have Bluetooth devices connected but don\'t see them listed here, that\'s a known Android/Chrome limitation — most Android phones only expose a single system-level audio output to web apps, even with multiple Bluetooth devices paired, since Android manages Bluetooth routing itself rather than handing individual apps a device list. This isn\'t something fixable from within the app; switching outputs currently has to be done from Android\'s own Bluetooth/sound settings rather than here.';
+            }
         }
     } catch (err) {
         console.warn('Could not list audio devices:', err);
@@ -1788,7 +1793,7 @@ function renderQrCode(containerId, text) {
     }
 }
 
-async function startQrScanner(label, onDecode) {
+async function startQrScanner(label, onDecode, autoScrollToCamera) {
     document.getElementById('bandSyncScanLabel').textContent = label;
     const scanArea = document.getElementById('bandSyncScanArea');
     scanArea.classList.remove('hidden'); scanArea.classList.add('flex');
@@ -1808,7 +1813,7 @@ async function startQrScanner(label, onDecode) {
     }
     video.srcObject = bandSync.scanStream;
     await video.play();
-    scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (autoScrollToCamera) scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
     // Prefer the OS's own barcode detector (e.g. Google Play Services on Android) — the
     // same underlying tech most dedicated scanner apps use, and far more robust than a
@@ -2338,7 +2343,9 @@ function startBandSyncHostScanReply(peer) {
             console.warn('Band Sync: failed to process reply code', err);
             setBandSyncStatus('Could not read that code — try again.');
         }
-    });
+    }); // no auto-scroll here — there's no way to know when the band member has actually
+        // scanned yet, so jumping the view away from the host's own QR too soon would cut off
+        // the time they need to show it. Scroll down manually once it's been scanned.
 }
 
 async function startBandSyncJoin() {
@@ -2359,7 +2366,7 @@ async function startBandSyncJoin() {
             console.warn('Band Sync: failed to process host code', err);
             setBandSyncStatus('Could not read that code — try again.');
         }
-    });
+    }, true);
     const codeLink = document.getElementById('bandSyncEnterCodeLinkBtn');
     if (codeLink) codeLink.classList.remove('hidden');
 }
@@ -3729,6 +3736,19 @@ function moveSong(id, dir) {
     if (ni < 0 || ni >= sl.songs.length) return;
     [sl.songs[i], sl.songs[ni]] = [sl.songs[ni], sl.songs[i]];
     saveData(); renderSongs();
+}
+
+// Detaches the loaded set-list song from the main screen without stopping playback — the
+// metronome keeps running at whatever tempo/time-sig is currently active, but no longer
+// tracks that song's sections/modulations, so on-the-go tempo changes stop getting silently
+// overridden when the next section boundary is reached.
+function detachActiveSong() {
+    state.activeSongId = null;
+    stopSongModulation(true);
+    stopLoopTrack();
+    state.pendingLoopStartBar = null;
+    updateActiveSongNotesPanel(null);
+    showToast('Song detached — this is now a standalone metronome');
 }
 
 function updateActiveSongNotesPanel(song) {
@@ -7818,6 +7838,7 @@ function setupEvents() {
     });
 
     // ---- Practice mode ----
+    document.getElementById('detachActiveSongBtn').addEventListener('click', detachActiveSong);
     document.getElementById('practiceBtn').addEventListener('click', () => {
         if (state.practice.active) { stopPractice(); } else { openPracticeModal(); }
     });
