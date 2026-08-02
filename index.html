@@ -7474,8 +7474,13 @@ function setupEvents() {
     document.getElementById('songNameInput').addEventListener('paste', e => {
         const pasted = (e.clipboardData || window.clipboardData).getData('text');
         if (!pasted || !pasted.trim()) return;
-        const hints = extractSongHintsFromText(pasted);
-        if (hints.bpm == null && !hints.timeSig) return; // nothing detected — let the normal paste happen as-is
+        const lines = pasted.split('\n');
+        const headerLine = lines[0];
+        const noteLines = lines.slice(1).map(l => l.trim()).filter(l => l.length > 0);
+        const hints = extractSongHintsFromText(headerLine);
+        // Nothing worth intercepting: a plain single-line paste with no detectable shorthand —
+        // let the normal paste happen as-is.
+        if (hints.bpm == null && !hints.timeSig && !noteLines.length) return;
         e.preventDefault();
         e.target.value = hints.title;
         renderSongSuggestions(hints.title);
@@ -7488,6 +7493,11 @@ function setupEvents() {
         if (hints.timeSig) {
             document.getElementById('songTimeSigInput').textContent = hints.timeSig;
             parts.push(hints.timeSig);
+        }
+        if (noteLines.length) {
+            const notesInput = document.getElementById('songNotesInput');
+            if (notesInput) notesInput.value = noteLines.join('\n');
+            parts.push('notes');
         }
         showToast(`Detected ${parts.join(' · ')} — applied automatically`);
     });
