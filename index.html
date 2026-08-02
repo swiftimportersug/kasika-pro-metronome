@@ -123,7 +123,7 @@ tailwind.config = {
     .modal-input::placeholder { color: #52525b; }
     .song-play-row { transition: background 0.15s; cursor: pointer; }
     .song-play-row:hover { background: rgba(212,168,83,0.06); }
-    .song-active { border-left: 2px solid #D4A853 !important; border-top: 1px solid rgba(212,168,83,0.35); border-bottom: 1px solid rgba(212,168,83,0.35); border-right: 1px solid rgba(212,168,83,0.35); background: rgba(212,168,83,0.06) !important; }
+    .song-active { border-left: 2px solid #D4A853 !important; background: rgba(212,168,83,0.06) !important; box-shadow: inset 0 0 0 1px rgba(212,168,83,0.4) !important; }
     .edit-row { transition: background 0.15s, transform 0.15s ease; }
     .edit-row:hover { background: rgba(255,255,255,0.015); }
     .edit-row.dragging-row { opacity: 0.45; }
@@ -4123,6 +4123,30 @@ function htmlToTextWithBreaks(html) {
 //   2. Next Song @95
 //   ...
 // into an ordered array of song objects ready to drop into a set-list.
+// Extracts BPM/time-sig shorthand embedded in a raw text string (e.g. "Song Name - 85 5/8"),
+// returning the cleaned title plus whatever was detected. Shared by note-to-setlist parsing
+// and the song-name-field paste quick-fill, so both understand the exact same shorthand.
+function extractSongHintsFromText(text) {
+    let rest = (text || '').trim();
+    let timeSig = null;
+    const tsMatch = rest.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/);
+    if (tsMatch) {
+        const num = parseInt(tsMatch[1], 10), den = parseInt(tsMatch[2], 10);
+        if (num >= 1 && num <= 16 && TS_DENS.includes(den)) {
+            timeSig = `${num}/${den}`;
+            rest = (rest.slice(0, tsMatch.index) + rest.slice(tsMatch.index + tsMatch[0].length)).trim();
+        }
+    }
+    let bpm = null;
+    const bpmMatch = rest.match(/(\d{2,3})\s*bpm/i) || rest.match(/@\s*(\d{2,3})\b/) || rest.match(/[-–—]\s*(\d{2,3})\s*$/);
+    if (bpmMatch) {
+        bpm = parseInt(bpmMatch[1], 10);
+        rest = (rest.slice(0, bpmMatch.index) + rest.slice(bpmMatch.index + bpmMatch[0].length)).trim();
+    }
+    rest = rest.replace(/[-–—|,]\s*$/, '').trim();
+    return { title: rest, bpm, timeSig };
+}
+
 function parseNoteIntoSongs(text) {
     const lines = text.split('\n');
     const headerRe = /^\s*(\d{1,3})[\.\)\:]\s*(.+)$/;
@@ -4133,28 +4157,8 @@ function parseNoteIntoSongs(text) {
         const m = trimmed.match(headerRe);
         if (m) {
             if (current) raw.push(current);
-            let rest = m[2].trim();
-
-            // Time signature first (e.g. "3/4", "7/8") — distinctive format, extract before
-            // BPM so the two patterns don't collide with each other.
-            let timeSig = '4/4';
-            const tsMatch = rest.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b/);
-            if (tsMatch) {
-                const num = parseInt(tsMatch[1], 10), den = parseInt(tsMatch[2], 10);
-                if (num >= 1 && num <= 16 && TS_DENS.includes(den)) {
-                    timeSig = `${num}/${den}`;
-                    rest = (rest.slice(0, tsMatch.index) + rest.slice(tsMatch.index + tsMatch[0].length)).trim();
-                }
-            }
-
-            let bpm = null;
-            const bpmMatch = rest.match(/(\d{2,3})\s*bpm/i) || rest.match(/@\s*(\d{2,3})\b/) || rest.match(/[-–—]\s*(\d{2,3})\s*$/);
-            if (bpmMatch) {
-                bpm = parseInt(bpmMatch[1], 10);
-                rest = (rest.slice(0, bpmMatch.index) + rest.slice(bpmMatch.index + bpmMatch[0].length)).trim();
-            }
-            rest = rest.replace(/[-–—|,]\s*$/, '').trim();
-            current = { number: parseInt(m[1], 10), title: rest || `Song ${m[1]}`, bpm, timeSig, notesLines: [] };
+            const hints = extractSongHintsFromText(m[2]);
+            current = { number: parseInt(m[1], 10), title: hints.title || `Song ${m[1]}`, bpm: hints.bpm, timeSig: hints.timeSig || '4/4', notesLines: [] };
         } else if (current) {
             current.notesLines.push(line);
         }
@@ -7467,6 +7471,26 @@ function setupEvents() {
     document.getElementById('songSubdivVolumeInput').addEventListener('input', e => setSubdivVolumeUI(parseInt(e.target.value, 10)));
 
     document.getElementById('songNameInput').addEventListener('input', e => renderSongSuggestions(e.target.value));
+    document.getElementById('songNameInput').addEventListener('paste', e => {
+        const pasted = (e.clipboardData || window.clipboardData).getData('text');
+        if (!pasted || !pasted.trim()) return;
+        const hints = extractSongHintsFromText(pasted);
+        if (hints.bpm == null && !hints.timeSig) return; // nothing detected — let the normal paste happen as-is
+        e.preventDefault();
+        e.target.value = hints.title;
+        renderSongSuggestions(hints.title);
+        const parts = [];
+        if (hints.bpm != null) {
+            const bpmInput = document.getElementById('songBpmInput');
+            if (bpmInput) bpmInput.value = Math.max(MIN_BPM, Math.min(MAX_BPM, hints.bpm));
+            parts.push(`${hints.bpm} BPM`);
+        }
+        if (hints.timeSig) {
+            document.getElementById('songTimeSigInput').textContent = hints.timeSig;
+            parts.push(hints.timeSig);
+        }
+        showToast(`Detected ${parts.join(' · ')} — applied automatically`);
+    });
 
     document.getElementById('songTimeSigInput').addEventListener('click', () => {
         openTimeSigPicker(document.getElementById('songTimeSigInput').textContent.trim(), val => {
