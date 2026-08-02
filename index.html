@@ -164,8 +164,13 @@ tailwind.config = {
     .edit-btn-del { color: #52525b; }
     .edit-btn-lg { width: 34px; height: 34px; font-size: 13px; }
     #headerIconRow::-webkit-scrollbar { display: none; }
-    .song-notes-scroll::-webkit-scrollbar { display: none; }
-    .song-notes-scroll { scrollbar-width: none; }
+    .song-notes-scroll { overflow: hidden; white-space: nowrap; position: relative; }
+    .song-notes-marquee-text { display: inline-block; }
+    @keyframes song-notes-marquee {
+        0%, 10% { transform: translateX(0); }
+        50%, 60% { transform: translateX(var(--marquee-distance, 0px)); }
+        100% { transform: translateX(0); }
+    }
     .edit-btn-del:hover { color: #f87171; background: rgba(248,113,113,0.1); }
     .drop-line {
         height: 2px; background: #D4A853; border-radius: 1px; margin: -1px 10px 0 10px;
@@ -826,6 +831,18 @@ tailwind.config = {
         </button>
     </div>
     <div class="flex-1 overflow-y-auto flex flex-col items-stretch gap-2 bg-[#0a0a0c]" id="attachmentViewerContent" style="-webkit-overflow-scrolling:touch; scroll-behavior:smooth;"></div>
+</div>
+
+<div id="songNotesViewerView" class="fixed inset-0 z-[210] bg-surface hidden flex-col">
+    <div class="flex-shrink-0 bg-[#0e0e10] border-b border-brd/50 px-3 py-2.5 flex items-center gap-2">
+        <button id="closeSongNotesViewerBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-[#2dd4bf] hover:border-[#2dd4bf]/30 transition-all" aria-label="Back" title="Back">
+            <i class="fas fa-arrow-left text-xs"></i>
+        </button>
+        <span class="flex-1 min-w-0 truncate text-zinc-100 font-display font-semibold text-base" id="songNotesViewerTitle">Song Notes</span>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6 flex items-start justify-center bg-[#0a0a0c]" id="songNotesViewerContent">
+        <div class="text-xl leading-relaxed text-[#2dd4bf] max-w-lg w-full" id="songNotesViewerText" style="white-space:pre-wrap;"></div>
+    </div>
 </div>
 
 <div id="miniPlayerBar" class="hidden fixed bottom-0 left-0 right-0 z-[250] bg-[#0e0e10]/75 backdrop-blur-md border-t border-brd/50 px-3 py-2.5 items-center gap-2 shadow-2xl" style="padding-bottom:calc(0.625rem + env(safe-area-inset-bottom));">
@@ -6462,6 +6479,23 @@ function renderSetlistSelect() {
     });
 }
 
+// Auto-scrolls (bounces back and forth) any song-notes preview that's actually too long to
+// fit its one-line space — short notes that already fit are left completely static.
+function applySongNotesMarquee() {
+    document.querySelectorAll('.song-notes-scroll').forEach(container => {
+        const textEl = container.querySelector('.song-notes-marquee-text');
+        if (!textEl) return;
+        textEl.style.animation = '';
+        const overflow = textEl.scrollWidth - container.clientWidth;
+        if (overflow > 4) {
+            const distance = overflow + 12;
+            const duration = Math.max(4, distance / 28); // roughly consistent scroll speed regardless of text length
+            textEl.style.setProperty('--marquee-distance', `-${distance}px`);
+            textEl.style.animation = `song-notes-marquee ${duration}s ease-in-out infinite`;
+        }
+    });
+}
+
 function renderSongs() {
     const container = document.getElementById('songList'), empty = document.getElementById('emptyState');
     const sl = getActiveSetlist(), countEl = document.getElementById('editSongCount');
@@ -6472,6 +6506,7 @@ function renderSongs() {
     empty.classList.add('hidden');
     countEl.textContent = `${sl.songs.length} song${sl.songs.length !== 1 ? 's' : ''}`;
     state.editMode ? renderEditMode(container, sl) : renderPlayMode(container, sl);
+    requestAnimationFrame(applySongNotesMarquee);
 }
 
 function renderPlayMode(container, sl) {
@@ -6489,10 +6524,11 @@ function renderPlayMode(container, sl) {
                     <span class="truncate">${escHtml(song.name)}</span>
                     ${hasMod ? `<i class="fas fa-wave-square text-[#2dd4bf] text-[10px] flex-shrink-0" title="Has tempo/time-sig changes"></i>` : ''}
                 </div>
-                ${song.notes ? `<div class="song-notes-scroll text-[11px] text-[#2dd4bf]/70 mt-0.5 overflow-x-auto whitespace-nowrap" style="-webkit-overflow-scrolling:touch;">${escHtml(song.notes)}</div>` : ''}
+                ${song.notes ? `<div class="song-notes-scroll text-[11px] text-[#2dd4bf]/70 mt-0.5"><span class="song-notes-marquee-text">${escHtml(song.notes)}</span></div>` : ''}
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
                 ${song.linkedNoteId ? `<button type="button" class="song-view-notes-btn w-7 h-7 rounded-md bg-s3 border border-brd/50 text-[#60A5FA] flex items-center justify-center hover:border-[#60A5FA]/50 transition-colors" data-song-id="${song.id}" title="View linked notes/sheet music"><i class="fas fa-image text-[10px]"></i></button>` : ''}
+                ${song.notes && song.notes.trim() ? `<button type="button" class="song-view-text-notes-btn w-7 h-7 rounded-md bg-s3 border border-brd/50 text-[#2dd4bf] flex items-center justify-center hover:border-[#2dd4bf]/50 transition-colors" data-song-id="${song.id}" title="Show this song's notes while playing"><i class="fas fa-note-sticky text-[10px]"></i></button>` : ''}
                 <span class="font-mono text-sm ${isA ? 'text-gold-bright' : 'text-zinc-400'}">${song.bpm}</span>
                 <span class="text-[11px] px-1.5 py-0.5 rounded bg-s3 text-zinc-500">${song.timeSig}</span>
                 ${sub ? `<span class="sub-badge">${(SUBDIVISIONS[song.subdivision] || {}).short || ''}</span>` : ''}
@@ -6619,6 +6655,7 @@ function showMiniPlayer(song) {
     bar.classList.remove('hidden'); bar.classList.add('flex');
     document.getElementById('attachmentViewerContent').style.paddingBottom = '84px';
     document.getElementById('noteContentArea').style.paddingBottom = '84px';
+    document.getElementById('songNotesViewerContent').style.paddingBottom = '84px';
     updateAttachmentHeaderControlsVisibility();
     updateMiniPlayerPlayState();
     // Render/scroll after the bar is actually visible and laid out — scrollIntoView on a
@@ -6646,6 +6683,15 @@ function switchMiniPlayerSong(song) {
     selectOrPlaySong(song); // same logic setlists already use: switches seamlessly if playing, arms if stopped
     state.miniPlayerSongId = song.id;
     renderMiniPlayerSongList();
+    if (miniPlayerContentMode === 'textNotes') {
+        if (song.notes && song.notes.trim()) {
+            document.getElementById('songNotesViewerTitle').textContent = song.name;
+            document.getElementById('songNotesViewerText').textContent = song.notes;
+        } else {
+            showToast(`"${song.name}" has no notes`);
+        }
+        return;
+    }
     if (song.linkedNoteId) {
         const note = state.notes.find(n => n.id === song.linkedNoteId);
         if (!note) { showToast('Linked note not found for this song'); return; }
@@ -6670,6 +6716,7 @@ function hideMiniPlayer() {
     bar.classList.add('hidden'); bar.classList.remove('flex');
     document.getElementById('attachmentViewerContent').style.paddingBottom = '';
     document.getElementById('noteContentArea').style.paddingBottom = '';
+    document.getElementById('songNotesViewerContent').style.paddingBottom = '';
     state.miniPlayerSongId = null;
     updateAttachmentHeaderControlsVisibility();
 }
@@ -6681,15 +6728,31 @@ function updateMiniPlayerPlayState() {
 
 // Arms the song (if not already active) and opens its linked note/attachment, with the mini
 // player showing so playback controls stay reachable while reading.
+let miniPlayerContentMode = 'attachment'; // 'attachment' | 'textNotes' — which kind of content the mini player's song-switching should follow
+
 function openSongWithNotes(song) {
     if (!song.linkedNoteId) { showToast('This song has no linked notes yet — link one from the song editor'); return; }
     const note = state.notes.find(n => n.id === song.linkedNoteId);
     if (!note) { showToast('Linked note not found — it may have been deleted'); return; }
+    miniPlayerContentMode = 'attachment';
     if (!state.isPlaying && state.activeSongId !== song.id) armSong(song);
     showMiniPlayer(song);
     if (note.type === 'attachment') openAttachmentViewer(note.id);
     else openNoteEditor(note.id);
 }
+
+function openSongWithTextNotes(song) {
+    if (!song.notes || !song.notes.trim()) { showToast('This song has no notes yet'); return; }
+    miniPlayerContentMode = 'textNotes';
+    if (!state.isPlaying && state.activeSongId !== song.id) armSong(song);
+    showMiniPlayer(song);
+    document.getElementById('songNotesViewerTitle').textContent = song.name;
+    document.getElementById('songNotesViewerText').textContent = song.notes;
+    pushView('song-notes-viewer');
+    applyViewState('song-notes-viewer');
+}
+
+function closeSongNotesViewer() { history.back(); }
 
 function showModal(id) { document.getElementById(id).classList.add('active'); }
 function hideModal(id) { document.getElementById(id).classList.remove('active'); }
@@ -7066,7 +7129,7 @@ function applyViewState(view) {
         saveActiveNote(true);
         state.activeNoteId = null;
     }
-    if (state.miniPlayerSongId && target !== 'attachment-viewer' && target !== 'note-editor' && target !== 'image-editor') {
+    if (state.miniPlayerSongId && target !== 'attachment-viewer' && target !== 'note-editor' && target !== 'image-editor' && target !== 'song-notes-viewer') {
         hideMiniPlayer();
     }
     currentAppView = target;
@@ -7075,6 +7138,7 @@ function applyViewState(view) {
     const notesEl = document.getElementById('notesView');
     const editorEl = document.getElementById('noteEditorView');
     const attachmentEl = document.getElementById('attachmentViewerView');
+    const songNotesViewerEl = document.getElementById('songNotesViewerView');
     const imageEditorEl = document.getElementById('imageEditorView');
     const loopTrimEditorEl = document.getElementById('loopTrimEditorView');
     const cueBankEl = document.getElementById('cueBankView');
@@ -7082,6 +7146,8 @@ function applyViewState(view) {
 
     if (target === 'setlists') {
         setlistsEl.classList.remove('hidden'); setlistsEl.classList.add('flex');
+        const miniBar = document.getElementById('miniPlayerBar');
+        if (miniBar) { miniBar.classList.add('hidden'); miniBar.classList.remove('flex'); }
         if (state.activeSongId) {
             requestAnimationFrame(() => {
                 const row = document.querySelector(`.song-play-row[data-song-id="${state.activeSongId}"]`);
@@ -7100,6 +7166,9 @@ function applyViewState(view) {
 
     if (target === 'attachment-viewer') { attachmentEl.classList.remove('hidden'); attachmentEl.classList.add('flex'); }
     else { attachmentEl.classList.add('hidden'); attachmentEl.classList.remove('flex'); }
+
+    if (target === 'song-notes-viewer') { songNotesViewerEl.classList.remove('hidden'); songNotesViewerEl.classList.add('flex'); }
+    else { songNotesViewerEl.classList.add('hidden'); songNotesViewerEl.classList.remove('flex'); }
 
     if (target === 'image-editor') { imageEditorEl.classList.remove('hidden'); imageEditorEl.classList.add('flex'); }
     else { imageEditorEl.classList.add('hidden'); imageEditorEl.classList.remove('flex'); }
@@ -7354,6 +7423,7 @@ function setupEvents() {
         e.target.value = '';
     });
     document.getElementById('closeAttachmentViewerBtn').addEventListener('click', closeAttachmentViewer);
+    document.getElementById('closeSongNotesViewerBtn').addEventListener('click', closeSongNotesViewer);
     document.getElementById('linkAttachmentBtn').addEventListener('click', openLinkPageModal);
     document.getElementById('renameAttachmentBtn').addEventListener('click', renameAttachment);
     document.getElementById('deleteAttachmentBtn').addEventListener('click', deleteAttachment);
@@ -7868,6 +7938,12 @@ function setupEvents() {
         if (viewNotesBtn) {
             const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === viewNotesBtn.dataset.songId);
             if (song) openSongWithNotes(song);
+            return;
+        }
+        const viewTextNotesBtn = e.target.closest('.song-view-text-notes-btn');
+        if (viewTextNotesBtn) {
+            const sl = getActiveSetlist(), song = sl?.songs.find(s => s.id === viewTextNotesBtn.dataset.songId);
+            if (song) openSongWithTextNotes(song);
             return;
         }
         const row = e.target.closest('.song-play-row');
