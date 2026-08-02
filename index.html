@@ -164,6 +164,8 @@ tailwind.config = {
     .edit-btn-del { color: #52525b; }
     .edit-btn-lg { width: 34px; height: 34px; font-size: 13px; }
     #headerIconRow::-webkit-scrollbar { display: none; }
+    .song-notes-scroll::-webkit-scrollbar { display: none; }
+    .song-notes-scroll { scrollbar-width: none; }
     .edit-btn-del:hover { color: #f87171; background: rgba(248,113,113,0.1); }
     .drop-line {
         height: 2px; background: #D4A853; border-radius: 1px; margin: -1px 10px 0 10px;
@@ -302,6 +304,9 @@ tailwind.config = {
         <div class="w-full flex justify-center" id="canvasContainer">
             <canvas id="wheelCanvas"></canvas>
         </div>
+        <div class="hidden w-full max-w-md mx-auto rounded-2xl bg-s2/60 border border-brd/50 p-6 items-center justify-center text-center" id="notesDisplayContainer" style="min-height:280px;">
+            <div class="text-xl leading-relaxed text-zinc-100" id="notesDisplayContent" style="white-space:pre-wrap;"></div>
+        </div>
 
         <div class="w-full max-w-md rounded-xl bg-s2/60 border border-brd/50 px-4 py-3 flex items-center justify-center gap-6">
             <button id="tempoMinusBtnMain" class="w-11 h-11 rounded-lg bg-s3 border border-brd/50 text-zinc-300 text-xl font-semibold hover:border-gold/40 hover:text-gold transition-all flex-shrink-0" aria-label="Decrease tempo">−</button>
@@ -316,6 +321,9 @@ tailwind.config = {
             <div class="flex items-center gap-1.5 mb-1">
                 <i class="fas fa-music text-gold text-[10px] flex-shrink-0"></i>
                 <span class="text-xs font-medium text-zinc-100 truncate flex-1" id="activeSongNotesTitle"></span>
+                <button type="button" id="expandNotesDisplayBtn" class="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded-md text-zinc-500 hover:text-[#2dd4bf] hover:bg-[#2dd4bf]/10 transition-colors" aria-label="Show notes as main display" title="Show notes in place of the notation display — handy for chord numbers instead of a visual chart">
+                    <i class="fas fa-expand text-[10px]"></i>
+                </button>
                 <button type="button" id="detachActiveSongBtn" class="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded-md text-zinc-500 hover:text-red-400 hover:bg-red-400/10 transition-colors" aria-label="Close — detach this song from the main screen" title="Close — detach this song from the main screen">
                     <i class="fas fa-xmark text-[11px]"></i>
                 </button>
@@ -3751,6 +3759,36 @@ function detachActiveSong() {
     showToast('Song detached — this is now a standalone metronome');
 }
 
+function toggleNotesMainDisplay() {
+    const enabled = localStorage.getItem('kasika-show-notes-main') === '1';
+    localStorage.setItem('kasika-show-notes-main', enabled ? '0' : '1');
+    applyNotesMainDisplayState();
+}
+
+// Shows the active song's notes in the main visualizer area instead of the notation wheel —
+// useful for keyboardists/bassists who write chord numbers rather than reading a beat chart.
+// Automatically falls back to the wheel if there's no active song or it has no notes.
+function applyNotesMainDisplayState() {
+    const enabled = localStorage.getItem('kasika-show-notes-main') === '1';
+    const canvasContainer = document.getElementById('canvasContainer');
+    const notesContainer = document.getElementById('notesDisplayContainer');
+    const btn = document.getElementById('expandNotesDisplayBtn');
+    if (!canvasContainer || !notesContainer) return;
+    const sl = getActiveSetlist();
+    const song = sl && sl.songs.find(s => s.id === state.activeSongId);
+    const hasNotes = song && song.notes && song.notes.trim();
+    if (enabled && hasNotes) {
+        canvasContainer.classList.add('hidden');
+        notesContainer.classList.remove('hidden'); notesContainer.classList.add('flex');
+        document.getElementById('notesDisplayContent').textContent = song.notes;
+        if (btn) { btn.classList.add('text-[#2dd4bf]'); btn.classList.remove('text-zinc-500'); }
+    } else {
+        canvasContainer.classList.remove('hidden');
+        notesContainer.classList.add('hidden'); notesContainer.classList.remove('flex');
+        if (btn) { btn.classList.remove('text-[#2dd4bf]'); btn.classList.add('text-zinc-500'); }
+    }
+}
+
 function updateActiveSongNotesPanel(song) {
     const panel = document.getElementById('activeSongNotesPanel');
     const titleEl = document.getElementById('activeSongNotesTitle');
@@ -3768,6 +3806,7 @@ function updateActiveSongNotesPanel(song) {
         content.textContent = '';
         titleEl.textContent = '';
     }
+    applyNotesMainDisplayState();
 }
 
 function loadAndPlaySong(song) {
@@ -6450,7 +6489,7 @@ function renderPlayMode(container, sl) {
                     <span class="truncate">${escHtml(song.name)}</span>
                     ${hasMod ? `<i class="fas fa-wave-square text-[#2dd4bf] text-[10px] flex-shrink-0" title="Has tempo/time-sig changes"></i>` : ''}
                 </div>
-                ${song.notes ? `<div class="text-[11px] text-[#2dd4bf]/70 truncate mt-0.5">${escHtml(song.notes)}</div>` : ''}
+                ${song.notes ? `<div class="song-notes-scroll text-[11px] text-[#2dd4bf]/70 mt-0.5 overflow-x-auto whitespace-nowrap" style="-webkit-overflow-scrolling:touch;">${escHtml(song.notes)}</div>` : ''}
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
                 ${song.linkedNoteId ? `<button type="button" class="song-view-notes-btn w-7 h-7 rounded-md bg-s3 border border-brd/50 text-[#60A5FA] flex items-center justify-center hover:border-[#60A5FA]/50 transition-colors" data-song-id="${song.id}" title="View linked notes/sheet music"><i class="fas fa-image text-[10px]"></i></button>` : ''}
@@ -7838,6 +7877,7 @@ function setupEvents() {
     });
 
     // ---- Practice mode ----
+    document.getElementById('expandNotesDisplayBtn').addEventListener('click', toggleNotesMainDisplay);
     document.getElementById('detachActiveSongBtn').addEventListener('click', detachActiveSong);
     document.getElementById('practiceBtn').addEventListener('click', () => {
         if (state.practice.active) { stopPractice(); } else { openPracticeModal(); }
