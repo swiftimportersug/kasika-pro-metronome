@@ -374,7 +374,7 @@ tailwind.config = {
             <button id="tapBtn" class="h-16 px-8 rounded-xl bg-s2 border border-brd text-zinc-300 font-display font-semibold text-sm tracking-wider hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" style="user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:manipulation;" aria-label="Tap tempo">
                 TAP
             </button>
-            <button id="practiceBtn" class="h-16 px-5 rounded-xl bg-s2 border border-brd text-zinc-300 flex flex-col items-center justify-center gap-1 hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" aria-label="Practice mode tempo ramp">
+            <button id="practiceBtn" class="h-16 px-5 rounded-xl bg-s2 border border-brd text-zinc-300 flex flex-col items-center justify-center gap-1 hover:border-gold/40 hover:text-gold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50" style="user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:manipulation;" aria-label="Practice mode tempo ramp, or hold for song recognition">
                 <i class="fas fa-gauge-high text-sm" id="practiceIcon"></i>
                 <span class="text-[9px] font-display font-semibold tracking-wider">PRACTICE</span>
             </button>
@@ -413,6 +413,17 @@ tailwind.config = {
     </div>
     <div class="text-[9px] text-zinc-700 mt-1" id="tempoListenLevelLabel">mic level</div>
     <div class="text-[10px] text-zinc-600 mt-0.5">Release to apply · move away to cancel</div>
+</div>
+
+<div id="songRecognitionIndicator" class="hidden fixed left-1/2 -translate-x-1/2 bottom-28 z-[300] bg-s2 border border-[#F472B6]/40 rounded-xl px-5 py-3 text-center shadow-2xl" style="width:240px;">
+    <div class="flex items-center gap-2 justify-center text-[#F472B6] text-[11px] font-display font-semibold tracking-widest">
+        <i class="fas fa-ear-listen" style="animation:pulse-glow 1s ease-in-out infinite;"></i> LISTENING FOR SONG
+    </div>
+    <div class="text-xs text-zinc-400 mt-1.5" id="songRecognitionStatus">Hold near the music, or hum the tune…</div>
+    <div class="w-full h-1.5 rounded-full bg-s3 mt-2 overflow-hidden">
+        <div id="songRecognitionProgressBar" class="h-full bg-[#F472B6]" style="width:0%;"></div>
+    </div>
+    <div class="text-[10px] text-zinc-600 mt-1.5">Release when ready · up to 10 seconds</div>
 </div>
 
 <div id="bandSyncAlertBanner" class="hidden fixed top-4 left-1/2 -translate-x-1/2 z-[400] max-w-sm w-[92vw] bg-red-950 border border-red-500/50 rounded-xl px-4 py-3 shadow-2xl">
@@ -858,6 +869,29 @@ tailwind.config = {
     </button>
 </div>
 
+<div class="modal-overlay" id="songRecognitionResultModal">
+    <div class="modal-box" style="max-width:380px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1"><i class="fas fa-circle-check text-[#34D399] mr-1.5"></i>Song Found</h3>
+        <p class="text-base text-zinc-100 font-medium mb-1" id="songRecognitionResultSong"></p>
+        <p class="text-sm text-zinc-500 mb-4" id="songRecognitionResultArtist"></p>
+        <button type="button" onclick="hideModal('songRecognitionResultModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Close</button>
+    </div>
+</div>
+
+<div class="modal-overlay" id="songRecognitionSettingsModal">
+    <div class="modal-box" style="max-width:400px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Song Recognition Setup</h3>
+        <p class="text-xs text-zinc-500 mb-3">This feature (including humming/singing recognition) uses AudD.io — Kasika doesn't include an API key of its own, so it needs your own free one.</p>
+        <p class="text-xs text-zinc-500 mb-4">Sign up free at <span class="text-[#60A5FA]">audd.io</span>, copy your API token from your account, and paste it below.</p>
+        <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">AudD API Token</label>
+        <input type="text" id="auddApiTokenInput" class="modal-input mb-4" placeholder="Paste your token here" autocomplete="off">
+        <div class="flex gap-3">
+            <button type="button" id="auddSettingsCancelBtn" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            <button type="button" id="auddSettingsSaveBtn" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay" id="compressionSettingsModal">
     <div class="modal-box" style="max-width:380px;">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Image Compression</h3>
@@ -949,7 +983,7 @@ tailwind.config = {
     </div>
     <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
         <label class="text-[10px] text-zinc-600 uppercase tracking-wider">Drag the gold edges to trim — the line shows exactly where you'll land. Pinch or use the zoom buttons for more precision.</label>
-        <div id="loopZoomScrollWrap" class="w-full overflow-x-auto" style="-webkit-overflow-scrolling:touch;">
+        <div id="loopZoomScrollWrap" class="w-full overflow-x-auto" style="-webkit-overflow-scrolling:touch; touch-action:pan-x;">
             <canvas id="loopRulerCanvas" class="block" style="height:26px; width:100%;"></canvas>
             <div id="loopWaveformWrap" class="relative rounded-lg overflow-hidden bg-s3 touch-none select-none" style="height:280px; width:100%;">
                 <canvas id="loopWaveformCanvas" class="w-full h-full block"></canvas>
@@ -958,6 +992,7 @@ tailwind.config = {
                 <div id="loopTrimDragLine" class="hidden absolute top-0 bottom-0 bg-[#F472B6] pointer-events-none" style="width:2px; left:0%; box-shadow:0 0 6px rgba(244,114,182,0.7);"></div>
                 <div id="loopTrimHandleStart" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:16px; left:0%; margin-left:-8px;"></div>
                 <div id="loopTrimHandleEnd" class="absolute top-0 bottom-0 bg-gold cursor-ew-resize touch-none" style="width:16px; left:100%; margin-left:-8px;"></div>
+                <div id="loopPreviewPlayheadLine" class="hidden absolute top-0 bottom-0 bg-[#34D399] pointer-events-none" style="width:2px; left:0%; box-shadow:0 0 8px rgba(52,211,153,0.8); z-index:5;"></div>
             </div>
         </div>
         <div class="flex items-center justify-between text-[12px] text-zinc-400">
@@ -2994,6 +3029,100 @@ function startPractice(cfg) {
     if (state.isPlaying) { state.currentClick = 0; state.visualClick = -1; state.nextNoteTime = state.audioCtx.currentTime + 0.03; }
     updatePracticeUI();
     showToast(`Practice ramp started: ${cfg.startBpm} → ${cfg.targetBpm} BPM`);
+}
+
+// ===== SONG RECOGNITION (via AudD.io — needs the user's own free API token) =====
+let songRecognitionRecorder = null, songRecognitionChunks = [], songRecognitionStream = null, songRecognitionMaxTimer = null;
+const SONG_RECOGNITION_MAX_MS = 10000; // AudD's standard endpoint analyzes short clips — keep a safety margin under its limit
+
+async function startSongRecognition() {
+    const token = localStorage.getItem('kasika-audd-token');
+    if (!token) { showModal('songRecognitionSettingsModal'); return; }
+    try {
+        songRecognitionStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+    } catch (err) {
+        showToast('Microphone access denied — cannot listen for the song');
+        return;
+    }
+    songRecognitionChunks = [];
+    const mimeType = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm')) ? 'audio/webm' : '';
+    try {
+        songRecognitionRecorder = mimeType ? new MediaRecorder(songRecognitionStream, { mimeType }) : new MediaRecorder(songRecognitionStream);
+    } catch (err) {
+        showToast('Recording isn\'t supported on this device');
+        songRecognitionStream.getTracks().forEach(t => t.stop());
+        songRecognitionStream = null;
+        return;
+    }
+    songRecognitionRecorder.ondataavailable = e => { if (e.data.size > 0) songRecognitionChunks.push(e.data); };
+    songRecognitionRecorder.start();
+    document.getElementById('songRecognitionIndicator').classList.remove('hidden');
+    document.getElementById('songRecognitionStatus').textContent = 'Hold near the music, or hum the tune…';
+    const progressStart = performance.now();
+    (function animateProgress() {
+        const bar = document.getElementById('songRecognitionProgressBar');
+        if (!bar || !songRecognitionRecorder || songRecognitionRecorder.state !== 'recording') return;
+        bar.style.width = Math.min(100, ((performance.now() - progressStart) / SONG_RECOGNITION_MAX_MS) * 100) + '%';
+        requestAnimationFrame(animateProgress);
+    })();
+    songRecognitionMaxTimer = setTimeout(() => stopSongRecognition(), SONG_RECOGNITION_MAX_MS);
+}
+
+async function stopSongRecognition() {
+    clearTimeout(songRecognitionMaxTimer);
+    document.getElementById('songRecognitionIndicator').classList.add('hidden');
+    const bar = document.getElementById('songRecognitionProgressBar');
+    if (bar) bar.style.width = '0%';
+    if (!songRecognitionRecorder || songRecognitionRecorder.state === 'inactive') {
+        if (songRecognitionStream) { songRecognitionStream.getTracks().forEach(t => t.stop()); songRecognitionStream = null; }
+        return;
+    }
+    const recorder = songRecognitionRecorder;
+    songRecognitionRecorder = null;
+    const blob = await new Promise(resolve => {
+        recorder.onstop = () => resolve(new Blob(songRecognitionChunks, { type: recorder.mimeType || 'audio/webm' }));
+        recorder.stop();
+    });
+    if (songRecognitionStream) { songRecognitionStream.getTracks().forEach(t => t.stop()); songRecognitionStream = null; }
+    if (blob.size < 2000) { showToast('Recording too short — try holding a bit longer'); return; }
+    showToast('Identifying…');
+    await recognizeSong(blob);
+}
+
+async function auddRecognize(blob, token, humming) {
+    const formData = new FormData();
+    formData.append('api_token', token);
+    formData.append('file', blob, 'clip.webm');
+    formData.append('return', 'apple_music,spotify');
+    if (humming) formData.append('method', 'recognizeWithOffset');
+    const res = await fetch('https://api.audd.io/', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.status === 'error') throw new Error((data.error && data.error.error_message) || 'AudD request failed');
+    if (data.status === 'success' && data.result) return data.result;
+    return null;
+}
+
+async function recognizeSong(blob) {
+    const token = localStorage.getItem('kasika-audd-token');
+    if (!token) { showModal('songRecognitionSettingsModal'); return; }
+    try {
+        // Try standard fingerprint matching first (fast, accurate for actual recordings),
+        // and only fall back to the humming/singing-tuned method if that comes up empty.
+        let result = await auddRecognize(blob, token, false);
+        if (!result || !result.title) result = await auddRecognize(blob, token, true);
+        if (result && result.title) {
+            document.getElementById('songRecognitionResultSong').textContent = result.title;
+            document.getElementById('songRecognitionResultArtist').textContent = result.artist ? `by ${result.artist}` : '';
+            showModal('songRecognitionResultModal');
+        } else {
+            showToast('Could not identify that song — try again with less background noise, or hold closer');
+        }
+    } catch (err) {
+        console.warn('Song recognition failed:', err);
+        showToast('Song recognition failed — check your connection and API token');
+    }
 }
 
 function stopPractice(silent) {
@@ -5914,12 +6043,77 @@ function updateLoopPreviewButtonUI() {
     }
 }
 
+// Real two-finger pinch gesture for the loop waveform, since the browser's own native pinch
+// would zoom the whole page rather than just the waveform (touch-action:pan-x on the
+// container prevents that from triggering at all, leaving this to handle it instead).
+function setupLoopPinchZoom() {
+    const scrollWrap = document.getElementById('loopZoomScrollWrap');
+    if (!scrollWrap) return;
+    let pinchStartDist = null, pinchStartZoom = 1, pendingZoom = null, rafScheduled = false;
+
+    function getTouchDist(touches) {
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    function flushZoom() {
+        rafScheduled = false;
+        if (pendingZoom != null) { setLoopZoom(pendingZoom); pendingZoom = null; }
+    }
+    scrollWrap.addEventListener('touchstart', e => {
+        if (e.touches.length === 2) {
+            e.preventDefault();
+            pinchStartDist = getTouchDist(e.touches);
+            pinchStartZoom = loopZoomLevel;
+        }
+    }, { passive: false });
+    scrollWrap.addEventListener('touchmove', e => {
+        if (e.touches.length === 2 && pinchStartDist) {
+            e.preventDefault();
+            const newDist = getTouchDist(e.touches);
+            pendingZoom = pinchStartZoom * (newDist / pinchStartDist);
+            if (!rafScheduled) { rafScheduled = true; requestAnimationFrame(flushZoom); }
+        }
+    }, { passive: false });
+    scrollWrap.addEventListener('touchend', e => { if (e.touches.length < 2) pinchStartDist = null; });
+    scrollWrap.addEventListener('touchcancel', () => { pinchStartDist = null; });
+}
+
+// Tracks and animates the live playhead position during loop preview — a thin green line
+// that sweeps across the waveform in sync with actual audio playback, wrapping at the loop
+// points exactly like the audio itself does.
+let loopPreviewAnimFrame = null;
+function startLoopPreviewPlayhead(startAt, trimStart, trimEnd) {
+    stopLoopPreviewPlayhead();
+    const line = document.getElementById('loopPreviewPlayheadLine');
+    if (!line || !editingLoopTrack || !editingLoopTrack.duration) return;
+    line.classList.remove('hidden');
+    const loopDur = Math.max(0.05, trimEnd - trimStart);
+    function tick() {
+        if (!editingLoopPreviewSource) { stopLoopPreviewPlayhead(); return; }
+        const c = state.houseAudioCtx;
+        const elapsed = c.currentTime - startAt;
+        const posInLoop = elapsed < 0 ? trimStart : trimStart + (elapsed % loopDur);
+        const pct = (posInLoop / editingLoopTrack.duration) * 100;
+        line.style.left = pct + '%';
+        loopPreviewAnimFrame = requestAnimationFrame(tick);
+    }
+    tick();
+}
+
+function stopLoopPreviewPlayhead() {
+    if (loopPreviewAnimFrame) { cancelAnimationFrame(loopPreviewAnimFrame); loopPreviewAnimFrame = null; }
+    const line = document.getElementById('loopPreviewPlayheadLine');
+    if (line) line.classList.add('hidden');
+}
+
 function stopLoopPreview() {
     if (editingLoopPreviewSource) {
         try { editingLoopPreviewSource.stop(); } catch (err) {}
         try { editingLoopPreviewSource.disconnect(); } catch (err) {}
         editingLoopPreviewSource = null;
     }
+    stopLoopPreviewPlayhead();
     updateLoopPreviewButtonUI();
 }
 
@@ -5987,10 +6181,12 @@ async function toggleLoopPreview() {
     const p = c.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, editingLoopTrack.pan || 0));
     src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
-    src.start(c.currentTime + 0.02, start);
-    src.onended = () => { if (editingLoopPreviewSource === src) { editingLoopPreviewSource = null; updateLoopPreviewButtonUI(); } };
+    const startAt = c.currentTime + 0.02;
+    src.start(startAt, start);
+    src.onended = () => { if (editingLoopPreviewSource === src) { editingLoopPreviewSource = null; updateLoopPreviewButtonUI(); stopLoopPreviewPlayhead(); } };
     editingLoopPreviewSource = src;
     updateLoopPreviewButtonUI();
+    startLoopPreviewPlayhead(startAt, start, src.loopEnd);
 }
 
 async function importLoopFile(file) {
@@ -7418,6 +7614,14 @@ function setupEvents() {
         hideModal('compressionSettingsModal');
         showToast(`Images over 1MB will now be compressed down to about ${kb}KB`);
     });
+    document.getElementById('auddSettingsCancelBtn').addEventListener('click', () => hideModal('songRecognitionSettingsModal'));
+    document.getElementById('auddSettingsSaveBtn').addEventListener('click', () => {
+        const token = document.getElementById('auddApiTokenInput').value.trim();
+        if (!token) { showToast('Enter a valid API token'); return; }
+        localStorage.setItem('kasika-audd-token', token);
+        hideModal('songRecognitionSettingsModal');
+        showToast('Saved — hold the Practice button to try song recognition');
+    });
     document.getElementById('uploadNoteFileInput').addEventListener('change', e => {
         if (e.target.files && e.target.files.length) handleNoteFilesUpload(e.target.files);
         e.target.value = '';
@@ -7955,9 +8159,33 @@ function setupEvents() {
     // ---- Practice mode ----
     document.getElementById('expandNotesDisplayBtn').addEventListener('click', toggleNotesMainDisplay);
     document.getElementById('detachActiveSongBtn').addEventListener('click', detachActiveSong);
-    document.getElementById('practiceBtn').addEventListener('click', () => {
-        if (state.practice.active) { stopPractice(); } else { openPracticeModal(); }
-    });
+    (() => {
+        const btn = document.getElementById('practiceBtn');
+        const HOLD_THRESHOLD_MS = 450;
+        let holdTimer = null, holdTriggered = false, touchHandled = false;
+        const onDown = () => {
+            holdTriggered = false;
+            clearTimeout(holdTimer);
+            holdTimer = setTimeout(() => { holdTriggered = true; startSongRecognition(); }, HOLD_THRESHOLD_MS);
+        };
+        const onUp = () => {
+            clearTimeout(holdTimer);
+            if (holdTriggered) { stopSongRecognition(); return; }
+            if (state.practice.active) { stopPractice(); } else { openPracticeModal(); }
+        };
+        const onCancel = () => {
+            clearTimeout(holdTimer);
+            if (holdTriggered) stopSongRecognition();
+        };
+        // Non-passive + preventDefault, same fix as the tap-tempo button: avoids the native
+        // long-press text-selection gesture and the phantom duplicate mouse events it causes.
+        btn.addEventListener('touchstart', e => { e.preventDefault(); touchHandled = true; onDown(); }, { passive: false });
+        btn.addEventListener('touchend', e => { e.preventDefault(); onUp(); }, { passive: false });
+        btn.addEventListener('touchcancel', e => { e.preventDefault(); onCancel(); }, { passive: false });
+        btn.addEventListener('mousedown', () => { if (touchHandled) return; onDown(); });
+        btn.addEventListener('mouseup', () => { if (touchHandled) { touchHandled = false; return; } onUp(); });
+        btn.addEventListener('mouseleave', () => { if (touchHandled) return; onCancel(); });
+    })();
     document.getElementById('practiceStopBtn').addEventListener('click', () => stopPractice());
     document.getElementById('practiceForm').addEventListener('submit', e => {
         e.preventDefault();
@@ -8081,7 +8309,7 @@ function init() {
         if (wrap.contains(e.target)) return;
         dd.classList.add('hidden'); dd.classList.remove('flex');
     });
-    setupEvents(); setupCustomDrag(); setupModulationDrag();
+    setupEvents(); setupCustomDrag(); setupModulationDrag(); setupLoopPinchZoom();
     if (window.speechSynthesis) window.speechSynthesis.getVoices();
     requestAnimationFrame(animationLoop);
 }
