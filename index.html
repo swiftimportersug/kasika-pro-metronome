@@ -1968,6 +1968,7 @@ function setupBandSyncChannel(channel, peer) {
         if (msg.type === 'sync_stop') { handleBandSyncStop(); return; }
         if (msg.type === 'sync_ack') { handleBandSyncAck(msg, peer); return; }
         if (msg.type === 'tempo_change') { handleBandSyncTempoChange(msg); return; }
+        if (msg.type === 'song_change') { handleBandSyncSongChange(msg); return; }
         logBandSyncMessage(`Received: ${e.data}`, 'in');
     };
 }
@@ -2057,7 +2058,7 @@ function broadcastBandSyncStart(hostAudioCtxStartTime, song) {
         peer.channel.send(JSON.stringify({
             type: 'sync_start', targetPerfTime: peerPerfTime,
             bpm: state.bpm, timeSig: state.timeSig, subdivision: state.subdivision,
-            sections: structure,
+            sections: structure, songName: song.name,
         }));
     });
     logBandSyncMessage(`Sent sync start to ${peers.length} device${peers.length === 1 ? '' : 's'} (BPM ${state.bpm}, ${state.timeSig})`, 'out');
@@ -2074,6 +2075,36 @@ function broadcastBandSyncTempo(newBpm) {
     const peers = getConnectedPeers();
     if (!peers.length) return;
     peers.forEach(peer => peer.channel.send(JSON.stringify({ type: 'tempo_change', bpm: newBpm })));
+}
+
+// Lets connected band members' phones automatically follow along to whichever song the host
+// switches to mid-set, each showing their own previously-chosen notes/notation for that song
+// rather than being stuck on whatever the last song was.
+function broadcastBandSyncSongChange(songName) {
+    const peers = getConnectedPeers();
+    if (!peers.length) return;
+    peers.forEach(peer => peer.channel.send(JSON.stringify({ type: 'song_change', songName })));
+}
+
+function handleBandSyncSongChange(msg) {
+    const sl = getActiveSetlist();
+    if (!sl || !msg.songName) return;
+    const normalized = msg.songName.trim().toLowerCase();
+    const song = sl.songs.find(s => s.name.trim().toLowerCase() === normalized);
+    if (!song) {
+        showToast(`Host switched to "${msg.songName}" — not found in your set-list`);
+        return;
+    }
+    if (state.miniPlayerSongId) {
+        // Already viewing notes/notation for a song — follow along, keeping whichever
+        // display mode (picture or text notes) was already chosen. Display-only: tempo and
+        // sections are already being correctly driven by the separate band sync messages.
+        switchMiniPlayerSong(song, true);
+    } else if (!state.isPlaying) {
+        // Not currently viewing anything — just remember which song for reference/
+        // highlighting purposes, without a full arm (which would also touch tempo/time-sig).
+        state.activeSongId = song.id;
+    }
 }
 
 function handleBandSyncTempoChange(msg) {
@@ -2119,6 +2150,7 @@ function handleBandSyncStart(msg) {
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     document.getElementById('subdivSelect').value = state.subdivision;
     renderBeatBlocks();
+    if (msg.songName) handleBandSyncSongChange(msg);
 
     const sl = getActiveSetlist();
     const ownSong = sl?.songs.find(s => s.id === state.activeSongId);
@@ -2402,9 +2434,19 @@ function startBandSyncHostScanReply(peer) {
             console.warn('Band Sync: failed to process reply code', err);
             setBandSyncStatus('Could not read that code — try again.');
         }
-    }); // no auto-scroll here — there's no way to know when the band member has actually
-        // scanned yet, so jumping the view away from the host's own QR too soon would cut off
-        // the time they need to show it. Scroll down manually once it's been scanned.
+    });
+    // There's genuinely no way to detect the exact moment the band member scans — that
+    // happens entirely on their device with nothing reported back. A short fixed delay is
+    // the pragmatic middle ground: long enough to show the host's own QR first, but short
+    // enough that the camera reliably comes into view without the host needing to scroll
+    // manually themselves.
+    setTimeout(() => {
+        if (bandSync.role !== 'host' || !bandSync.scanStream) return; // pairing already finished or cancelled
+        const scanArea = document.getElementById('bandSyncScanArea');
+        if (scanArea && !scanArea.classList.contains('hidden')) {
+            scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, 3000);
 }
 
 async function startBandSyncJoin() {
@@ -3987,6 +4029,7 @@ function armSong(song) {
 function selectOrPlaySong(song) {
     if (state.isPlaying) loadAndPlaySong(song);
     else armSong(song);
+    if (state.isPlaying && bandSync.role === 'host') broadcastBandSyncSongChange(song.name);
 }
 
 // The single entry point for the Play/Stop button and spacebar. Starting fresh initializes
@@ -6921,9 +6964,18 @@ function resetPageTurnOnStop() {
     }
 }
 
-function switchMiniPlayerSong(song) {
+function switchMiniPlayerSong(song, displayOnly) {
     if (song.id === state.miniPlayerSongId) return;
-    selectOrPlaySong(song); // same logic setlists already use: switches seamlessly if playing, arms if stopped
+    if (displayOnly) {
+        // Called when following a band sync song-change broadcast — only updates which
+        // notes/notation are shown. Deliberately skips selectOrPlaySong() here, since that
+        // would re-apply THIS device's own local copy of the song's tempo/time-sig, which
+        // could silently fight with the tempo already being correctly driven by the host's
+        // separate band sync broadcasts.
+        state.activeSongId = song.id;
+    } else {
+        selectOrPlaySong(song); // same logic setlists already use: switches seamlessly if playing, arms if stopped
+    }
     state.miniPlayerSongId = song.id;
     renderMiniPlayerSongList();
     if (miniPlayerContentMode === 'textNotes') {
