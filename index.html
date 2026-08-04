@@ -1082,6 +1082,11 @@ tailwind.config = {
                     <i class="fas fa-chevron-right text-zinc-600 text-xs flex-shrink-0"></i>
                 </button>
             </div>
+            <div id="pageTurnSettingsContainer" class="hidden">
+                <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Auto Page-Turn</label>
+                <p class="text-[11px] text-zinc-600 mb-2">Automatically scrolls to the next page during playback, timed to the bars below — no manual scrolling needed mid-song.</p>
+                <div id="pageTurnInputsList" class="flex flex-col gap-2"></div>
+            </div>
 
             <div class="border-t border-brd/50 pt-4">
                 <label class="text-xs text-[#F472B6] uppercase tracking-wider font-semibold block mb-1">Song Intro / Pre-roll</label>
@@ -3128,6 +3133,7 @@ function stopPractice(silent) {
 
 function onMeasureComplete() {
     state.songAbsoluteBar++;
+    checkPageTurn();
     if (state.pendingLoopStartBar != null && state.songAbsoluteBar === state.pendingLoopStartBar) {
         state.pendingLoopStartBar = null;
         const sl = getActiveSetlist();
@@ -4192,6 +4198,7 @@ function openSongEditModal(id) {
     editingLoopTrack = song.loopTrack ? { ...song.loopTrack } : null;
     renderLoopTrackUI();
     editingSongLinkedNoteId = song.linkedNoteId || null;
+    editingSongPageTurnBars = Array.isArray(song.pageTurnBars) ? song.pageTurnBars.slice() : [];
     updateSongLinkedNoteLabel();
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
@@ -4885,7 +4892,7 @@ async function refreshAttachmentViewerContent(noteId) {
     const pages = getLinkedGroup(note);
     const htmlParts = await Promise.all(pages.map(p => renderAttachmentPage(p)));
     const content = document.getElementById('attachmentViewerContent');
-    content.innerHTML = htmlParts.map((html, i) => `<div class="w-full">${pages.length > 1 ? `<div class="text-[10px] text-zinc-600 uppercase tracking-wider px-3 pt-2">Page ${i + 1}: ${escHtml(pages[i].title)}</div>` : ''}${html}</div>`).join('<div class="h-2 bg-brd/30"></div>');
+    content.innerHTML = htmlParts.map((html, i) => `<div class="w-full" id="attachmentPage${i}">${pages.length > 1 ? `<div class="text-[10px] text-zinc-600 uppercase tracking-wider px-3 pt-2">Page ${i + 1}: ${escHtml(pages[i].title)}</div>` : ''}${html}</div>`).join('<div class="h-2 bg-brd/30"></div>');
 }
 
 function updateAttachmentHeaderControlsVisibility() {
@@ -5140,20 +5147,47 @@ async function uploadAndLinkNewPage(file) {
     showToast('Page added and linked');
 }
 
+let editingSongPageTurnBars = [];
+
 function updateSongLinkedNoteLabel() {
     const label = document.getElementById('songLinkedNoteLabel');
     if (!label) return;
     if (!editingSongLinkedNoteId) {
         label.innerHTML = '<i class="fas fa-link text-zinc-600 text-xs"></i>None — tap to link a note or image';
+        updatePageTurnSettingsUI();
         return;
     }
     const note = state.notes.find(n => n.id === editingSongLinkedNoteId);
     if (!note) {
         label.innerHTML = '<i class="fas fa-triangle-exclamation text-red-400 text-xs"></i>Linked note not found';
+        updatePageTurnSettingsUI();
         return;
     }
     const icon = note.type === 'attachment' ? (note.fileType === 'pdf' ? 'fa-file-pdf' : 'fa-file-image') : (note.drawingDataUrl ? 'fa-pencil' : 'fa-note-sticky');
     label.innerHTML = `<i class="fas ${icon} text-[#60A5FA] text-xs"></i>${escHtml(note.title || 'Untitled note')}`;
+    updatePageTurnSettingsUI();
+}
+
+// Shows one "advance after N bars" input per page transition, only once the linked note
+// actually has more than one page — a single-page note has nothing to auto-turn to.
+function updatePageTurnSettingsUI() {
+    const container = document.getElementById('pageTurnSettingsContainer');
+    const list = document.getElementById('pageTurnInputsList');
+    if (!container || !list) return;
+    const note = editingSongLinkedNoteId ? state.notes.find(n => n.id === editingSongLinkedNoteId) : null;
+    if (!note || note.type !== 'attachment') { container.classList.add('hidden'); return; }
+    const pages = getLinkedGroup(note);
+    if (pages.length < 2) { container.classList.add('hidden'); return; }
+    container.classList.remove('hidden');
+    list.innerHTML = pages.slice(0, -1).map((p, i) => {
+        const nextPage = pages[i + 1];
+        const val = editingSongPageTurnBars[i] || 16;
+        return `<div class="flex items-center gap-2 text-xs text-zinc-400">
+            <span class="truncate flex-1">${escHtml(p.title)} → ${escHtml(nextPage.title)}</span>
+            <input type="number" class="edit-input page-turn-bars-input" style="width:60px" min="1" max="999" value="${val}" data-page-idx="${i}">
+            <span class="text-zinc-600 flex-shrink-0">bars</span>
+        </div>`;
+    }).join('');
 }
 
 function openSongLinkedNoteModal() {
@@ -6837,12 +6871,53 @@ function renderMiniPlayerSongList() {
     if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
 }
 
+// ===== AUTO PAGE-TURN (scrolls a multi-page linked chart forward during playback) =====
+let pageTurnState = { active: false, barsPerPage: [], currentIndex: 0, startBar: 0 };
+
+function initPageTurnTracking(song) {
+    pageTurnState = { active: false, barsPerPage: [], currentIndex: 0, startBar: 0 };
+    if (!song || !song.linkedNoteId || !Array.isArray(song.pageTurnBars) || !song.pageTurnBars.length) return;
+    const note = state.notes.find(n => n.id === song.linkedNoteId);
+    if (!note || note.type !== 'attachment') return;
+    const pages = getLinkedGroup(note);
+    if (pages.length < 2) return;
+    pageTurnState = { active: true, barsPerPage: song.pageTurnBars, currentIndex: 0, startBar: state.songAbsoluteBar };
+}
+
+function checkPageTurn() {
+    if (!pageTurnState.active) return;
+    if (pageTurnState.currentIndex >= pageTurnState.barsPerPage.length) { pageTurnState.active = false; return; }
+    if (state.songAbsoluteBar < pageTurnState.startBar) {
+        // The song restarted (bar counter reset) while tracking was active — go back to
+        // page 1 and restart tracking from the top, rather than comparing against a now-stale
+        // bar count that would otherwise never catch up.
+        if (pageTurnState.currentIndex > 0 && currentAppView === 'attachment-viewer') {
+            const el = document.getElementById('attachmentPage0');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        pageTurnState.currentIndex = 0;
+        pageTurnState.startBar = state.songAbsoluteBar;
+        return;
+    }
+    const threshold = pageTurnState.barsPerPage[pageTurnState.currentIndex] || 16;
+    if (state.songAbsoluteBar - pageTurnState.startBar >= threshold) {
+        pageTurnState.currentIndex++;
+        pageTurnState.startBar = state.songAbsoluteBar;
+        if (currentAppView === 'attachment-viewer') {
+            const el = document.getElementById(`attachmentPage${pageTurnState.currentIndex}`);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        if (pageTurnState.currentIndex >= pageTurnState.barsPerPage.length) pageTurnState.active = false;
+    }
+}
+
 function switchMiniPlayerSong(song) {
     if (song.id === state.miniPlayerSongId) return;
     selectOrPlaySong(song); // same logic setlists already use: switches seamlessly if playing, arms if stopped
     state.miniPlayerSongId = song.id;
     renderMiniPlayerSongList();
     if (miniPlayerContentMode === 'textNotes') {
+        pageTurnState.active = false;
         if (song.notes && song.notes.trim()) {
             document.getElementById('songNotesViewerTitle').textContent = song.name;
             document.getElementById('songNotesViewerText').textContent = song.notes;
@@ -6851,6 +6926,7 @@ function switchMiniPlayerSong(song) {
         }
         return;
     }
+    initPageTurnTracking(song);
     if (song.linkedNoteId) {
         const note = state.notes.find(n => n.id === song.linkedNoteId);
         if (!note) { showToast('Linked note not found for this song'); return; }
@@ -6877,6 +6953,7 @@ function hideMiniPlayer() {
     document.getElementById('noteContentArea').style.paddingBottom = '';
     document.getElementById('songNotesViewerContent').style.paddingBottom = '';
     state.miniPlayerSongId = null;
+    pageTurnState.active = false;
     updateAttachmentHeaderControlsVisibility();
 }
 
@@ -6896,6 +6973,7 @@ function openSongWithNotes(song) {
     miniPlayerContentMode = 'attachment';
     if (!state.isPlaying && state.activeSongId !== song.id) armSong(song);
     showMiniPlayer(song);
+    initPageTurnTracking(song);
     if (note.type === 'attachment') openAttachmentViewer(note.id);
     else openNoteEditor(note.id);
 }
@@ -6903,6 +6981,7 @@ function openSongWithNotes(song) {
 function openSongWithTextNotes(song) {
     if (!song.notes || !song.notes.trim()) { showToast('This song has no notes yet'); return; }
     miniPlayerContentMode = 'textNotes';
+    pageTurnState.active = false;
     if (!state.isPlaying && state.activeSongId !== song.id) armSong(song);
     showMiniPlayer(song);
     document.getElementById('songNotesViewerTitle').textContent = song.name;
@@ -7604,9 +7683,14 @@ function setupEvents() {
     document.getElementById('songLinkedNoteBtn').addEventListener('click', openSongLinkedNoteModal);
     document.getElementById('songLinkedNoteList').addEventListener('click', e => {
         const unlinkBtn = e.target.closest('#songUnlinkNoteBtn');
-        if (unlinkBtn) { editingSongLinkedNoteId = null; updateSongLinkedNoteLabel(); hideModal('songLinkedNoteModal'); return; }
+        if (unlinkBtn) { editingSongLinkedNoteId = null; editingSongPageTurnBars = []; updateSongLinkedNoteLabel(); hideModal('songLinkedNoteModal'); return; }
         const option = e.target.closest('.song-link-note-option');
-        if (option) { editingSongLinkedNoteId = option.dataset.noteId; updateSongLinkedNoteLabel(); hideModal('songLinkedNoteModal'); }
+        if (option) {
+            if (option.dataset.noteId !== editingSongLinkedNoteId) editingSongPageTurnBars = [];
+            editingSongLinkedNoteId = option.dataset.noteId;
+            updateSongLinkedNoteLabel();
+            hideModal('songLinkedNoteModal');
+        }
     });
     document.getElementById('miniPlayerPlayBtn').addEventListener('click', () => {
         const sl = getActiveSetlist();
@@ -7875,6 +7959,7 @@ function setupEvents() {
         editingLoopTrack = null;
         renderLoopTrackUI();
         editingSongLinkedNoteId = null;
+        editingSongPageTurnBars = [];
         updateSongLinkedNoteLabel();
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
@@ -7983,7 +8068,13 @@ function setupEvents() {
     document.getElementById('songUnsavedCancelBtn').addEventListener('click', () => {
         hideModal('songUnsavedChangesModal'); // stay on the song editor — the history marker was already re-pushed
     });
-    document.getElementById('songForm').addEventListener('input', () => { songFormDirty = true; });
+    document.getElementById('songForm').addEventListener('input', e => {
+        songFormDirty = true;
+        if (e.target.classList.contains('page-turn-bars-input')) {
+            const idx = parseInt(e.target.dataset.pageIdx, 10);
+            editingSongPageTurnBars[idx] = Math.max(1, parseInt(e.target.value, 10) || 1);
+        }
+    });
     document.getElementById('songForm').addEventListener('change', () => { songFormDirty = true; });
     document.getElementById('songForm').addEventListener('click', e => {
         const btn = e.target.closest('button');
@@ -8029,6 +8120,7 @@ function setupEvents() {
                 stopAfterBars: editingLoopTrack.stopAfterBars || null,
             } : null,
             linkedNoteId: editingSongLinkedNoteId || null,
+            pageTurnBars: editingSongLinkedNoteId ? editingSongPageTurnBars.slice() : [],
         };
         if (!d.name || isNaN(d.bpm)) return;
         d.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, d.bpm));
