@@ -855,11 +855,11 @@ tailwind.config = {
         <i class="fas fa-play ml-0.5" id="miniPlayerPlayIcon"></i>
     </button>
     <div id="miniPlayerSongList" class="flex-1 min-w-0 overflow-y-auto flex flex-col rounded-lg" style="height:64px;"></div>
-    <button id="miniPlayerTempoDownBtn" class="w-11 h-11 rounded-lg bg-s3 border border-red-500/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-red-500/80 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
-        <i class="fas fa-minus text-xs"></i>
+    <button id="miniPlayerTempoDownBtn" class="w-11 h-11 rounded-lg bg-s3 border border-red-500/50 text-zinc-200 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-red-500/80 transition-colors" aria-label="Decrease tempo" title="Decrease tempo">
+        <i class="fas fa-minus text-base" style="-webkit-text-stroke: 1.5px currentColor;"></i>
     </button>
-    <button id="miniPlayerTempoUpBtn" class="w-11 h-11 rounded-lg bg-s3 border border-green-500/50 text-zinc-400 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-green-500/80 transition-colors" aria-label="Increase tempo" title="Increase tempo">
-        <i class="fas fa-plus text-xs"></i>
+    <button id="miniPlayerTempoUpBtn" class="w-11 h-11 rounded-lg bg-s3 border border-green-500/50 text-zinc-200 flex items-center justify-center flex-shrink-0 hover:text-gold hover:border-green-500/80 transition-colors" aria-label="Increase tempo" title="Increase tempo">
+        <i class="fas fa-plus text-base" style="-webkit-text-stroke: 1.5px currentColor;"></i>
     </button>
 </div>
 
@@ -2799,6 +2799,7 @@ function stopMetronome() {
     state.schedulerTimer = null; state.visualClick = -1; state.beatPulse = 0; state.cueDuck = null; updatePlayBtn();
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     stopAllActiveCues();
+    resetPageTurnOnStop();
     clearAllBeatBlockFlashes();
     clearTimeout(miniPlayerFlashTimer);
     const miniBtn = document.getElementById('miniPlayerPlayBtn');
@@ -3003,6 +3004,7 @@ function advanceClick() {
     state.currentClick = (state.currentClick + 1) % total;
     if (state.currentClick % mult === 0) {
         if (state.songMod.active) advanceSongModulationByBeat();
+        checkPageTurnBeat();
         if (state.currentClick === 0) onMeasureComplete();
     }
 }
@@ -3133,7 +3135,6 @@ function stopPractice(silent) {
 
 function onMeasureComplete() {
     state.songAbsoluteBar++;
-    checkPageTurn();
     if (state.pendingLoopStartBar != null && state.songAbsoluteBar === state.pendingLoopStartBar) {
         state.pendingLoopStartBar = null;
         const sl = getActiveSetlist();
@@ -6875,39 +6876,48 @@ function renderMiniPlayerSongList() {
 let pageTurnState = { active: false, barsPerPage: [], currentIndex: 0, startBar: 0 };
 
 function initPageTurnTracking(song) {
-    pageTurnState = { active: false, barsPerPage: [], currentIndex: 0, startBar: 0 };
+    pageTurnState = { active: false, barsPerPage: [], currentIndex: 0, beatsIntoPage: 0 };
     if (!song || !song.linkedNoteId || !Array.isArray(song.pageTurnBars) || !song.pageTurnBars.length) return;
     const note = state.notes.find(n => n.id === song.linkedNoteId);
     if (!note || note.type !== 'attachment') return;
     const pages = getLinkedGroup(note);
     if (pages.length < 2) return;
-    pageTurnState = { active: true, barsPerPage: song.pageTurnBars, currentIndex: 0, startBar: state.songAbsoluteBar };
+    pageTurnState = { active: true, barsPerPage: song.pageTurnBars, currentIndex: 0, beatsIntoPage: 0 };
 }
 
-function checkPageTurn() {
+// Called on every main beat (not just bar boundaries) — triggers 2 beats before the set bar
+// count would otherwise complete, giving the musician a head start to glance at the next
+// page rather than catching it right as the new section begins.
+function checkPageTurnBeat() {
     if (!pageTurnState.active) return;
     if (pageTurnState.currentIndex >= pageTurnState.barsPerPage.length) { pageTurnState.active = false; return; }
-    if (state.songAbsoluteBar < pageTurnState.startBar) {
-        // The song restarted (bar counter reset) while tracking was active — go back to
-        // page 1 and restart tracking from the top, rather than comparing against a now-stale
-        // bar count that would otherwise never catch up.
-        if (pageTurnState.currentIndex > 0 && currentAppView === 'attachment-viewer') {
-            const el = document.getElementById('attachmentPage0');
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        pageTurnState.currentIndex = 0;
-        pageTurnState.startBar = state.songAbsoluteBar;
-        return;
-    }
-    const threshold = pageTurnState.barsPerPage[pageTurnState.currentIndex] || 16;
-    if (state.songAbsoluteBar - pageTurnState.startBar >= threshold) {
+    pageTurnState.beatsIntoPage++;
+    const beatsPerBar = getBeatsPerMeasure();
+    const thresholdBars = pageTurnState.barsPerPage[pageTurnState.currentIndex] || 16;
+    const thresholdBeats = Math.max(1, thresholdBars * beatsPerBar - 2);
+    if (pageTurnState.beatsIntoPage >= thresholdBeats) {
         pageTurnState.currentIndex++;
-        pageTurnState.startBar = state.songAbsoluteBar;
+        pageTurnState.beatsIntoPage = 0;
         if (currentAppView === 'attachment-viewer') {
             const el = document.getElementById(`attachmentPage${pageTurnState.currentIndex}`);
             if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
         if (pageTurnState.currentIndex >= pageTurnState.barsPerPage.length) pageTurnState.active = false;
+    }
+}
+
+// Resets back to page 1 immediately when playback stops — not waiting for the next bar
+// boundary after resuming, which was the actual bug: the old detection only ran from inside
+// the bar-advance handler, so it never got a chance to fire while playback was simply paused.
+function resetPageTurnOnStop() {
+    if (pageTurnState.currentIndex === 0 && pageTurnState.beatsIntoPage === 0) return; // nothing to reset
+    const wasAdvanced = pageTurnState.currentIndex > 0;
+    pageTurnState.currentIndex = 0;
+    pageTurnState.beatsIntoPage = 0;
+    pageTurnState.active = pageTurnState.barsPerPage.length > 0;
+    if (wasAdvanced && currentAppView === 'attachment-viewer') {
+        const el = document.getElementById('attachmentPage0');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 
