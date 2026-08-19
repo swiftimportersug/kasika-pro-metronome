@@ -5184,6 +5184,8 @@ function saveImageEditorUndoSnapshot() {
 // things while pinching" bug: the moment a second finger touches down, any in-progress
 // single-finger gesture is immediately cancelled and the gesture switches to pinch,
 // rather than treating both fingers as independent drawing pointers.
+let imageEditorGlobalCleanupHandler = null;
+
 function setupImageEditorGestures() {
     const canvas = document.getElementById('imageEditorCanvas');
     const overlay = document.getElementById('imageEditorCropOverlay');
@@ -5247,12 +5249,34 @@ function setupImageEditorGestures() {
         moveTextStart = null;
     }
 
+    // Belt-and-suspenders safety net: a window-level, capture-phase listener that cleans up
+    // a pointer from tracking no matter what element its pointerup/pointercancel actually
+    // lands on — covers the case where a multi-touch pointerup doesn't reliably fire on the
+    // canvas itself while it's being continuously resized mid-pinch. Explicitly removes the
+    // previous session's handler first so these can't accumulate the same way the old
+    // canvas listeners used to.
+    if (imageEditorGlobalCleanupHandler) {
+        window.removeEventListener('pointerup', imageEditorGlobalCleanupHandler, true);
+        window.removeEventListener('pointercancel', imageEditorGlobalCleanupHandler, true);
+    }
+    imageEditorGlobalCleanupHandler = e => {
+        if (imageEditorPointers.has(e.pointerId)) {
+            imageEditorPointers.delete(e.pointerId);
+            if (imageEditorPointers.size === 0) endGesture();
+            else if (imageEditorPointers.size < 2 && imageEditorGestureMode === 'pinch') endGesture();
+        }
+    };
+    window.addEventListener('pointerup', imageEditorGlobalCleanupHandler, true);
+    window.addEventListener('pointercancel', imageEditorGlobalCleanupHandler, true);
+
     canvas.addEventListener('pointerdown', e => {
-        if (imageEditorPointers.size >= 2 && !imageEditorPointers.has(e.pointerId)) {
-            // Self-healing: a pinch should never have more than 2 fingers down. If we're
-            // somehow already tracking 2+ and a third pointerdown arrives, something earlier
-            // never got cleaned up — reset to just this fresh pointer rather than staying
-            // stuck misreading every future gesture as a pinch.
+        if (imageEditorGestureMode === null && imageEditorPointers.size > 0 && !imageEditorPointers.has(e.pointerId)) {
+            // No gesture is currently considered active, so anything still sitting in the
+            // tracker is definitely stale — a genuinely active gesture would have a mode set.
+            // This is what actually fixes drawing/pan silently breaking after a pinch: on
+            // some devices a multi-touch pointerup doesn't reliably fire while the element
+            // is being continuously resized mid-pinch, leaving one phantom finger behind
+            // that the old ">=2 fingers" check alone couldn't catch.
             imageEditorPointers.clear();
         }
         imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -5344,7 +5368,7 @@ function setupImageEditorGestures() {
 
     // Crop selection uses the same pointer-tracking map so a second finger cancels it too.
     overlay.addEventListener('pointerdown', e => {
-        if (imageEditorPointers.size >= 2 && !imageEditorPointers.has(e.pointerId)) {
+        if (imageEditorGestureMode === null && imageEditorPointers.size > 0 && !imageEditorPointers.has(e.pointerId)) {
             imageEditorPointers.clear();
         }
         imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
