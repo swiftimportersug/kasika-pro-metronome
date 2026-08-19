@@ -945,7 +945,7 @@ tailwind.config = {
         <button type="button" class="note-mode-btn active" data-imgtool="pencil" id="imgToolPencilBtn"><i class="fas fa-pencil mr-1.5"></i>Pencil</button>
         <button type="button" class="note-mode-btn" data-imgtool="eraser" id="imgToolEraserBtn"><i class="fas fa-eraser mr-1.5"></i>Eraser</button>
         <button type="button" class="note-mode-btn" data-imgtool="text" id="imgToolTextBtn"><i class="fas fa-font mr-1.5"></i>Text</button>
-        <button type="button" class="note-mode-btn" data-imgtool="pan" id="imgToolPanBtn"><i class="fas fa-hand mr-1.5"></i>Pan</button>
+        <button type="button" class="note-mode-btn" data-imgtool="pan" id="imgToolPanBtn" title="Drag with one finger to look around when zoomed in"><i class="fas fa-hand mr-1.5"></i>Pan</button>
         <button type="button" class="note-mode-btn" data-imgtool="crop" id="imgToolCropBtn"><i class="fas fa-crop mr-1.5"></i>Crop</button>
         <div class="flex-1"></div>
         <div id="imgPencilTools" class="flex items-center gap-1.5 flex-shrink-0 overflow-x-auto" style="max-width:52vw;">
@@ -981,6 +981,9 @@ tailwind.config = {
             <span class="text-[11px] text-zinc-500">Drag to move</span>
             <button type="button" id="imgTextEditBtn" class="px-2.5 py-1 rounded-md bg-[#60A5FA]/15 text-[#60A5FA] text-xs border border-[#60A5FA]/30 hover:bg-[#60A5FA]/25 transition-colors">Edit</button>
             <button type="button" id="imgTextDeleteBtn" class="px-2.5 py-1 rounded-md bg-red-500/15 text-red-400 text-xs border border-red-500/30 hover:bg-red-500/25 transition-colors">Delete</button>
+        </div>
+        <div id="imgPanTools" class="hidden items-center gap-2 flex-shrink-0">
+            <span class="text-[11px] text-zinc-500">Zoom in first, then drag with one finger to look around the image — at 1x there's nothing to pan to</span>
         </div>
         <div id="imgCropTools" class="hidden items-center gap-2 flex-shrink-0">
             <span class="text-[11px] text-zinc-500">Drag to select an area</span>
@@ -5010,7 +5013,24 @@ async function openImageEditor(noteId) {
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
-        const canvas = document.getElementById('imageEditorCanvas');
+        // Fresh clones strip away any pointer/touch listeners left over from a previous
+        // editing session — cloneNode never copies addEventListener-registered handlers, so
+        // this guarantees exactly one clean set of gesture handlers gets attached below,
+        // instead of a new set silently piling up on top of old ones every time someone
+        // edits another image (which was causing drawing/text to become unreliable the more
+        // images got edited in a row).
+        let canvas = document.getElementById('imageEditorCanvas');
+        canvas.replaceWith(canvas.cloneNode(false));
+        canvas = document.getElementById('imageEditorCanvas');
+
+        let overlay = document.getElementById('imageEditorCropOverlay');
+        overlay.replaceWith(overlay.cloneNode(false));
+        overlay = document.getElementById('imageEditorCropOverlay');
+
+        let textLayerCanvas = document.getElementById('imageEditorTextLayerCanvas');
+        textLayerCanvas.replaceWith(textLayerCanvas.cloneNode(false));
+        textLayerCanvas = document.getElementById('imageEditorTextLayerCanvas');
+
         const ctx = canvas.getContext('2d');
         const MAX_DIM = 2000; // cap resolution for reasonable performance on large phone photos
         let w = img.naturalWidth, h = img.naturalHeight;
@@ -5021,7 +5041,6 @@ async function openImageEditor(noteId) {
         ctx.drawImage(img, 0, 0, w, h);
         URL.revokeObjectURL(url);
 
-        const textLayerCanvas = document.getElementById('imageEditorTextLayerCanvas');
         textLayerCanvas.width = w; textLayerCanvas.height = h;
         textLayerCanvas.style.width = ''; textLayerCanvas.style.height = ''; textLayerCanvas.style.maxWidth = '100%';
 
@@ -5051,10 +5070,12 @@ function setImageEditorTool(tool) {
     document.getElementById('imgToolCropBtn').classList.toggle('active', tool === 'crop');
     const pencilTools = document.getElementById('imgPencilTools');
     const textTools = document.getElementById('imgTextTools');
+    const panTools = document.getElementById('imgPanTools');
     const cropTools = document.getElementById('imgCropTools');
     const showPencilTools = tool === 'pencil' || tool === 'eraser';
     pencilTools.classList.toggle('hidden', !showPencilTools); pencilTools.classList.toggle('flex', showPencilTools);
     textTools.classList.toggle('hidden', tool !== 'text'); textTools.classList.toggle('flex', tool === 'text');
+    panTools.classList.toggle('hidden', tool !== 'pan'); panTools.classList.toggle('flex', tool === 'pan');
     cropTools.classList.toggle('hidden', tool !== 'crop'); cropTools.classList.toggle('flex', tool === 'crop');
     const overlay = document.getElementById('imageEditorCropOverlay');
     const canvas = document.getElementById('imageEditorCanvas');
