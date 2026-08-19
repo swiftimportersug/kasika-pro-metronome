@@ -951,6 +951,10 @@ tailwind.config = {
         <div id="imgPencilTools" class="flex items-center gap-1.5 flex-shrink-0 overflow-x-auto" style="max-width:52vw;">
             <button type="button" id="imgDrawUndoBtn" class="text-fmt-btn flex-shrink-0" title="Undo last stroke"><i class="fas fa-rotate-left"></i></button>
             <div class="w-px h-4 bg-brd mx-0.5 flex-shrink-0"></div>
+            <i class="fas fa-circle text-zinc-600 flex-shrink-0" style="font-size:5px;"></i>
+            <input type="range" id="imgThicknessSlider" min="1" max="50" value="4" class="flex-shrink-0" style="width:56px; accent-color:#D4A853;" title="Thickness">
+            <i class="fas fa-circle text-zinc-600 flex-shrink-0" style="font-size:13px;"></i>
+            <div class="w-px h-4 bg-brd mx-0.5 flex-shrink-0"></div>
             <button type="button" class="color-swatch active flex-shrink-0" data-img-color="#D4A853" style="background:#D4A853" title="Gold"></button>
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#ff0000" style="background:#ff0000" title="Red"></button>
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#0000ff" style="background:#0000ff" title="Blue"></button>
@@ -964,7 +968,9 @@ tailwind.config = {
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#000000" style="background:#000000; border-color:#555;" title="Black"></button>
         </div>
         <div id="imgTextTools" class="hidden items-center gap-1.5 flex-shrink-0 overflow-x-auto" style="max-width:52vw;">
-            <span class="text-[11px] text-zinc-500 mr-1 flex-shrink-0">Tap to place, tap text to select</span>
+            <span class="text-[11px] text-zinc-500 mr-1 flex-shrink-0">Tap to place</span>
+            <button type="button" id="imgTextBoldToggleBtn" class="text-fmt-btn flex-shrink-0 active" title="Bold"><b>B</b></button>
+            <div class="w-px h-4 bg-brd mx-0.5 flex-shrink-0"></div>
             <button type="button" class="color-swatch active flex-shrink-0" data-img-color="#D4A853" style="background:#D4A853" title="Gold"></button>
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#ff0000" style="background:#ff0000" title="Red"></button>
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#0000ff" style="background:#0000ff" title="Blue"></button>
@@ -977,10 +983,23 @@ tailwind.config = {
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#fafafa" style="background:#fafafa" title="White"></button>
             <button type="button" class="color-swatch flex-shrink-0" data-img-color="#000000" style="background:#000000; border-color:#555;" title="Black"></button>
         </div>
-        <div id="imgTextSelectedTools" class="hidden items-center gap-2 flex-shrink-0">
-            <span class="text-[11px] text-zinc-500">Drag to move</span>
-            <button type="button" id="imgTextEditBtn" class="px-2.5 py-1 rounded-md bg-[#60A5FA]/15 text-[#60A5FA] text-xs border border-[#60A5FA]/30 hover:bg-[#60A5FA]/25 transition-colors">Edit</button>
-            <button type="button" id="imgTextDeleteBtn" class="px-2.5 py-1 rounded-md bg-red-500/15 text-red-400 text-xs border border-red-500/30 hover:bg-red-500/25 transition-colors">Delete</button>
+        <div id="imgTextSelectedTools" class="hidden items-center gap-1.5 flex-shrink-0 overflow-x-auto" style="max-width:60vw;">
+            <button type="button" id="imgTextSelectedBoldBtn" class="text-fmt-btn flex-shrink-0" title="Bold"><b>B</b></button>
+            <div class="w-px h-4 bg-brd mx-0.5 flex-shrink-0"></div>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#ff0000" style="background:#ff0000" title="Red"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#0000ff" style="background:#0000ff" title="Blue"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#00ff00" style="background:#00ff00" title="Green"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#ffff00" style="background:#ffff00" title="Yellow"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#ff8c00" style="background:#ff8c00" title="Orange"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#a855f7" style="background:#a855f7" title="Purple"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#fafafa" style="background:#fafafa" title="White"></button>
+            <button type="button" class="color-swatch flex-shrink-0" data-img-color="#000000" style="background:#000000; border-color:#555;" title="Black"></button>
+            <div class="w-px h-4 bg-brd mx-0.5 flex-shrink-0"></div>
+            <button type="button" id="imgTextEditBtn" class="flex-shrink-0 px-2.5 py-1 rounded-md bg-[#60A5FA]/15 text-[#60A5FA] text-xs border border-[#60A5FA]/30 hover:bg-[#60A5FA]/25 transition-colors">Edit</button>
+            <button type="button" id="imgTextDeleteBtn" class="flex-shrink-0 px-2.5 py-1 rounded-md bg-red-500/15 text-red-400 text-xs border border-red-500/30 hover:bg-red-500/25 transition-colors">Delete</button>
         </div>
         <div id="imgPanTools" class="hidden items-center gap-2 flex-shrink-0">
             <span class="text-[11px] text-zinc-500">Zoom in first, then drag with one finger to look around the image — at 1x there's nothing to pan to</span>
@@ -5003,6 +5022,8 @@ function closeAttachmentViewer() { history.back(); }
 
 // ===== IMAGE EDITOR (pencil annotation + eraser + text layers + crop) =====
 let imageEditorState = { noteId: null, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
+let imageEditorPencilThickness = 4, imageEditorEraserThickness = 20;
+let imageEditorTextBold = true;
 let imageEditorTextLayers = []; // {id, text, x, y, color, fontSize} — baked into pixels only on Save
 let imageEditorSelectedTextId = null;
 
@@ -5083,6 +5104,10 @@ function setImageEditorTool(tool) {
     const cropTools = document.getElementById('imgCropTools');
     const showPencilTools = tool === 'pencil' || tool === 'eraser';
     pencilTools.classList.toggle('hidden', !showPencilTools); pencilTools.classList.toggle('flex', showPencilTools);
+    if (showPencilTools) {
+        const slider = document.getElementById('imgThicknessSlider');
+        slider.value = tool === 'eraser' ? imageEditorEraserThickness : imageEditorPencilThickness;
+    }
     textTools.classList.toggle('hidden', tool !== 'text'); textTools.classList.toggle('flex', tool === 'text');
     panTools.classList.toggle('hidden', tool !== 'pan'); panTools.classList.toggle('flex', tool === 'pan');
     cropTools.classList.toggle('hidden', tool !== 'crop'); cropTools.classList.toggle('flex', tool === 'crop');
@@ -5208,7 +5233,7 @@ function setupImageEditorGestures() {
         // layer, so erasing can never punch through to the photo underneath.
         dctx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
         dctx.strokeStyle = imageEditorState.drawColor;
-        dctx.lineWidth = erase ? Math.max(10, canvas.width / 60) : Math.max(2, canvas.width / 300);
+        dctx.lineWidth = erase ? imageEditorEraserThickness : imageEditorPencilThickness;
         dctx.lineCap = 'round'; dctx.lineJoin = 'round';
         dctx.beginPath();
         dctx.moveTo(from.x, from.y);
@@ -5429,7 +5454,7 @@ function setupImageEditorGestures() {
 }
 
 // ===== Text layers (stay editable — move/edit/delete — until the image is saved) =====
-function textLayerFont(layer) { return `600 ${layer.fontSize}px sans-serif`; }
+function textLayerFont(layer) { return `${layer.bold ? 700 : 400} ${layer.fontSize}px sans-serif`; }
 
 function textLayerBounds(layer) {
     const canvas = document.getElementById('imageEditorTextLayerCanvas');
@@ -5472,6 +5497,11 @@ function selectImageEditorText(id) {
     renderImageEditorTextLayers();
     const tools = document.getElementById('imgTextSelectedTools');
     tools.classList.remove('hidden'); tools.classList.add('flex');
+    const layer = imageEditorTextLayers.find(l => l.id === id);
+    if (layer) {
+        tools.querySelectorAll('.color-swatch').forEach(s => s.classList.toggle('active', s.dataset.imgColor === layer.color));
+        document.getElementById('imgTextSelectedBoldBtn').classList.toggle('active', !!layer.bold);
+    }
 }
 
 function deselectImageEditorText() {
@@ -5517,7 +5547,7 @@ function placeImageEditorText(canvasPos, screenX, screenY, editingLayerId) {
             selectImageEditorText(editingLayer.id);
         } else {
             const fontSize = Math.max(18, Math.round(canvas.width / 35));
-            const newLayer = { id: 'txt_' + genId(), text, x: canvasPos.x, y: canvasPos.y, color: imageEditorState.drawColor, fontSize };
+            const newLayer = { id: 'txt_' + genId(), text, x: canvasPos.x, y: canvasPos.y, color: imageEditorState.drawColor, fontSize, bold: imageEditorTextBold };
             imageEditorTextLayers.push(newLayer);
             selectImageEditorText(newLayer.id);
         }
@@ -8281,6 +8311,11 @@ function setupEvents() {
     document.getElementById('imgToolPanBtn').addEventListener('click', () => setImageEditorTool('pan'));
     document.getElementById('imgToolCropBtn').addEventListener('click', () => setImageEditorTool('crop'));
     document.getElementById('imgDrawUndoBtn').addEventListener('click', undoImageEdit);
+    document.getElementById('imgThicknessSlider').addEventListener('input', e => {
+        const val = parseInt(e.target.value, 10);
+        if (imageEditorState.tool === 'eraser') imageEditorEraserThickness = val;
+        else imageEditorPencilThickness = val;
+    });
     document.getElementById('imgCropApplyBtn').addEventListener('click', applyImageCrop);
     document.getElementById('imageEditorZoomInBtn').addEventListener('click', () => applyImageEditorZoom(imageEditorZoom * 1.5));
     document.getElementById('imageEditorZoomOutBtn').addEventListener('click', () => applyImageEditorZoom(imageEditorZoom / 1.5));
@@ -8315,6 +8350,27 @@ function setupEvents() {
         swatch.classList.add('active');
         const match = document.querySelector(`#imgPencilTools .color-swatch[data-img-color="${swatch.dataset.imgColor}"]`);
         if (match) match.classList.add('active');
+    });
+    document.getElementById('imgTextBoldToggleBtn').addEventListener('click', () => {
+        imageEditorTextBold = !imageEditorTextBold;
+        document.getElementById('imgTextBoldToggleBtn').classList.toggle('active', imageEditorTextBold);
+    });
+    document.getElementById('imgTextSelectedTools').addEventListener('click', e => {
+        const layer = imageEditorTextLayers.find(l => l.id === imageEditorSelectedTextId);
+        if (!layer) return;
+        const swatch = e.target.closest('.color-swatch[data-img-color]');
+        if (swatch) {
+            layer.color = swatch.dataset.imgColor;
+            renderImageEditorTextLayers();
+            document.querySelectorAll('#imgTextSelectedTools .color-swatch').forEach(s => s.classList.remove('active'));
+            swatch.classList.add('active');
+            return;
+        }
+        if (e.target.closest('#imgTextSelectedBoldBtn')) {
+            layer.bold = !layer.bold;
+            renderImageEditorTextLayers();
+            document.getElementById('imgTextSelectedBoldBtn').classList.toggle('active', layer.bold);
+        }
     });
     document.getElementById('notesSearchInput').addEventListener('input', e => renderNotesList(e.target.value));
     document.getElementById('notesList').addEventListener('click', e => {
