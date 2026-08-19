@@ -932,10 +932,18 @@ tailwind.config = {
             <i class="fas fa-xmark text-xs"></i>
         </button>
         <span class="flex-1 min-w-0 truncate text-zinc-100 font-display font-semibold text-sm">Edit Image</span>
+        <button id="imageEditorZoomOutBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-zinc-200 transition-all" aria-label="Zoom out" title="Zoom out">
+            <i class="fas fa-magnifying-glass-minus text-xs"></i>
+        </button>
+        <span class="text-[10px] text-zinc-500 w-8 text-center flex-shrink-0" id="imageEditorZoomLabel">1x</span>
+        <button id="imageEditorZoomInBtn" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-s2 border border-brd/50 text-zinc-400 hover:text-zinc-200 transition-all" aria-label="Zoom in" title="Zoom in">
+            <i class="fas fa-magnifying-glass-plus text-xs"></i>
+        </button>
         <button id="imageEditorSaveBtn" class="px-3.5 py-1.5 rounded-lg bg-gold text-surface text-xs font-semibold hover:bg-gold-bright transition-colors">Save</button>
     </div>
     <div class="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-brd/30 bg-s2/40 overflow-x-auto">
         <button type="button" class="note-mode-btn active" data-imgtool="pencil" id="imgToolPencilBtn"><i class="fas fa-pencil mr-1.5"></i>Pencil</button>
+        <button type="button" class="note-mode-btn" data-imgtool="text" id="imgToolTextBtn"><i class="fas fa-font mr-1.5"></i>Text</button>
         <button type="button" class="note-mode-btn" data-imgtool="crop" id="imgToolCropBtn"><i class="fas fa-crop mr-1.5"></i>Crop</button>
         <div class="flex-1"></div>
         <div id="imgPencilTools" class="flex items-center gap-1.5 flex-shrink-0">
@@ -948,6 +956,14 @@ tailwind.config = {
             <button type="button" class="color-swatch" data-img-color="#f87171" style="background:#f87171" title="Red"></button>
             <button type="button" class="color-swatch" data-img-color="#32CD32" style="background:#32CD32" title="Lime Green"></button>
         </div>
+        <div id="imgTextTools" class="hidden items-center gap-1.5 flex-shrink-0">
+            <span class="text-[11px] text-zinc-500 mr-1">Tap the image to place text</span>
+            <button type="button" class="color-swatch active" data-img-color="#D4A853" style="background:#D4A853" title="Gold"></button>
+            <button type="button" class="color-swatch" data-img-color="#2dd4bf" style="background:#2dd4bf" title="Teal"></button>
+            <button type="button" class="color-swatch" data-img-color="#F472B6" style="background:#F472B6" title="Pink"></button>
+            <button type="button" class="color-swatch" data-img-color="#fafafa" style="background:#fafafa" title="White"></button>
+            <button type="button" class="color-swatch" data-img-color="#f87171" style="background:#f87171" title="Red"></button>
+        </div>
         <div id="imgCropTools" class="hidden items-center gap-2 flex-shrink-0">
             <span class="text-[11px] text-zinc-500">Drag to select an area</span>
             <button type="button" id="imgCropApplyBtn" class="px-2.5 py-1 rounded-md bg-[#2dd4bf]/15 text-[#2dd4bf] text-xs border border-[#2dd4bf]/30 hover:bg-[#2dd4bf]/25 transition-colors">Apply Crop</button>
@@ -957,6 +973,7 @@ tailwind.config = {
         <div class="relative" id="imageEditorCanvasStack">
             <canvas id="imageEditorCanvas" style="touch-action:none; max-width:100%; display:block;"></canvas>
             <canvas id="imageEditorCropOverlay" class="absolute top-0 left-0 hidden" style="touch-action:none; max-width:100%; display:block;"></canvas>
+            <input type="text" id="imageEditorTextInput" class="hidden absolute bg-black/80 text-white border-2 rounded px-2 py-1 text-lg font-medium" style="z-index:20; min-width:120px;" placeholder="Type here…" autocomplete="off">
         </div>
     </div>
 </div>
@@ -4979,14 +4996,16 @@ async function openImageEditor(noteId) {
         const scale = Math.min(1, MAX_DIM / Math.max(w, h));
         w = Math.round(w * scale); h = Math.round(h * scale);
         canvas.width = w; canvas.height = h;
-        canvas.style.width = ''; canvas.style.height = '';
+        canvas.style.width = ''; canvas.style.height = ''; canvas.style.maxWidth = '100%';
         ctx.drawImage(img, 0, 0, w, h);
         URL.revokeObjectURL(url);
 
         imageEditorState = { noteId, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
+        imageEditorZoom = 1;
+        imageEditorBaseWidth = 0;
+        imageEditorBaseHeight = 0;
         setImageEditorTool('pencil');
-        setupImageEditorDrawing();
-        setupImageEditorCrop();
+        setupImageEditorGestures();
 
         pushView('image-editor');
         applyViewState('image-editor');
@@ -4998,10 +5017,13 @@ async function openImageEditor(noteId) {
 function setImageEditorTool(tool) {
     imageEditorState.tool = tool;
     document.getElementById('imgToolPencilBtn').classList.toggle('active', tool === 'pencil');
+    document.getElementById('imgToolTextBtn').classList.toggle('active', tool === 'text');
     document.getElementById('imgToolCropBtn').classList.toggle('active', tool === 'crop');
     const pencilTools = document.getElementById('imgPencilTools');
+    const textTools = document.getElementById('imgTextTools');
     const cropTools = document.getElementById('imgCropTools');
     pencilTools.classList.toggle('hidden', tool !== 'pencil'); pencilTools.classList.toggle('flex', tool === 'pencil');
+    textTools.classList.toggle('hidden', tool !== 'text'); textTools.classList.toggle('flex', tool === 'text');
     cropTools.classList.toggle('hidden', tool !== 'crop'); cropTools.classList.toggle('flex', tool === 'crop');
     const overlay = document.getElementById('imageEditorCropOverlay');
     const canvas = document.getElementById('imageEditorCanvas');
@@ -5015,81 +5037,232 @@ function setImageEditorTool(tool) {
     }
 }
 
+let imageEditorZoom = 1, imageEditorBaseWidth = 0, imageEditorBaseHeight = 0;
+let imageEditorPointers = new Map(); // pointerId -> {x, y} in screen coordinates
+let imageEditorGestureMode = null; // null | 'draw' | 'crop' | 'pinch'
+let imageEditorPinchStartDist = 0, imageEditorPinchStartZoom = 1;
+
+function imageEditorCanvasPos(canvas, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+}
+
+// CSS-only zoom (canvas's own pixel resolution never changes) — the canvas sits inside an
+// already-scrollable container, so this gives both zoom and pan for free, and pointer
+// coordinate math above already accounts for the current CSS size vs internal resolution.
+function applyImageEditorZoom(zoom) {
+    const canvas = document.getElementById('imageEditorCanvas');
+    const overlay = document.getElementById('imageEditorCropOverlay');
+    if (!imageEditorBaseWidth) {
+        const rect = canvas.getBoundingClientRect();
+        imageEditorBaseWidth = rect.width;
+        imageEditorBaseHeight = rect.height;
+    }
+    imageEditorZoom = Math.max(1, Math.min(6, zoom));
+    canvas.style.maxWidth = 'none';
+    canvas.style.width = (imageEditorBaseWidth * imageEditorZoom) + 'px';
+    canvas.style.height = (imageEditorBaseHeight * imageEditorZoom) + 'px';
+    overlay.style.maxWidth = 'none';
+    overlay.style.width = canvas.style.width;
+    overlay.style.height = canvas.style.height;
+    const label = document.getElementById('imageEditorZoomLabel');
+    if (label) label.textContent = imageEditorZoom.toFixed(1).replace(/\.0$/, '') + 'x';
+}
+
 function saveImageEditorUndoSnapshot() {
     const canvas = document.getElementById('imageEditorCanvas');
     imageEditorState.undoStack.push(canvas.toDataURL());
     if (imageEditorState.undoStack.length > 20) imageEditorState.undoStack.shift();
 }
 
-function setupImageEditorDrawing() {
+// One shared pointer-tracking system for pencil, text placement, crop selection, and
+// pinch-zoom — this is what actually fixes the "pen writes random things while pinching"
+// bug: the moment a second finger touches down, any in-progress draw/crop stroke is
+// cancelled and the gesture switches to pinch, rather than treating both fingers as
+// independent drawing pointers.
+function setupImageEditorGestures() {
     const canvas = document.getElementById('imageEditorCanvas');
+    const overlay = document.getElementById('imageEditorCropOverlay');
     const ctx = canvas.getContext('2d');
-    let drawing = false;
-    function getPos(e) {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
-    }
-    canvas.onpointerdown = e => {
-        if (imageEditorState.tool !== 'pencil') return;
-        e.preventDefault();
-        saveImageEditorUndoSnapshot();
-        drawing = true;
-        const p = getPos(e);
-        ctx.beginPath(); ctx.moveTo(p.x, p.y);
-    };
-    canvas.onpointermove = e => {
-        if (!drawing || imageEditorState.tool !== 'pencil') return;
-        e.preventDefault();
-        const p = getPos(e);
+    const octx = overlay.getContext('2d');
+    imageEditorPointers = new Map();
+    imageEditorGestureMode = null;
+
+    let lastDrawPos = null;
+    let cropStart = null, cropRectLive = null;
+
+    function drawSmoothSegment(from, mid, to) {
+        // Quadratic curve through the midpoint, rather than straight lineTo segments —
+        // this is what gives strokes a natural, continuous pen feel instead of a faceted,
+        // segmented look, especially on fast strokes.
         ctx.strokeStyle = imageEditorState.drawColor;
         ctx.lineWidth = Math.max(2, canvas.width / 300);
         ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.lineTo(p.x, p.y); ctx.stroke();
-    };
-    canvas.onpointerup = () => { drawing = false; };
-    canvas.onpointerleave = () => { drawing = false; };
-}
-
-function setupImageEditorCrop() {
-    const overlay = document.getElementById('imageEditorCropOverlay');
-    const octx = overlay.getContext('2d');
-    let dragging = false, startX = 0, startY = 0, curRect = null;
-    function getPos(e) {
-        const rect = overlay.getBoundingClientRect();
-        const scaleX = overlay.width / rect.width, scaleY = overlay.height / rect.height;
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.quadraticCurveTo(mid.x, mid.y, to.x, to.y);
+        ctx.stroke();
     }
-    function drawOverlay() {
+
+    function drawCropOverlay() {
         octx.clearRect(0, 0, overlay.width, overlay.height);
-        if (!curRect) return;
+        if (!cropRectLive) return;
         octx.fillStyle = 'rgba(0,0,0,0.55)';
         octx.fillRect(0, 0, overlay.width, overlay.height);
-        octx.clearRect(curRect.x, curRect.y, curRect.w, curRect.h);
+        octx.clearRect(cropRectLive.x, cropRectLive.y, cropRectLive.w, cropRectLive.h);
         octx.strokeStyle = '#D4A853'; octx.lineWidth = 2;
-        octx.strokeRect(curRect.x, curRect.y, curRect.w, curRect.h);
+        octx.strokeRect(cropRectLive.x, cropRectLive.y, cropRectLive.w, cropRectLive.h);
     }
-    overlay.onpointerdown = e => {
+
+    function pinchDistance() {
+        const pts = Array.from(imageEditorPointers.values());
+        return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    }
+
+    function endGesture() {
+        imageEditorGestureMode = null;
+        lastDrawPos = null;
+        cropStart = null;
+    }
+
+    canvas.addEventListener('pointerdown', e => {
+        imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (imageEditorPointers.size >= 2) {
+            // A second finger just landed — cancel whatever single-finger gesture was in
+            // progress (this is the actual fix for pinching being read as drawing) and
+            // start pinch-zoom instead.
+            e.preventDefault();
+            imageEditorGestureMode = 'pinch';
+            lastDrawPos = null; cropStart = null; cropRectLive = null; drawCropOverlay();
+            imageEditorPinchStartDist = pinchDistance();
+            imageEditorPinchStartZoom = imageEditorZoom;
+            return;
+        }
+        if (imageEditorState.tool === 'pencil') {
+            e.preventDefault();
+            canvas.setPointerCapture(e.pointerId); // keeps the stroke going even if the finger drifts past the canvas edge
+            imageEditorGestureMode = 'draw';
+            saveImageEditorUndoSnapshot();
+            lastDrawPos = imageEditorCanvasPos(canvas, e.clientX, e.clientY);
+        } else if (imageEditorState.tool === 'text') {
+            e.preventDefault();
+            placeImageEditorText(imageEditorCanvasPos(canvas, e.clientX, e.clientY), e.clientX, e.clientY);
+        }
+    });
+
+    canvas.addEventListener('pointermove', e => {
+        if (imageEditorPointers.has(e.pointerId)) imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (imageEditorGestureMode === 'pinch') {
+            if (imageEditorPointers.size < 2) return;
+            e.preventDefault();
+            applyImageEditorZoom(imageEditorPinchStartZoom * (pinchDistance() / imageEditorPinchStartDist));
+            return;
+        }
+        if (imageEditorGestureMode !== 'draw' || imageEditorState.tool !== 'pencil') return;
+        e.preventDefault();
+        const events = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
+        for (const ev of events) {
+            const pos = imageEditorCanvasPos(canvas, ev.clientX, ev.clientY);
+            if (lastDrawPos) {
+                const mid = { x: (lastDrawPos.x + pos.x) / 2, y: (lastDrawPos.y + pos.y) / 2 };
+                drawSmoothSegment(lastDrawPos, mid, pos);
+            }
+            lastDrawPos = pos;
+        }
+    });
+
+    function onPointerEnd(e) {
+        imageEditorPointers.delete(e.pointerId);
+        if (imageEditorPointers.size === 0) endGesture();
+        else if (imageEditorPointers.size < 2 && imageEditorGestureMode === 'pinch') {
+            // One finger lifted off mid-pinch — require a fresh tap to resume anything,
+            // rather than silently resuming a draw stroke from wherever the remaining
+            // finger happens to be.
+            endGesture();
+        }
+    }
+    canvas.addEventListener('pointerup', onPointerEnd);
+    canvas.addEventListener('pointercancel', onPointerEnd);
+
+    // Crop selection uses the same pointer-tracking map so a second finger cancels it too.
+    overlay.addEventListener('pointerdown', e => {
+        imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (imageEditorPointers.size >= 2) {
+            e.preventDefault();
+            imageEditorGestureMode = 'pinch';
+            cropStart = null; cropRectLive = null; drawCropOverlay();
+            imageEditorPinchStartDist = pinchDistance();
+            imageEditorPinchStartZoom = imageEditorZoom;
+            return;
+        }
         if (imageEditorState.tool !== 'crop') return;
         e.preventDefault();
-        dragging = true;
-        const p = getPos(e);
-        startX = p.x; startY = p.y;
-        curRect = { x: startX, y: startY, w: 0, h: 0 };
-    };
-    overlay.onpointermove = e => {
-        if (!dragging || imageEditorState.tool !== 'crop') return;
+        overlay.setPointerCapture(e.pointerId);
+        imageEditorGestureMode = 'crop';
+        const p = imageEditorCanvasPos(overlay, e.clientX, e.clientY);
+        cropStart = p;
+        cropRectLive = { x: p.x, y: p.y, w: 0, h: 0 };
+    });
+    overlay.addEventListener('pointermove', e => {
+        if (imageEditorPointers.has(e.pointerId)) imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (imageEditorGestureMode === 'pinch') {
+            if (imageEditorPointers.size < 2) return;
+            e.preventDefault();
+            applyImageEditorZoom(imageEditorPinchStartZoom * (pinchDistance() / imageEditorPinchStartDist));
+            return;
+        }
+        if (imageEditorGestureMode !== 'crop' || !cropStart) return;
         e.preventDefault();
-        const p = getPos(e);
-        curRect = { x: Math.min(startX, p.x), y: Math.min(startY, p.y), w: Math.abs(p.x - startX), h: Math.abs(p.y - startY) };
-        drawOverlay();
-    };
-    overlay.onpointerup = () => { dragging = false; imageEditorState.cropRect = curRect; };
-    overlay.onpointerleave = () => { dragging = false; };
+        const p = imageEditorCanvasPos(overlay, e.clientX, e.clientY);
+        cropRectLive = { x: Math.min(cropStart.x, p.x), y: Math.min(cropStart.y, p.y), w: Math.abs(p.x - cropStart.x), h: Math.abs(p.y - cropStart.y) };
+        drawCropOverlay();
+    });
+    function onOverlayEnd(e) {
+        imageEditorPointers.delete(e.pointerId);
+        if (imageEditorGestureMode === 'crop') imageEditorState.cropRect = cropRectLive;
+        if (imageEditorPointers.size === 0) endGesture();
+        else if (imageEditorPointers.size < 2 && imageEditorGestureMode === 'pinch') endGesture();
+    }
+    overlay.addEventListener('pointerup', onOverlayEnd);
+    overlay.addEventListener('pointercancel', onOverlayEnd);
+}
+
+// Places a temporary text input at the tapped spot; committing (Enter or tapping away)
+// bakes the typed text onto the canvas at the corresponding image coordinates.
+function placeImageEditorText(canvasPos, screenX, screenY) {
+    const input = document.getElementById('imageEditorTextInput');
+    const stack = document.getElementById('imageEditorCanvasStack');
+    const stackRect = stack.getBoundingClientRect();
+    input.style.borderColor = imageEditorState.drawColor;
+    input.style.left = (screenX - stackRect.left) + 'px';
+    input.style.top = (screenY - stackRect.top) + 'px';
+    input.value = '';
+    input.classList.remove('hidden');
+    setTimeout(() => input.focus(), 30);
+
+    function commit() {
+        const text = input.value.trim();
+        if (text) {
+            const canvas = document.getElementById('imageEditorCanvas');
+            const ctx = canvas.getContext('2d');
+            saveImageEditorUndoSnapshot();
+            ctx.fillStyle = imageEditorState.drawColor;
+            const fontSize = Math.max(18, Math.round(canvas.width / 35));
+            ctx.font = `600 ${fontSize}px sans-serif`;
+            ctx.textBaseline = 'top';
+            ctx.fillText(text, canvasPos.x, canvasPos.y);
+        }
+        input.classList.add('hidden');
+        input.removeEventListener('blur', commit);
+        input.removeEventListener('keydown', onKeydown);
+    }
+    function onKeydown(e) {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { input.value = ''; commit(); }
+    }
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', onKeydown);
 }
 
 function applyImageCrop() {
@@ -5103,8 +5276,13 @@ function applyImageCrop() {
     canvas.width = w; canvas.height = h;
     ctx.putImageData(cropped, 0, 0);
     imageEditorState.cropRect = null;
+    canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
+    imageEditorZoom = 1; imageEditorBaseWidth = 0; imageEditorBaseHeight = 0;
+    const zoomLabel = document.getElementById('imageEditorZoomLabel');
+    if (zoomLabel) zoomLabel.textContent = '1x';
     const overlay = document.getElementById('imageEditorCropOverlay');
     overlay.width = w; overlay.height = h;
+    overlay.style.maxWidth = '100%';
     overlay.style.width = getComputedStyle(canvas).width;
     overlay.style.height = getComputedStyle(canvas).height;
     overlay.getContext('2d').clearRect(0, 0, w, h);
@@ -5120,8 +5298,13 @@ function undoImageEdit() {
     img.onload = () => {
         if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
             canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+            canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
+            imageEditorZoom = 1; imageEditorBaseWidth = 0; imageEditorBaseHeight = 0;
+            const zoomLabel = document.getElementById('imageEditorZoomLabel');
+            if (zoomLabel) zoomLabel.textContent = '1x';
             const overlay = document.getElementById('imageEditorCropOverlay');
             overlay.width = canvas.width; overlay.height = canvas.height;
+            overlay.style.maxWidth = '100%'; overlay.style.width = ''; overlay.style.height = '';
         }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0);
@@ -7793,15 +7976,29 @@ function setupEvents() {
     document.getElementById('loopZoomOutBtn').addEventListener('click', () => setLoopZoom(loopZoomLevel / 2));
     document.getElementById('imageEditorSaveBtn').addEventListener('click', saveImageEdit);
     document.getElementById('imgToolPencilBtn').addEventListener('click', () => setImageEditorTool('pencil'));
+    document.getElementById('imgToolTextBtn').addEventListener('click', () => setImageEditorTool('text'));
     document.getElementById('imgToolCropBtn').addEventListener('click', () => setImageEditorTool('crop'));
     document.getElementById('imgDrawUndoBtn').addEventListener('click', undoImageEdit);
     document.getElementById('imgCropApplyBtn').addEventListener('click', applyImageCrop);
+    document.getElementById('imageEditorZoomInBtn').addEventListener('click', () => applyImageEditorZoom(imageEditorZoom * 1.5));
+    document.getElementById('imageEditorZoomOutBtn').addEventListener('click', () => applyImageEditorZoom(imageEditorZoom / 1.5));
     document.getElementById('imgPencilTools').addEventListener('click', e => {
         const swatch = e.target.closest('.color-swatch[data-img-color]');
         if (!swatch) return;
         imageEditorState.drawColor = swatch.dataset.imgColor;
-        document.querySelectorAll('#imgPencilTools .color-swatch').forEach(s => s.classList.remove('active'));
+        document.querySelectorAll('#imgPencilTools .color-swatch, #imgTextTools .color-swatch').forEach(s => s.classList.remove('active'));
         swatch.classList.add('active');
+        const match = document.querySelector(`#imgTextTools .color-swatch[data-img-color="${swatch.dataset.imgColor}"]`);
+        if (match) match.classList.add('active');
+    });
+    document.getElementById('imgTextTools').addEventListener('click', e => {
+        const swatch = e.target.closest('.color-swatch[data-img-color]');
+        if (!swatch) return;
+        imageEditorState.drawColor = swatch.dataset.imgColor;
+        document.querySelectorAll('#imgPencilTools .color-swatch, #imgTextTools .color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        const match = document.querySelector(`#imgPencilTools .color-swatch[data-img-color="${swatch.dataset.imgColor}"]`);
+        if (match) match.classList.add('active');
     });
     document.getElementById('notesSearchInput').addEventListener('input', e => renderNotesList(e.target.value));
     document.getElementById('notesList').addEventListener('click', e => {
