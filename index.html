@@ -990,7 +990,6 @@ tailwind.config = {
             <button type="button" id="imgCropApplyBtn" class="px-2.5 py-1 rounded-md bg-[#2dd4bf]/15 text-[#2dd4bf] text-xs border border-[#2dd4bf]/30 hover:bg-[#2dd4bf]/25 transition-colors">Apply Crop</button>
         </div>
     </div>
-    <div id="imageEditorDebugReadout" class="flex-shrink-0 px-3 py-1.5 bg-red-500/10 border-b border-red-500/30 text-[11px] font-mono text-red-300"></div>
     <div class="flex-1 overflow-hidden flex items-center justify-center bg-[#0a0a0c] p-2" id="imageEditorCanvasWrap">
         <div class="relative" id="imageEditorCanvasStack" style="transform-origin:0 0;">
             <canvas id="imageEditorCanvas" style="touch-action:none; max-width:100%; display:block;"></canvas>
@@ -5232,7 +5231,6 @@ function setupImageEditorGestures() {
             x: (mid.x - rect.left) / imageEditorZoom,
             y: (mid.y - rect.top) / imageEditorZoom,
         };
-        updateImageEditorDebugReadout();
     }
 
     function endGesture() {
@@ -5241,15 +5239,8 @@ function setupImageEditorGestures() {
         cropStart = null;
         panStart = null;
         moveTextStart = null;
-        updateImageEditorDebugReadout();
     }
 
-    function updateImageEditorDebugReadout() {
-        const el = document.getElementById('imageEditorDebugReadout');
-        if (!el) return;
-        const rect = canvas.getBoundingClientRect();
-        el.textContent = `tool=${imageEditorState.tool} mode=${imageEditorGestureMode} pointers=${imageEditorPointers.size} zoom=${imageEditorZoom.toFixed(2)} pan=${Math.round(imageEditorPanX)},${Math.round(imageEditorPanY)} canvasCSS=${Math.round(rect.width)}x${Math.round(rect.height)} canvasRes=${canvas.width}x${canvas.height}`;
-    }
 
     // Belt-and-suspenders safety net: a window-level, capture-phase listener that cleans up
     // a pointer from tracking no matter what element its pointerup/pointercancel actually
@@ -5272,7 +5263,6 @@ function setupImageEditorGestures() {
     window.addEventListener('pointercancel', imageEditorGlobalCleanupHandler, true);
 
     canvas.addEventListener('pointerdown', e => {
-        updateImageEditorDebugReadout();
         if (imageEditorGestureMode === null && imageEditorPointers.size > 0 && !imageEditorPointers.has(e.pointerId)) {
             // No gesture is currently considered active, so anything still sitting in the
             // tracker is definitely stale — a genuinely active gesture would have a mode set.
@@ -5317,7 +5307,6 @@ function setupImageEditorGestures() {
     });
 
     canvas.addEventListener('pointermove', e => {
-        updateImageEditorDebugReadout();
         if (imageEditorPointers.has(e.pointerId)) imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (imageEditorGestureMode === 'pinch') {
             if (imageEditorPointers.size < 2) return;
@@ -5415,7 +5404,6 @@ function setupImageEditorGestures() {
     }
     overlay.addEventListener('pointerup', onOverlayEnd);
     overlay.addEventListener('pointercancel', onOverlayEnd);
-    updateImageEditorDebugReadout();
 }
 
 // ===== Text layers (stay editable — move/edit/delete — until the image is saved) =====
