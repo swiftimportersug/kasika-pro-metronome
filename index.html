@@ -5131,6 +5131,7 @@ function setImageEditorCanvasSize(zoom) {
     const canvas = document.getElementById('imageEditorCanvas');
     const overlay = document.getElementById('imageEditorCropOverlay');
     const textLayerCanvas = document.getElementById('imageEditorTextLayerCanvas');
+    const wrap = document.getElementById('imageEditorCanvasWrap');
     canvas.style.maxWidth = 'none';
     canvas.style.width = (imageEditorBaseWidth * zoom) + 'px';
     canvas.style.height = (imageEditorBaseHeight * zoom) + 'px';
@@ -5140,6 +5141,16 @@ function setImageEditorCanvasSize(zoom) {
     textLayerCanvas.style.maxWidth = 'none';
     textLayerCanvas.style.width = canvas.style.width;
     textLayerCanvas.style.height = canvas.style.height;
+    // Flexbox's justify-content:center can make part of an overflowing scrollable child
+    // unreachable via scroll — a well-known flex+overflow quirk. Once the canvas is
+    // actually larger than its container, switch to plain block layout so scrolling/
+    // panning/touching any part of the zoomed image works predictably; restore centering
+    // once back at 1x where there's no overflow to worry about.
+    if (zoom > 1) {
+        wrap.classList.remove('flex', 'items-start', 'justify-center');
+    } else {
+        wrap.classList.add('flex', 'items-start', 'justify-center');
+    }
     const label = document.getElementById('imageEditorZoomLabel');
     if (label) label.textContent = zoom.toFixed(1).replace(/\.0$/, '') + 'x';
 }
@@ -5546,6 +5557,7 @@ function applyImageCrop() {
     imageEditorState.cropRect = null;
     canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
     imageEditorZoom = 1; imageEditorBaseWidth = 0; imageEditorBaseHeight = 0;
+    document.getElementById('imageEditorCanvasWrap').classList.add('flex', 'items-start', 'justify-center');
     const zoomLabel = document.getElementById('imageEditorZoomLabel');
     if (zoomLabel) zoomLabel.textContent = '1x';
     const overlay = document.getElementById('imageEditorCropOverlay');
@@ -5577,6 +5589,7 @@ function undoImageEdit() {
         canvas.width = snapshot.w; canvas.height = snapshot.h;
         canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
         imageEditorZoom = 1; imageEditorBaseWidth = 0; imageEditorBaseHeight = 0;
+        document.getElementById('imageEditorCanvasWrap').classList.add('flex', 'items-start', 'justify-center');
         const zoomLabel = document.getElementById('imageEditorZoomLabel');
         if (zoomLabel) zoomLabel.textContent = '1x';
         const overlay = document.getElementById('imageEditorCropOverlay');
