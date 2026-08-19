@@ -5079,6 +5079,7 @@ async function openImageEditor(noteId) {
         imageEditorState = { noteId, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
         imageEditorTextLayers = [];
         imageEditorSelectedTextId = null;
+        imageEditorPendingTextCommit = null;
         resetImageEditorZoomPan();
         setImageEditorTool('pencil');
         setupImageEditorGestures();
@@ -5091,6 +5092,11 @@ async function openImageEditor(noteId) {
 }
 
 function setImageEditorTool(tool) {
+    if (imageEditorPendingTextCommit) {
+        const prevCommit = imageEditorPendingTextCommit;
+        imageEditorPendingTextCommit = null;
+        prevCommit();
+    }
     imageEditorState.tool = tool;
     if (tool !== 'text') deselectImageEditorText();
     document.getElementById('imgToolPencilBtn').classList.toggle('active', tool === 'pencil');
@@ -5333,6 +5339,16 @@ function setupImageEditorGestures() {
             lastDrawPos = imageEditorCanvasPos(canvas, e.clientX, e.clientY);
         } else if (imageEditorState.tool === 'text') {
             e.preventDefault();
+            if (imageEditorPendingTextCommit) {
+                // A text box is currently open — this tap's only job is to close it
+                // (committing whatever was typed), not to also select/move/place something
+                // at wherever the tap happened to land. A separate, subsequent tap is needed
+                // for that.
+                const prevCommit = imageEditorPendingTextCommit;
+                imageEditorPendingTextCommit = null;
+                prevCommit();
+                return;
+            }
             const pos = imageEditorCanvasPos(canvas, e.clientX, e.clientY);
             const hit = hitTestImageEditorText(pos);
             if (hit) {
@@ -5511,10 +5527,19 @@ function deselectImageEditorText() {
     if (tools) { tools.classList.add('hidden'); tools.classList.remove('flex'); }
 }
 
+let imageEditorPendingTextCommit = null; // the commit fn for whatever text edit is currently open, if any
+
 // Places a temporary text input at the tapped spot; committing (Enter, tapping away, or the
 // keyboard's own done button) creates or updates a text layer object, which stays
 // independently selectable/movable/editable/deletable until the image is saved.
 function placeImageEditorText(canvasPos, screenX, screenY, editingLayerId) {
+    // Defensive guard: if some other entry point calls this while a different text edit is
+    // still open, flush it first so its content is never silently discarded.
+    if (imageEditorPendingTextCommit) {
+        const prevCommit = imageEditorPendingTextCommit;
+        imageEditorPendingTextCommit = null;
+        prevCommit();
+    }
     const input = document.getElementById('imageEditorTextInput');
     const stack = document.getElementById('imageEditorCanvasStack');
     const canvas = document.getElementById('imageEditorCanvas');
@@ -5533,6 +5558,7 @@ function placeImageEditorText(canvasPos, screenX, screenY, editingLayerId) {
     input.focus();
 
     function commit() {
+        if (imageEditorPendingTextCommit === commit) imageEditorPendingTextCommit = null;
         const text = input.value.trim();
         input.removeEventListener('blur', commit);
         input.removeEventListener('keydown', onKeydown);
@@ -5552,6 +5578,7 @@ function placeImageEditorText(canvasPos, screenX, screenY, editingLayerId) {
             selectImageEditorText(newLayer.id);
         }
     }
+    imageEditorPendingTextCommit = commit;
     function onKeydown(e) {
         if (e.key === 'Enter') { e.preventDefault(); commit(); }
         else if (e.key === 'Escape') { input.value = editingLayer ? editingLayer.text : ''; commit(); }
