@@ -5227,7 +5227,15 @@ function setupImageEditorGestures() {
     }
 
     canvas.addEventListener('pointerdown', e => {
+        if (imageEditorPointers.size >= 2 && !imageEditorPointers.has(e.pointerId)) {
+            // Self-healing: a pinch should never have more than 2 fingers down. If we're
+            // somehow already tracking 2+ and a third pointerdown arrives, something earlier
+            // never got cleaned up — reset to just this fresh pointer rather than staying
+            // stuck misreading every future gesture as a pinch.
+            imageEditorPointers.clear();
+        }
         imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        canvas.setPointerCapture(e.pointerId); // always capture — critical for pinch too, since the canvas is actively resizing/scrolling under the fingers during a pinch, and without capture a finger's pointerup can land on a different element and never get cleaned up
         if (imageEditorPointers.size >= 2) {
             e.preventDefault();
             startPinch();
@@ -5235,7 +5243,6 @@ function setupImageEditorGestures() {
         }
         if (imageEditorState.tool === 'pencil' || imageEditorState.tool === 'eraser') {
             e.preventDefault();
-            canvas.setPointerCapture(e.pointerId); // keeps the stroke going even if the finger drifts past the canvas edge
             imageEditorGestureMode = 'draw';
             saveImageEditorUndoSnapshot();
             lastDrawPos = imageEditorCanvasPos(canvas, e.clientX, e.clientY);
@@ -5244,7 +5251,6 @@ function setupImageEditorGestures() {
             const pos = imageEditorCanvasPos(canvas, e.clientX, e.clientY);
             const hit = hitTestImageEditorText(pos);
             if (hit) {
-                canvas.setPointerCapture(e.pointerId);
                 imageEditorGestureMode = 'moveText';
                 selectImageEditorText(hit.id);
                 moveTextStart = pos;
@@ -5256,7 +5262,6 @@ function setupImageEditorGestures() {
             }
         } else if (imageEditorState.tool === 'pan') {
             e.preventDefault();
-            canvas.setPointerCapture(e.pointerId);
             imageEditorGestureMode = 'pan';
             panStart = { x: e.clientX, y: e.clientY };
             panStartScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
@@ -5318,7 +5323,11 @@ function setupImageEditorGestures() {
 
     // Crop selection uses the same pointer-tracking map so a second finger cancels it too.
     overlay.addEventListener('pointerdown', e => {
+        if (imageEditorPointers.size >= 2 && !imageEditorPointers.has(e.pointerId)) {
+            imageEditorPointers.clear();
+        }
         imageEditorPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        overlay.setPointerCapture(e.pointerId); // same fix as canvas — always capture so pinch cleanup is reliable
         if (imageEditorPointers.size >= 2) {
             e.preventDefault();
             startPinch();
@@ -5326,7 +5335,6 @@ function setupImageEditorGestures() {
         }
         if (imageEditorState.tool !== 'crop') return;
         e.preventDefault();
-        overlay.setPointerCapture(e.pointerId);
         imageEditorGestureMode = 'crop';
         const p = imageEditorCanvasPos(overlay, e.clientX, e.clientY);
         cropStart = p;
