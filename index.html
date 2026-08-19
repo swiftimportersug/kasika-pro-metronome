@@ -993,6 +993,7 @@ tailwind.config = {
     <div class="flex-1 overflow-hidden flex items-center justify-center bg-[#0a0a0c] p-2" id="imageEditorCanvasWrap">
         <div class="relative" id="imageEditorCanvasStack" style="transform-origin:0 0;">
             <canvas id="imageEditorCanvas" style="touch-action:none; max-width:100%; display:block;"></canvas>
+            <canvas id="imageEditorDrawingLayerCanvas" class="absolute top-0 left-0" style="touch-action:none; max-width:100%; display:block; pointer-events:none;"></canvas>
             <canvas id="imageEditorTextLayerCanvas" class="absolute top-0 left-0" style="touch-action:none; max-width:100%; display:block; pointer-events:none;"></canvas>
             <canvas id="imageEditorCropOverlay" class="absolute top-0 left-0 hidden" style="touch-action:none; max-width:100%; display:block;"></canvas>
             <input type="text" id="imageEditorTextInput" class="hidden absolute bg-black/85 text-white border-2 rounded px-1.5 py-1 font-medium" style="z-index:20; font-size:16px;" placeholder="Type…" autocomplete="off" size="1">
@@ -5031,6 +5032,10 @@ async function openImageEditor(noteId) {
         textLayerCanvas.replaceWith(textLayerCanvas.cloneNode(false));
         textLayerCanvas = document.getElementById('imageEditorTextLayerCanvas');
 
+        let drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
+        drawingLayerCanvas.replaceWith(drawingLayerCanvas.cloneNode(false));
+        drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
+
         const ctx = canvas.getContext('2d');
         const MAX_DIM = 2000; // cap resolution for reasonable performance on large phone photos
         let w = img.naturalWidth, h = img.naturalHeight;
@@ -5043,6 +5048,12 @@ async function openImageEditor(noteId) {
 
         textLayerCanvas.width = w; textLayerCanvas.height = h;
         textLayerCanvas.style.width = ''; textLayerCanvas.style.height = ''; textLayerCanvas.style.maxWidth = '100%';
+
+        // Pencil/eraser strokes live entirely on this separate, transparent layer — never
+        // touching the photo's own pixels — which is what makes the eraser only remove
+        // drawings rather than punching a hole through the photo underneath.
+        drawingLayerCanvas.width = w; drawingLayerCanvas.height = h;
+        drawingLayerCanvas.style.width = ''; drawingLayerCanvas.style.height = ''; drawingLayerCanvas.style.maxWidth = '100%';
 
         imageEditorState = { noteId, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
         imageEditorTextLayers = [];
@@ -5158,7 +5169,13 @@ function updatePinchZoomPan(midX, midY, dist) {
 function saveImageEditorUndoSnapshot() {
     const canvas = document.getElementById('imageEditorCanvas');
     const ctx = canvas.getContext('2d');
-    imageEditorState.undoStack.push({ data: ctx.getImageData(0, 0, canvas.width, canvas.height), w: canvas.width, h: canvas.height });
+    const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
+    const dctx = drawingLayerCanvas.getContext('2d');
+    imageEditorState.undoStack.push({
+        photo: ctx.getImageData(0, 0, canvas.width, canvas.height),
+        drawing: dctx.getImageData(0, 0, drawingLayerCanvas.width, drawingLayerCanvas.height),
+        w: canvas.width, h: canvas.height,
+    });
     if (imageEditorState.undoStack.length > 20) imageEditorState.undoStack.shift();
 }
 
@@ -5173,8 +5190,10 @@ function setupImageEditorGestures() {
     const canvas = document.getElementById('imageEditorCanvas');
     const overlay = document.getElementById('imageEditorCropOverlay');
     const wrap = document.getElementById('imageEditorCanvasWrap');
+    const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
     const ctx = canvas.getContext('2d');
     const octx = overlay.getContext('2d');
+    const dctx = drawingLayerCanvas.getContext('2d');
     imageEditorPointers = new Map();
     imageEditorGestureMode = null;
 
@@ -5184,15 +5203,18 @@ function setupImageEditorGestures() {
     let moveTextStart = null, moveTextLayerStart = null;
 
     function drawSmoothSegment(from, mid, to, erase) {
-        ctx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
-        ctx.strokeStyle = imageEditorState.drawColor;
-        ctx.lineWidth = erase ? Math.max(10, canvas.width / 60) : Math.max(2, canvas.width / 300);
-        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(from.x, from.y);
-        ctx.quadraticCurveTo(mid.x, mid.y, to.x, to.y);
-        ctx.stroke();
-        ctx.globalCompositeOperation = 'source-over';
+        // Pencil AND eraser both operate on the separate drawing layer, never the photo
+        // canvas itself — destination-out here only clears pixels on this transparent
+        // layer, so erasing can never punch through to the photo underneath.
+        dctx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+        dctx.strokeStyle = imageEditorState.drawColor;
+        dctx.lineWidth = erase ? Math.max(10, canvas.width / 60) : Math.max(2, canvas.width / 300);
+        dctx.lineCap = 'round'; dctx.lineJoin = 'round';
+        dctx.beginPath();
+        dctx.moveTo(from.x, from.y);
+        dctx.quadraticCurveTo(mid.x, mid.y, to.x, to.y);
+        dctx.stroke();
+        dctx.globalCompositeOperation = 'source-over';
     }
 
     function drawCropOverlay() {
@@ -5523,10 +5545,16 @@ function applyImageCrop() {
     saveImageEditorUndoSnapshot();
     const canvas = document.getElementById('imageEditorCanvas');
     const ctx = canvas.getContext('2d');
+    const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
+    const dctx = drawingLayerCanvas.getContext('2d');
     const x = Math.round(rect.x), y = Math.round(rect.y), w = Math.round(rect.w), h = Math.round(rect.h);
     const cropped = ctx.getImageData(x, y, w, h);
+    const croppedDrawing = dctx.getImageData(x, y, w, h);
     canvas.width = w; canvas.height = h;
     ctx.putImageData(cropped, 0, 0);
+    drawingLayerCanvas.width = w; drawingLayerCanvas.height = h;
+    dctx.putImageData(croppedDrawing, 0, 0);
+    drawingLayerCanvas.style.maxWidth = '100%'; drawingLayerCanvas.style.width = ''; drawingLayerCanvas.style.height = '';
     imageEditorState.cropRect = null;
     resetImageEditorZoomPan();
     const overlay = document.getElementById('imageEditorCropOverlay');
@@ -5554,15 +5582,20 @@ function undoImageEdit() {
     const snapshot = imageEditorState.undoStack.pop();
     const canvas = document.getElementById('imageEditorCanvas');
     const ctx = canvas.getContext('2d');
+    const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
+    const dctx = drawingLayerCanvas.getContext('2d');
     if (canvas.width !== snapshot.w || canvas.height !== snapshot.h) {
         canvas.width = snapshot.w; canvas.height = snapshot.h;
         canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
+        drawingLayerCanvas.width = snapshot.w; drawingLayerCanvas.height = snapshot.h;
+        drawingLayerCanvas.style.maxWidth = '100%'; drawingLayerCanvas.style.width = ''; drawingLayerCanvas.style.height = '';
         resetImageEditorZoomPan();
         const overlay = document.getElementById('imageEditorCropOverlay');
         overlay.width = canvas.width; overlay.height = canvas.height;
         overlay.style.maxWidth = '100%'; overlay.style.width = ''; overlay.style.height = '';
     }
-    ctx.putImageData(snapshot.data, 0, 0);
+    ctx.putImageData(snapshot.photo, 0, 0);
+    dctx.putImageData(snapshot.drawing, 0, 0);
 }
 
 async function saveImageEdit() {
@@ -5570,8 +5603,11 @@ async function saveImageEdit() {
     if (!note) return;
     const canvas = document.getElementById('imageEditorCanvas');
     const ctx = canvas.getContext('2d');
-    // Bake any remaining text layers permanently into the pixels at save time — they stay
-    // independently editable objects right up until this point.
+    // Bake the drawing layer (pencil/eraser) and any remaining text layers permanently into
+    // the photo's pixels at save time — they stay independently editable/erasable right up
+    // until this point, kept as separate layers precisely so erasing never touches the photo.
+    const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
+    ctx.drawImage(drawingLayerCanvas, 0, 0);
     deselectImageEditorText();
     for (const layer of imageEditorTextLayers) {
         ctx.font = textLayerFont(layer);
