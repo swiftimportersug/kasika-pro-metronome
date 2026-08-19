@@ -991,8 +991,8 @@ tailwind.config = {
         </div>
     </div>
     <div id="imageEditorDebugReadout" class="flex-shrink-0 px-3 py-1.5 bg-red-500/10 border-b border-red-500/30 text-[11px] font-mono text-red-300"></div>
-    <div class="flex-1 overflow-auto flex items-start justify-center bg-[#0a0a0c] p-2" id="imageEditorCanvasWrap">
-        <div class="relative" id="imageEditorCanvasStack">
+    <div class="flex-1 overflow-hidden flex items-center justify-center bg-[#0a0a0c] p-2" id="imageEditorCanvasWrap">
+        <div class="relative" id="imageEditorCanvasStack" style="transform-origin:0 0;">
             <canvas id="imageEditorCanvas" style="touch-action:none; max-width:100%; display:block;"></canvas>
             <canvas id="imageEditorTextLayerCanvas" class="absolute top-0 left-0" style="touch-action:none; max-width:100%; display:block; pointer-events:none;"></canvas>
             <canvas id="imageEditorCropOverlay" class="absolute top-0 left-0 hidden" style="touch-action:none; max-width:100%; display:block;"></canvas>
@@ -5048,9 +5048,7 @@ async function openImageEditor(noteId) {
         imageEditorState = { noteId, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
         imageEditorTextLayers = [];
         imageEditorSelectedTextId = null;
-        imageEditorZoom = 1;
-        imageEditorBaseWidth = 0;
-        imageEditorBaseHeight = 0;
+        resetImageEditorZoomPan();
         setImageEditorTool('pencil');
         setupImageEditorGestures();
 
@@ -5090,69 +5088,54 @@ function setImageEditorTool(tool) {
     }
 }
 
-let imageEditorZoom = 1, imageEditorBaseWidth = 0, imageEditorBaseHeight = 0;
+let imageEditorZoom = 1, imageEditorPanX = 0, imageEditorPanY = 0;
 let imageEditorPointers = new Map(); // pointerId -> {x, y} in screen coordinates
 let imageEditorGestureMode = null; // null | 'draw' | 'crop' | 'pinch' | 'pan' | 'moveText'
 let imageEditorPinchStartDist = 0, imageEditorPinchStartZoom = 1;
-let imageEditorPinchStartMid = null, imageEditorPinchStartScroll = null;
+let imageEditorPinchStartOrigin = null, imageEditorPinchStartLocal = null;
 
 function imageEditorCanvasPos(canvas, clientX, clientY) {
-    const rect = canvas.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect(); // already fully reflects the current CSS transform
     const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
     return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
 }
 
-// CSS-only zoom (canvas's own pixel resolution never changes) — the canvas sits inside an
-// already-scrollable container, so this gives both zoom and pan for free, and pointer
-// coordinate math above already accounts for the current CSS size vs internal resolution.
-// Called with no anchor for the +/- buttons (zooms from the current view center); pinch
-// gestures instead call updatePinchZoomPan() below, which keeps the pinch point fixed.
-function applyImageEditorZoom(zoom) {
-    const wrap = document.getElementById('imageEditorCanvasWrap');
-    const canvas = document.getElementById('imageEditorCanvas');
-    if (!imageEditorBaseWidth) {
-        const rect = canvas.getBoundingClientRect();
-        imageEditorBaseWidth = rect.width;
-        imageEditorBaseHeight = rect.height;
-    }
-    // Anchor at the current center of the visible scroll area, so button-zoom feels natural too.
-    const centerX = wrap.scrollLeft + wrap.clientWidth / 2;
-    const centerY = wrap.scrollTop + wrap.clientHeight / 2;
-    const oldZoom = imageEditorZoom;
-    const newZoom = Math.max(1, Math.min(6, zoom));
-    setImageEditorCanvasSize(newZoom);
-    const ratio = newZoom / oldZoom;
-    wrap.scrollLeft = centerX * ratio - wrap.clientWidth / 2;
-    wrap.scrollTop = centerY * ratio - wrap.clientHeight / 2;
+// A single CSS transform on the whole canvas stack handles zoom AND pan together — no
+// resizing individual canvases, no native scrolling, so there's nothing for flexbox
+// centering or scrollable-overflow quirks to interfere with. transform-origin:0 0 (set in
+// the HTML) makes the anchor math below straightforward.
+function applyImageEditorTransform() {
+    const stack = document.getElementById('imageEditorCanvasStack');
+    stack.style.transform = `translate(${imageEditorPanX}px, ${imageEditorPanY}px) scale(${imageEditorZoom})`;
+    const label = document.getElementById('imageEditorZoomLabel');
+    if (label) label.textContent = imageEditorZoom.toFixed(1).replace(/\.0$/, '') + 'x';
 }
 
-function setImageEditorCanvasSize(zoom) {
-    imageEditorZoom = zoom;
-    const canvas = document.getElementById('imageEditorCanvas');
-    const overlay = document.getElementById('imageEditorCropOverlay');
-    const textLayerCanvas = document.getElementById('imageEditorTextLayerCanvas');
+function resetImageEditorZoomPan() {
+    imageEditorZoom = 1; imageEditorPanX = 0; imageEditorPanY = 0;
+    applyImageEditorTransform();
+}
+
+// Keeps the content under a given screen point visually fixed while zoom changes —
+// used by both the +/- buttons (anchored at the wrap's center) and pinch (anchored at the
+// live pinch midpoint).
+function zoomAnchoredAt(newZoom, anchorClientX, anchorClientY) {
+    const stack = document.getElementById('imageEditorCanvasStack');
+    const rectBefore = stack.getBoundingClientRect();
+    const localX = (anchorClientX - rectBefore.left) / imageEditorZoom;
+    const localY = (anchorClientY - rectBefore.top) / imageEditorZoom;
+    imageEditorZoom = Math.max(1, Math.min(6, newZoom));
+    // Solve for the pan that keeps (localX, localY) under the same screen point.
+    const rectOrigin = { left: rectBefore.left - imageEditorPanX, top: rectBefore.top - imageEditorPanY };
+    imageEditorPanX = anchorClientX - rectOrigin.left - localX * imageEditorZoom;
+    imageEditorPanY = anchorClientY - rectOrigin.top - localY * imageEditorZoom;
+    applyImageEditorTransform();
+}
+
+function applyImageEditorZoom(zoom) {
     const wrap = document.getElementById('imageEditorCanvasWrap');
-    canvas.style.maxWidth = 'none';
-    canvas.style.width = (imageEditorBaseWidth * zoom) + 'px';
-    canvas.style.height = (imageEditorBaseHeight * zoom) + 'px';
-    overlay.style.maxWidth = 'none';
-    overlay.style.width = canvas.style.width;
-    overlay.style.height = canvas.style.height;
-    textLayerCanvas.style.maxWidth = 'none';
-    textLayerCanvas.style.width = canvas.style.width;
-    textLayerCanvas.style.height = canvas.style.height;
-    // Flexbox's justify-content:center can make part of an overflowing scrollable child
-    // unreachable via scroll — a well-known flex+overflow quirk. Once the canvas is
-    // actually larger than its container, switch to plain block layout so scrolling/
-    // panning/touching any part of the zoomed image works predictably; restore centering
-    // once back at 1x where there's no overflow to worry about.
-    if (zoom > 1) {
-        wrap.classList.remove('flex', 'items-start', 'justify-center');
-    } else {
-        wrap.classList.add('flex', 'items-start', 'justify-center');
-    }
-    const label = document.getElementById('imageEditorZoomLabel');
-    if (label) label.textContent = zoom.toFixed(1).replace(/\.0$/, '') + 'x';
+    const wrapRect = wrap.getBoundingClientRect();
+    zoomAnchoredAt(zoom, wrapRect.left + wrapRect.width / 2, wrapRect.top + wrapRect.height / 2);
 }
 
 // Anchored pinch-zoom-and-pan together, like a real photo/drawing app: the content under
@@ -5161,22 +5144,11 @@ function setImageEditorCanvasSize(zoom) {
 // reach and work on any specific area of a zoomed-in image, not just zoom from one fixed
 // corner.
 function updatePinchZoomPan(midX, midY, dist) {
-    const wrap = document.getElementById('imageEditorCanvasWrap');
-    const canvas = document.getElementById('imageEditorCanvas');
-    if (!imageEditorBaseWidth) {
-        const rect = canvas.getBoundingClientRect();
-        imageEditorBaseWidth = rect.width;
-        imageEditorBaseHeight = rect.height;
-    }
     const rawZoom = imageEditorPinchStartZoom * (dist / imageEditorPinchStartDist);
-    const zoom = Math.max(1, Math.min(6, rawZoom));
-    setImageEditorCanvasSize(zoom);
-    const wrapRect = wrap.getBoundingClientRect();
-    const effectiveRatio = zoom / imageEditorPinchStartZoom;
-    const contentXAtStart = imageEditorPinchStartScroll.left + (imageEditorPinchStartMid.x - wrapRect.left);
-    const contentYAtStart = imageEditorPinchStartScroll.top + (imageEditorPinchStartMid.y - wrapRect.top);
-    wrap.scrollLeft = contentXAtStart * effectiveRatio - (midX - wrapRect.left);
-    wrap.scrollTop = contentYAtStart * effectiveRatio - (midY - wrapRect.top);
+    imageEditorZoom = Math.max(1, Math.min(6, rawZoom));
+    imageEditorPanX = midX - imageEditorPinchStartOrigin.left - imageEditorPinchStartLocal.x * imageEditorZoom;
+    imageEditorPanY = midY - imageEditorPinchStartOrigin.top - imageEditorPinchStartLocal.y * imageEditorZoom;
+    applyImageEditorTransform();
 }
 
 // Undo snapshots use raw ImageData rather than toDataURL()/PNG-encoded strings — PNG
@@ -5209,7 +5181,7 @@ function setupImageEditorGestures() {
 
     let lastDrawPos = null;
     let cropStart = null, cropRectLive = null;
-    let panStart = null, panStartScroll = null;
+    let panStart = null, panStartValue = null;
     let moveTextStart = null, moveTextLayerStart = null;
 
     function drawSmoothSegment(from, mid, to, erase) {
@@ -5249,8 +5221,18 @@ function setupImageEditorGestures() {
         const { mid, dist } = pinchMidAndDist();
         imageEditorPinchStartDist = dist;
         imageEditorPinchStartZoom = imageEditorZoom;
-        imageEditorPinchStartMid = mid;
-        imageEditorPinchStartScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
+        const stack = document.getElementById('imageEditorCanvasStack');
+        const rect = stack.getBoundingClientRect();
+        // origin = where the stack would render with zero pan — fixed for the whole
+        // gesture, since layout doesn't change mid-pinch (only the transform does).
+        imageEditorPinchStartOrigin = { left: rect.left - imageEditorPanX, top: rect.top - imageEditorPanY };
+        // The content-space point currently under the pinch midpoint — this is the anchor
+        // that stays fixed under the fingers as they move and/or spread apart.
+        imageEditorPinchStartLocal = {
+            x: (mid.x - rect.left) / imageEditorZoom,
+            y: (mid.y - rect.top) / imageEditorZoom,
+        };
+        updateImageEditorDebugReadout();
     }
 
     function endGesture() {
@@ -5266,7 +5248,7 @@ function setupImageEditorGestures() {
         const el = document.getElementById('imageEditorDebugReadout');
         if (!el) return;
         const rect = canvas.getBoundingClientRect();
-        el.textContent = `tool=${imageEditorState.tool} mode=${imageEditorGestureMode} pointers=${imageEditorPointers.size} zoom=${imageEditorZoom.toFixed(2)} canvasCSS=${Math.round(rect.width)}x${Math.round(rect.height)} canvasRes=${canvas.width}x${canvas.height}`;
+        el.textContent = `tool=${imageEditorState.tool} mode=${imageEditorGestureMode} pointers=${imageEditorPointers.size} zoom=${imageEditorZoom.toFixed(2)} pan=${Math.round(imageEditorPanX)},${Math.round(imageEditorPanY)} canvasCSS=${Math.round(rect.width)}x${Math.round(rect.height)} canvasRes=${canvas.width}x${canvas.height}`;
     }
 
     // Belt-and-suspenders safety net: a window-level, capture-phase listener that cleans up
@@ -5330,7 +5312,7 @@ function setupImageEditorGestures() {
             e.preventDefault();
             imageEditorGestureMode = 'pan';
             panStart = { x: e.clientX, y: e.clientY };
-            panStartScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
+            panStartValue = { x: imageEditorPanX, y: imageEditorPanY };
         }
     });
 
@@ -5346,8 +5328,11 @@ function setupImageEditorGestures() {
         }
         if (imageEditorGestureMode === 'pan' && panStart) {
             e.preventDefault();
-            wrap.scrollLeft = panStartScroll.left - (e.clientX - panStart.x);
-            wrap.scrollTop = panStartScroll.top - (e.clientY - panStart.y);
+            // translate() operates in the parent's (untransformed) coordinate space, so a
+            // screen-pixel drag delta maps 1:1 onto panX/panY regardless of zoom level.
+            imageEditorPanX = panStartValue.x + (e.clientX - panStart.x);
+            imageEditorPanY = panStartValue.y + (e.clientY - panStart.y);
+            applyImageEditorTransform();
             return;
         }
         if (imageEditorGestureMode === 'moveText' && moveTextStart) {
@@ -5555,11 +5540,7 @@ function applyImageCrop() {
     canvas.width = w; canvas.height = h;
     ctx.putImageData(cropped, 0, 0);
     imageEditorState.cropRect = null;
-    canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
-    imageEditorZoom = 1; imageEditorBaseWidth = 0; imageEditorBaseHeight = 0;
-    document.getElementById('imageEditorCanvasWrap').classList.add('flex', 'items-start', 'justify-center');
-    const zoomLabel = document.getElementById('imageEditorZoomLabel');
-    if (zoomLabel) zoomLabel.textContent = '1x';
+    resetImageEditorZoomPan();
     const overlay = document.getElementById('imageEditorCropOverlay');
     overlay.width = w; overlay.height = h;
     overlay.style.maxWidth = '100%';
@@ -5588,10 +5569,7 @@ function undoImageEdit() {
     if (canvas.width !== snapshot.w || canvas.height !== snapshot.h) {
         canvas.width = snapshot.w; canvas.height = snapshot.h;
         canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
-        imageEditorZoom = 1; imageEditorBaseWidth = 0; imageEditorBaseHeight = 0;
-        document.getElementById('imageEditorCanvasWrap').classList.add('flex', 'items-start', 'justify-center');
-        const zoomLabel = document.getElementById('imageEditorZoomLabel');
-        if (zoomLabel) zoomLabel.textContent = '1x';
+        resetImageEditorZoomPan();
         const overlay = document.getElementById('imageEditorCropOverlay');
         overlay.width = canvas.width; overlay.height = canvas.height;
         overlay.style.maxWidth = '100%'; overlay.style.width = ''; overlay.style.height = '';
