@@ -7062,12 +7062,13 @@ function renderModulationRows() {
                         ${colorOptions}
                     </div>
                 </div>
-                <span class="text-[11px] text-zinc-200 font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned yet — add one to name this section'}">${sectionLabel}</span>
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">after</span>
-                <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">After</span>
+                <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars — counted in the PRECEDING section, not in this one">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
                 <input type="number" class="edit-input mod-extra-beats" style="width:36px" min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats →</span>
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats, switch to</span>
+                <span class="text-[11px] text-zinc-200 font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned yet — add one to name this section'}">${sectionLabel}</span>
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">→</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
