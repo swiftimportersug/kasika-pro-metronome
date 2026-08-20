@@ -3513,7 +3513,7 @@ function updateModTestPlayButtons() {
         btn.classList.toggle('mod-test-play-active', isActive);
         btn.title = isActive
             ? 'Currently playing this section — tap to stop'
-            : "Test this section's cue — plays from just before it, so you hear the cue fire naturally at the right moment";
+            : "Test this section's cue — starts a short pre-roll before it, so you hear the cue fire naturally without waiting through the whole preceding section";
     });
 }
 
@@ -6909,6 +6909,8 @@ function syncModulationInputsToState() {
     });
 }
 
+const TEST_PLAY_PREROLL_BARS = 2;
+
 function testPlayFromModulationIndex(modIdx) {
     const songId = document.getElementById('songEditId').value;
     if (!songId) { showToast('Save this song at least once first, so Stop has a start to reset back to'); return; }
@@ -6936,8 +6938,17 @@ function testPlayFromModulationIndex(modIdx) {
     document.getElementById('timeSigSelect').textContent = state.timeSig;
     renderBeatBlocks();
 
+    // Rather than playing the WHOLE preceding section from its own start (a long wait on
+    // anything 8+ bars), jump straight to a short pre-roll window just before the
+    // transition — long enough for the existing lead-time cue to fire and play out
+    // naturally at its normal timing, without waiting through bars that don't actually
+    // matter for testing this specific transition.
+    const beatsPerBar = parseInt(String(target.timeSig).split('/')[0], 10) || 4;
+    const preRollBeats = TEST_PLAY_PREROLL_BARS * beatsPerBar;
+    const startBeatsElapsed = target.totalBeats != null ? Math.max(0, target.totalBeats - preRollBeats) : 0;
+
     state.songMod = {
-        active: true, sections, index: sectionIndex, beatsElapsed: 0,
+        active: true, sections, index: sectionIndex, beatsElapsed: startBeatsElapsed,
         loop: document.getElementById('modulationLoopInput').checked,
         cueFiredForIndex: -1,
     };
@@ -6945,7 +6956,7 @@ function testPlayFromModulationIndex(modIdx) {
     startMetronome();
     updateSongModUI();
     checkCueLeadTime(); // handles a very short preceding section, where lead-time and section-start coincide
-    const label = sectionIndex === 0 ? 'the start' : `just before Section ${sectionIndex + 1}`;
+    const label = sectionIndex === 0 ? 'the start' : `a ${TEST_PLAY_PREROLL_BARS}-bar pre-roll before Section ${sectionIndex + 1}`;
     showToast(`Testing from ${label}`);
 }
 
@@ -7065,7 +7076,7 @@ function renderModulationRows() {
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
                     <i class="fas fa-microphone"></i>
                 </button>
-                <button type="button" class="edit-btn edit-btn-lg mod-test-play flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — plays from just before it, so you hear the cue fire naturally at the right moment"><i class="fas fa-play"></i></button>
+                <button type="button" class="edit-btn edit-btn-lg mod-test-play flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — starts a short pre-roll before it, so you hear the cue fire naturally without waiting through the whole preceding section"><i class="fas fa-play"></i></button>
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                     <i class="fas fa-trash-can"></i>
                 </button>
