@@ -244,6 +244,8 @@ tailwind.config = {
     }
     .text-fmt-btn:hover { color: #fafafa; border-color: #3f3f46; }
     .text-fmt-btn.active { background: rgba(212,168,83,0.15); border-color: #D4A853; color: #D4A853; }
+    .mod-test-play { color: #34D399; }
+    .mod-test-play.mod-test-play-active { color: #F59E0B; background: rgba(245,158,11,0.15); border-color: #F59E0B; }
     #noteTextArea:empty:before { content: attr(data-placeholder); color: #3f3f46; pointer-events: none; }
     .note-item { transition: background 0.15s; cursor: pointer; }
     .note-item:hover { background: rgba(45,212,191,0.06); }
@@ -3448,6 +3450,7 @@ function advanceSongModulationByBeat() {
 }
 
 function updateSongModUI() {
+    updateModTestPlayButtons();
     const el = document.getElementById('songModStatus');
     const text = document.getElementById('songModStatusText');
     if (!el || !text) return;
@@ -3464,6 +3467,24 @@ function updateSongModUI() {
         const remainderStr = beatsToGo ? ` ${beatsToGo} beat${beatsToGo !== 1 ? 's' : ''}` : '';
         text.textContent = `Section ${sm.index + 1}/${sm.sections.length} · ${sec.bpm} BPM · ${sec.timeSig} · next in ${barsToGo} bar${barsToGo !== 1 ? 's' : ''}${remainderStr}`;
     }
+}
+
+// Shows a pause icon on whichever section row is currently playing, and a plain play icon
+// on every other row — a quick visual answer to "which section is active right now" without
+// needing to read the status text. A row's own section index matches state.songMod.index
+// directly (row i's "bars" field defines sections[i]'s length, by construction).
+function updateModTestPlayButtons() {
+    const editingId = document.getElementById('songEditId')?.value;
+    document.querySelectorAll('.mod-test-play').forEach(btn => {
+        const idx = parseInt(btn.dataset.modIdx, 10);
+        const isActive = state.isPlaying && state.songMod.active && state.songMod.index === idx && state.activeSongId === editingId;
+        const icon = btn.querySelector('i');
+        if (icon) icon.className = isActive ? 'fas fa-pause' : 'fas fa-play';
+        btn.classList.toggle('mod-test-play-active', isActive);
+        btn.title = isActive
+            ? 'Currently playing this section — tap to stop'
+            : "Test this section's cue — plays from just before it, so you hear the cue fire naturally at the right moment";
+    });
 }
 
 
@@ -6890,9 +6911,9 @@ function testPlayFromModulationIndex(modIdx) {
         loop: document.getElementById('modulationLoopInput').checked,
         cueFiredForIndex: -1,
     };
-    updateSongModUI();
 
     startMetronome();
+    updateSongModUI();
     checkCueLeadTime(); // handles a very short preceding section, where lead-time and section-start coincide
     const label = sectionIndex === 0 ? 'the start' : `just before Section ${sectionIndex + 1}`;
     showToast(`Testing from ${label}`);
@@ -6942,9 +6963,7 @@ function renderModulationRows() {
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
                     <i class="fas fa-microphone"></i>
                 </button>
-                <button type="button" class="edit-btn edit-btn-lg mod-test-play flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — plays from just before it, so you hear the cue fire naturally at the right moment" style="color:#34D399;">
-                    <i class="fas fa-play"></i>
-                </button>
+                <button type="button" class="edit-btn edit-btn-lg mod-test-play flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — plays from just before it, so you hear the cue fire naturally at the right moment"><i class="fas fa-play"></i></button>
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                     <i class="fas fa-trash-can"></i>
                 </button>
@@ -6981,7 +7000,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('modulationList').addEventListener('click', e => {
         const testBtn = e.target.closest('.mod-test-play');
-        if (testBtn) { testPlayFromModulationIndex(parseInt(testBtn.dataset.modIdx, 10)); return; }
+        if (testBtn) {
+            const idx = parseInt(testBtn.dataset.modIdx, 10);
+            const alreadyActive = state.isPlaying && state.songMod.active && state.songMod.index === idx;
+            if (alreadyActive) stopMetronome();
+            else testPlayFromModulationIndex(idx);
+            return;
+        }
         const colorSwatch = e.target.closest('.mod-color-swatch');
         if (colorSwatch) {
             const idx = colorSwatch.dataset.modIdx;
@@ -7489,6 +7514,7 @@ function updatePlayBtn() {
         if (icon2) { icon2.className = 'fas fa-play ml-0.5'; btn2.classList.remove('play-active'); btn2.style.borderColor = ''; }
     }
     updateMiniPlayerPlayState();
+    updateModTestPlayButtons();
 }
 
 // ===== MINI PLAYER (play a song while viewing its linked notes/sheet music) =====
