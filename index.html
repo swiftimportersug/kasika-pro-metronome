@@ -6844,12 +6844,27 @@ function nextSectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.leng
 // naturally and audibly in its real position, exactly as it would during a live performance.
 // Uses the current draft state (including unsaved edits), so tweak-then-retest needs no save
 // in between. Stop behaves completely normally — full reset to the song's true start.
+// Reads whatever's currently typed into each row's fields directly from the DOM, even if
+// the field hasn't lost focus yet (their normal sync only happens on blur via a 'change'
+// listener) — this is what makes Test ▶ always reflect exactly what's on screen right now.
+function syncModulationInputsToState() {
+    document.querySelectorAll('#modulationList [data-mod-field]').forEach(field => {
+        const idx = parseInt(field.dataset.modIdx, 10);
+        if (!editingModulations[idx]) return;
+        const f = field.dataset.modField;
+        if (f === 'bars') editingModulations[idx].bars = Math.max(0, Math.min(999, parseInt(field.value, 10) || 0));
+        else if (f === 'extraBeats') editingModulations[idx].extraBeats = Math.max(0, Math.min(15, parseInt(field.value, 10) || 0));
+        else if (f === 'bpm') editingModulations[idx].bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, parseInt(field.value, 10) || MIN_BPM));
+    });
+}
+
 function testPlayFromModulationIndex(modIdx) {
     const songId = document.getElementById('songEditId').value;
     if (!songId) { showToast('Save this song at least once first, so Stop has a start to reset back to'); return; }
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === songId);
     if (!song) return;
+    syncModulationInputsToState();
 
     const draftSong = {
         bpm: parseInt(document.getElementById('songBpmInput').value, 10) || song.bpm,
