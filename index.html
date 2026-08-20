@@ -6837,6 +6837,52 @@ function nextSectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.leng
 // cue for the very first row), not the section this row's own cue introduces. This is exactly
 // the section a musician needs to see named here to know "how long does THIS bit last"
 // without checking a different row.
+// Lets a musician instantly test whether a cue fires at the right moment, without replaying
+// the whole song from the top. Starts playback from the section BEFORE the tapped row —
+// that's deliberate: a row's cue fires as a lead-in warning during the *preceding* section,
+// timed against that section's own bar count, so starting there is what lets the cue fire
+// naturally and audibly in its real position, exactly as it would during a live performance.
+// Uses the current draft state (including unsaved edits), so tweak-then-retest needs no save
+// in between. Stop behaves completely normally — full reset to the song's true start.
+function testPlayFromModulationIndex(modIdx) {
+    const songId = document.getElementById('songEditId').value;
+    if (!songId) { showToast('Save this song at least once first, so Stop has a start to reset back to'); return; }
+    const sl = getActiveSetlist();
+    const song = sl?.songs.find(s => s.id === songId);
+    if (!song) return;
+
+    const draftSong = {
+        bpm: parseInt(document.getElementById('songBpmInput').value, 10) || song.bpm,
+        timeSig: document.getElementById('songTimeSigInput').textContent,
+        beatTones: editingSongBeatTones.slice(),
+        modulations: editingModulations,
+    };
+    const sections = buildSongModSections(draftSong);
+    const sectionIndex = Math.max(0, Math.min(sections.length - 1, modIdx));
+
+    if (state.isPlaying) stopMetronome(); // jump straight to a different section without needing a separate stop tap first
+    state.activeSongId = songId; // so Stop's existing full-reset logic targets this song correctly
+
+    const target = sections[sectionIndex];
+    state.bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, target.bpm));
+    state.timeSig = target.timeSig;
+    state.beatTones = target.beatTones.slice();
+    document.getElementById('timeSigSelect').textContent = state.timeSig;
+    renderBeatBlocks();
+
+    state.songMod = {
+        active: true, sections, index: sectionIndex, beatsElapsed: 0,
+        loop: document.getElementById('modulationLoopInput').checked,
+        cueFiredForIndex: -1,
+    };
+    updateSongModUI();
+
+    startMetronome();
+    checkCueLeadTime(); // handles a very short preceding section, where lead-time and section-start coincide
+    const label = sectionIndex === 0 ? 'the start' : `just before Section ${sectionIndex + 1}`;
+    showToast(`Testing from ${label}`);
+}
+
 function renderModulationRows() {
     const list = document.getElementById('modulationList');
     const loopRow = document.getElementById('modulationLoopRow');
@@ -6881,6 +6927,9 @@ function renderModulationRows() {
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
                     <i class="fas fa-microphone"></i>
                 </button>
+                <button type="button" class="edit-btn edit-btn-lg mod-test-play flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — plays from just before it, so you hear the cue fire naturally at the right moment" style="color:#34D399;">
+                    <i class="fas fa-play"></i>
+                </button>
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                     <i class="fas fa-trash-can"></i>
                 </button>
@@ -6916,6 +6965,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.mod-color-picker.grid').forEach(p => { p.classList.add('hidden'); p.classList.remove('grid'); });
     });
     document.getElementById('modulationList').addEventListener('click', e => {
+        const testBtn = e.target.closest('.mod-test-play');
+        if (testBtn) { testPlayFromModulationIndex(parseInt(testBtn.dataset.modIdx, 10)); return; }
         const colorSwatch = e.target.closest('.mod-color-swatch');
         if (colorSwatch) {
             const idx = colorSwatch.dataset.modIdx;
