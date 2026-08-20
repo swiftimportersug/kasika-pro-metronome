@@ -1097,6 +1097,13 @@ tailwind.config = {
                 </div>
             </div>
             <div id="baseRehearsalPauseMarkerSlot"></div>
+            <div id="songIntroLengthRow" class="hidden items-center gap-1.5 flex-wrap bg-s3/40 border border-brd/30 rounded-lg px-2.5 py-2">
+                <span class="text-[11px] text-zinc-400 flex-shrink-0">This section (before the first change) lasts</span>
+                <input type="number" id="songIntroBarsInput" class="edit-input" style="width:48px" min="0" max="999" title="Whole bars">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
+                <input type="number" id="songIntroExtraBeatsInput" class="edit-input" style="width:40px" min="0" max="15" title="Extra beats, for fractional bars">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats</span>
+            </div>
             <div>
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Subdivision</label>
                 <select id="songSubdivInput" class="custom-select w-full">
@@ -1418,7 +1425,7 @@ function startRemoteSync(uid) {
         if (snap.metadata.hasPendingWrites) return; // this is an echo of our own write, ignore
         const d = snap.data();
         applyingRemoteUpdate = true;
-        if (d.setlists && !suppressRemoteSetlistApply) state.setlists = d.setlists;
+        if (d.setlists && !suppressRemoteSetlistApply) { state.setlists = d.setlists; migrateAllSongsSectionData(state.setlists); }
         if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
@@ -2115,6 +2122,7 @@ function extractSongSectionStructure(song) {
     return {
         bpm: song.bpm, timeSig: song.timeSig, modulationLoop: !!song.modulationLoop,
         introCue: song.introCue || null,
+        introBars: song.introBars || 0, introExtraBeats: song.introExtraBeats || 0,
         modulations: (song.modulations || []).map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, cue: m.cue || null })),
     };
 }
@@ -2202,6 +2210,7 @@ function buildFollowHostSong(hostSections, ownSong) {
         bpm: hostSections.bpm, timeSig: hostSections.timeSig,
         beatTones: ownSong ? ownSong.beatTones : null,
         modulationLoop: hostSections.modulationLoop,
+        introBars: hostSections.introBars || 0, introExtraBeats: hostSections.introExtraBeats || 0,
         modulations: (hostSections.modulations || []).map((m, i) => {
             const ownM = ownMods[i];
             return {
@@ -3310,15 +3319,57 @@ function updatePracticeUI() {
 }
 
 // ===== SONG MODULATION (per-song tempo / time-sig changes) =====
+// One-time migration for songs saved under the old data model, where each row's bars/
+// extraBeats actually described the section BEFORE it rather than its own labeled section.
+// Shifts every value to the row it actually belongs to, so every existing song plays back
+// with EXACTLY the same timing as before — just with the numbers now living where they
+// visibly appear to. Marked per-song so this only ever runs once.
+function migrateSongSectionData(song) {
+    if (song.sectionDataMigratedV2 || !song.modulations || !song.modulations.length) {
+        song.sectionDataMigratedV2 = true;
+        return;
+    }
+    const mods = song.modulations;
+    const oldBars = mods.map(m => m.bars || 0);
+    const oldExtraBeats = mods.map(m => m.extraBeats || 0);
+    song.introBars = oldBars[0];
+    song.introExtraBeats = oldExtraBeats[0];
+    for (let i = 0; i < mods.length; i++) {
+        if (i < mods.length - 1) {
+            mods[i].bars = oldBars[i + 1];
+            mods[i].extraBeats = oldExtraBeats[i + 1];
+        } else {
+            // This row's bars/extraBeats are now unused (the final section is always
+            // open-ended) — a sensible placeholder rather than leaving stale, confusing data.
+            mods[i].bars = 8;
+            mods[i].extraBeats = 0;
+        }
+    }
+    song.sectionDataMigratedV2 = true;
+}
+
+function migrateAllSongsSectionData(setlists) {
+    (setlists || []).forEach(sl => (sl.songs || []).forEach(song => migrateSongSectionData(song)));
+}
+
+// Each modulation row's bars/extraBeats now describes THAT row's own section (matching its
+// visible label) — e.g. the row labeled "Chorus" directly controls how long Chorus lasts.
+// The base/intro section's own length lives in song.introBars/introExtraBeats, since nothing
+// else owns that number. The very last section always stays open-ended (nothing plays after
+// it, so it has no defined length) — this matches how it's always behaved.
 function buildSongModSections(song) {
     const sections = [{ bpm: song.bpm, timeSig: song.timeSig, totalBeats: null, beatTones: (song.beatTones && song.beatTones.length === 16) ? song.beatTones.slice() : defaultBeatTonesArray(), cue: null }];
     const mods = song.modulations || [];
+    if (mods.length > 0) {
+        const beatsPerBar0 = parseInt(String(song.timeSig).split('/')[0], 10) || 4;
+        sections[0].totalBeats = Math.max(1, (song.introBars || 0) * beatsPerBar0 + (song.introExtraBeats || 0));
+    }
     mods.forEach((m, i) => {
-        // Duration of the section this modulation follows, in the SECTION'S OWN time
-        // signature — supports fractional bars (e.g. "9 bars + 2 beats") via extraBeats.
-        const beatsPerBar = parseInt(String(sections[i].timeSig).split('/')[0], 10) || 4;
-        sections[i].totalBeats = Math.max(1, (m.bars || 0) * beatsPerBar + (m.extraBeats || 0));
         sections.push({ bpm: m.bpm, timeSig: m.timeSig, totalBeats: null, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue || null });
+        if (i < mods.length - 1) {
+            const beatsPerBar = parseInt(String(m.timeSig).split('/')[0], 10) || 4;
+            sections[i + 1].totalBeats = Math.max(1, (m.bars || 0) * beatsPerBar + (m.extraBeats || 0));
+        }
     });
     return sections;
 }
@@ -3950,6 +4001,7 @@ function loadData() {
                 else if (song.subdivision === 'triplet') song.subdivision = 'eighth-triplet';
                 else if (!SUBDIVISIONS[song.subdivision]) song.subdivision = 'quarter';
             }));
+            migrateAllSongsSectionData(state.setlists);
         } else {
             state.setlists = getDefaultData(); state.activeSetlistId = state.setlists[0]?.id; saveData();
         }
@@ -4347,6 +4399,8 @@ function openSongEditModal(id) {
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
     editingModulations = (song.modulations || []).map(m => ({ ...m, beatTones: (m.beatTones && m.beatTones.length === 16) ? m.beatTones.slice() : defaultBeatTonesArray(), cue: m.cue ? { reminderId: m.cue.reminderId || null, reminderName: m.cue.reminderName != null ? m.cue.reminderName : (m.cue.reminderId ? (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null : null), countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } }));
+    document.getElementById('songIntroBarsInput').value = song.introBars || 8;
+    document.getElementById('songIntroExtraBeatsInput').value = song.introExtraBeats || 0;
     expandedModTones = new Set();
     expandedModCues = new Set();
     expandedCountInSettings = new Set();
@@ -6937,6 +6991,8 @@ function testPlayFromModulationIndex(modIdx) {
         bpm: parseInt(document.getElementById('songBpmInput').value, 10) || song.bpm,
         timeSig: document.getElementById('songTimeSigInput').textContent,
         beatTones: editingSongBeatTones.slice(),
+        introBars: parseInt(document.getElementById('songIntroBarsInput').value, 10) || 0,
+        introExtraBeats: parseInt(document.getElementById('songIntroExtraBeatsInput').value, 10) || 0,
         modulations: editingModulations,
     };
     const sections = buildSongModSections(draftSong);
@@ -7010,6 +7066,8 @@ function resumeFromRehearsalPause(sectionIndex) {
         bpm: parseInt(document.getElementById('songBpmInput').value, 10) || song.bpm,
         timeSig: document.getElementById('songTimeSigInput').textContent,
         beatTones: editingSongBeatTones.slice(),
+        introBars: parseInt(document.getElementById('songIntroBarsInput').value, 10) || 0,
+        introExtraBeats: parseInt(document.getElementById('songIntroExtraBeatsInput').value, 10) || 0,
         modulations: editingModulations,
     };
     const sections = buildSongModSections(draftSong);
@@ -7041,14 +7099,17 @@ function resumeFromRehearsalPause(sectionIndex) {
 function renderModulationRows() {
     const list = document.getElementById('modulationList');
     const loopRow = document.getElementById('modulationLoopRow');
+    const introLengthRow = document.getElementById('songIntroLengthRow');
     const hint = document.getElementById('modulationHint');
     if (!editingModulations.length) {
         list.innerHTML = '';
         loopRow.style.display = 'none';
-        hint.textContent = 'The song starts at the BPM / time sig above. Add a change to switch tempo or time signature after a set number of bars.';
+        introLengthRow.classList.add('hidden'); introLengthRow.classList.remove('flex');
+        hint.textContent = 'The song starts at the BPM / time sig above. Add a change, then set how many bars each section lasts.';
         return;
     }
     loopRow.style.display = 'flex';
+    introLengthRow.classList.remove('hidden'); introLengthRow.classList.add('flex');
     hint.textContent = 'Add a reminder phrase to a section to give it a name here.';
     const editingId = document.getElementById('songEditId').value;
     const pausePoint = editingId ? loadRehearsalPausePoints()[editingId] : null;
@@ -7063,6 +7124,7 @@ function renderModulationRows() {
         const hasCue = m.cue && (m.cue.reminderId || m.cue.countIn);
         const assignedReminder = m.cue ? findReminderForCue(m.cue) : null;
         const sectionLabel = assignedReminder ? escHtml(assignedReminder.name) : `Section ${i + 2}`;
+        const isLastRow = i === editingModulations.length - 1;
         const colorOptions = SECTION_COLORS.map(c => `<button type="button" class="mod-color-option w-6 h-6 rounded-full flex-shrink-0" style="background:${c}; border:2px solid ${m.color === c ? '#fafafa' : 'transparent'};" data-mod-idx="${i}" data-color="${c}"></button>`).join('');
         return `
         <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
@@ -7076,13 +7138,12 @@ function renderModulationRows() {
                         ${colorOptions}
                     </div>
                 </div>
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">After</span>
-                <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="Whole bars — counted in the PRECEDING section, not in this one">
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
-                <input type="number" class="edit-input mod-extra-beats" style="width:36px" min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats, switch to</span>
                 <span class="text-[11px] text-zinc-200 font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned yet — add one to name this section'}">${sectionLabel}</span>
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">→</span>
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">${isLastRow ? '(plays until stopped) ·' : '—'}</span>
+                <input type="number" class="edit-input mod-bars" style="width:40px" ${isLastRow ? 'disabled' : ''} min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="${isLastRow ? 'The final section is always open-ended, so it has no set length' : 'Whole bars this section lasts'}">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
+                <input type="number" class="edit-input mod-extra-beats" style="width:36px" ${isLastRow ? 'disabled' : ''} min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
+                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats @</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
                 <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
@@ -8836,6 +8897,8 @@ function setupEvents() {
         document.getElementById('songNameSuggestions').classList.add('hidden');
         document.getElementById('songNameSuggestions').innerHTML = '';
         editingModulations = [];
+        document.getElementById('songIntroBarsInput').value = 8;
+        document.getElementById('songIntroExtraBeatsInput').value = 0;
         expandedModTones = new Set();
         expandedModCues = new Set();
         expandedCountInSettings = new Set();
@@ -8980,6 +9043,9 @@ function setupEvents() {
             notes: document.getElementById('songNotesInput').value.trim(),
             modulations: editingModulations.map(m => ({ bars: m.bars, extraBeats: m.extraBeats || 0, bpm: m.bpm, timeSig: m.timeSig, color: m.color || null, beatTones: (m.beatTones || defaultBeatTonesArray()).slice(), cue: m.cue ? { reminderId: m.cue.reminderId || null, reminderName: m.cue.reminderId ? (m.cue.reminderName || (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null) : null, countIn: !!m.cue.countIn, countInLength: m.cue.countInLength != null ? m.cue.countInLength : null, countInStart: m.cue.countInStart != null ? m.cue.countInStart : 1, reminderVolume: m.cue.reminderVolume != null ? m.cue.reminderVolume : state.cueVolume, countInVolume: m.cue.countInVolume != null ? m.cue.countInVolume : state.cueVolume, reminderPan: m.cue.reminderPan != null ? m.cue.reminderPan : state.cuePan, countInPan: m.cue.countInPan != null ? m.cue.countInPan : state.cuePan, reminderLeadBeats: m.cue.reminderLeadBeats != null ? m.cue.reminderLeadBeats : null } : { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan, reminderLeadBeats: null } })),
             modulationLoop: document.getElementById('modulationLoopInput').checked,
+            introBars: parseInt(document.getElementById('songIntroBarsInput').value, 10) || 0,
+            introExtraBeats: parseInt(document.getElementById('songIntroExtraBeatsInput').value, 10) || 0,
+            sectionDataMigratedV2: true, // freshly saved in the current format — never needs the old->new bars migration
             introCue: {
                 reminderId: editingIntroCue.reminderId || null,
                 reminderName: editingIntroCue.reminderId ? (editingIntroCue.reminderName || (state.cueBank.reminders.find(r => r.id === editingIntroCue.reminderId) || {}).name || null) : null,
