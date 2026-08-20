@@ -1188,7 +1188,6 @@ tailwind.config = {
                 </div>
                 <p class="text-[11px] text-zinc-600 pb-2.5" id="modulationHint">The song starts at the BPM / time sig above. Add a change to switch tempo or time signature after a set number of bars.</p>
             </div>
-                <div id="songModDebugReadout" class="hidden text-[10px] font-mono text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2 py-1.5 mb-1"></div>
                 <div id="modulationList" class="flex flex-col gap-2"></div>
                 <label class="flex items-center gap-2 mt-3 text-[11px] text-zinc-500 select-none" id="modulationLoopRow" style="display:none;">
                     <input type="checkbox" id="modulationLoopInput" style="accent-color:#2dd4bf;">
@@ -3533,7 +3532,6 @@ function advanceSongModulationByBeat() {
 
 function updateSongModUI() {
     updateModTestPlayButtons();
-    updateSongModDebugReadout();
     const el = document.getElementById('songModStatus');
     const text = document.getElementById('songModStatusText');
     if (!el || !text) return;
@@ -3552,17 +3550,7 @@ function updateSongModUI() {
     }
 }
 
-function updateSongModDebugReadout() {
-    const el = document.getElementById('songModDebugReadout');
-    if (!el) return;
-    const songModal = document.getElementById('songModal');
-    if (!songModal || !songModal.classList.contains('active')) { el.classList.add('hidden'); return; }
-    const sm = state.songMod;
-    if (!sm.active || !sm.sections.length) { el.classList.add('hidden'); return; }
-    el.classList.remove('hidden');
-    const sec = sm.sections[sm.index];
-    el.textContent = `sm.index=${sm.index} (of ${sm.sections.length}) beatsElapsed=${sm.beatsElapsed} sectionTotalBeats=${sec?.totalBeats} sectionBpm=${sec?.bpm} state.bpm=${state.bpm} cueFiredForIndex=${sm.cueFiredForIndex}`;
-}
+
 
 // Shows a pause icon on whichever section row is currently playing, and a plain play icon
 // on every other row — a quick visual answer to "which section is active right now" without
