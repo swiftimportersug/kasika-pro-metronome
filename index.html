@@ -153,9 +153,10 @@ tailwind.config = {
         background-repeat: no-repeat; background-position: right 5px center;
     }
     .edit-select:focus { border-color: #D4A853; }
-    .drag-handle { cursor: grab; color: #3f3f46; transition: color 0.15s; user-select: none; -webkit-user-select: none; }
+    .drag-handle { cursor: grab; color: #3f3f46; transition: color 0.15s; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
     .drag-handle:hover { color: #71717a; }
     .drag-handle:active { cursor: grabbing; }
+    .mod-row-shifting { transition: transform 0.18s cubic-bezier(0.2, 0, 0.2, 1); }
     .edit-btn {
         width: 24px; height: 24px; border-radius: 5px; display: flex;
         align-items: center; justify-content: center; transition: all 0.15s;
@@ -7206,8 +7207,8 @@ function renderModulationRows() {
         return `
         <div class="flex flex-col gap-2 bg-s3/50 rounded-lg px-2.5 py-2" style="border: 1px solid color-mix(in srgb, ${m.color} 35%, transparent); border-left: 3px solid ${m.color}; box-shadow: inset 10px 0 18px -14px ${m.color};" data-mod-idx="${i}">
             <div class="flex items-center gap-1.5 flex-wrap">
-                <div class="drag-handle flex-shrink-0 w-6 h-6 rounded-md bg-s2/80 border border-brd/40 flex items-center justify-center" data-mod-grip="${i}" title="Drag to reorder — insert this section between others">
-                    <i class="fas fa-grip-vertical text-[11px]"></i>
+                <div class="drag-handle flex-shrink-0 w-10 h-10 rounded-md bg-s2/80 border border-brd/40 flex items-center justify-center" data-mod-grip="${i}" title="Drag to reorder — insert this section between others">
+                    <i class="fas fa-grip-vertical text-sm"></i>
                 </div>
                 <div class="relative flex-shrink-0">
                     <button type="button" class="mod-color-swatch w-5 h-5 rounded-full border border-white/25" style="background:${m.color};" data-mod-idx="${i}" title="Section color"></button>
@@ -8104,9 +8105,12 @@ function setupCustomDrag() {
 // pointerup, with no re-render happening in between to invalidate the captured indices.
 function setupModulationDrag() {
     const list = document.getElementById('modulationList');
+    const scrollContainer = document.getElementById('songForm');
     let dragClone = null, dragOffsetY = 0, dragStartY = 0, hasMoved = false, dragActive = false;
     let dragOriginalRects = [];
     let dragOriginalIndex = -1, dragTargetIndex = -1;
+    let lastPointerY = 0;
+    let autoScrollSpeed = 0, autoScrollRAF = null;
 
     function getGrip(e) {
         const target = e.target.closest('[data-mod-grip]');
@@ -8131,6 +8135,16 @@ function setupModulationDrag() {
         return clone;
     }
 
+    // Row positions are viewport-relative, so they go stale the moment the container
+    // scrolls (whether from auto-scroll or otherwise) — re-measure whenever that happens.
+    function captureRects() {
+        const rows = Array.from(list.children);
+        dragOriginalRects = rows.map(r => {
+            const rr = r.getBoundingClientRect();
+            return { idx: parseInt(r.dataset.modIdx, 10), top: rr.top, height: rr.height };
+        });
+    }
+
     function onDown(e) {
         const row = getGrip(e);
         if (!row || !list.contains(row)) return;
@@ -8140,17 +8154,18 @@ function setupModulationDrag() {
         dragActive = true;
         dragOffsetY = y - rect.top;
         dragStartY = y;
+        lastPointerY = y;
         hasMoved = false;
         row.style.opacity = '0.3';
         dragClone = makeClone(row);
 
-        const rows = Array.from(list.children);
-        dragOriginalRects = rows.map(r => {
-            const rr = r.getBoundingClientRect();
-            return { idx: parseInt(r.dataset.modIdx, 10), top: rr.top, height: rr.height };
-        });
+        captureRects();
         dragOriginalIndex = parseInt(row.dataset.modIdx, 10);
         dragTargetIndex = dragOriginalIndex;
+
+        // The dragged row's own clone follows the finger directly with no lag — only the
+        // OTHER rows, as they shift to make room, get an animated transition.
+        Array.from(list.children).forEach(r => { if (r !== row) r.classList.add('mod-row-shifting'); });
 
         document.body.style.userSelect = 'none';
         document.body.style.webkitUserSelect = 'none';
@@ -8170,13 +8185,7 @@ function setupModulationDrag() {
         });
     }
 
-    function onMove(e) {
-        if (!dragActive) return;
-        e.preventDefault();
-        const y = getY(e);
-        if (Math.abs(y - dragStartY) > 2) hasMoved = true;
-        if (dragClone) dragClone.style.top = (y - dragOffsetY) + 'px';
-
+    function updateTargetFromY(y) {
         let targetIndex = dragOriginalRects.length;
         for (let i = 0; i < dragOriginalRects.length; i++) {
             const r = dragOriginalRects[i];
@@ -8188,13 +8197,52 @@ function setupModulationDrag() {
         }
     }
 
+    // Auto-scrolls the editor's scrollable form when dragging near its top/bottom edge, so a
+    // drop target that's currently off-screen can still be reached by just holding there —
+    // speed ramps up the closer the finger gets to the very edge.
+    function updateAutoScroll(y) {
+        const rect = scrollContainer.getBoundingClientRect();
+        const EDGE_ZONE = 70, MAX_SPEED = 16;
+        let speed = 0;
+        if (y < rect.top + EDGE_ZONE) speed = -MAX_SPEED * Math.min(1, (rect.top + EDGE_ZONE - y) / EDGE_ZONE);
+        else if (y > rect.bottom - EDGE_ZONE) speed = MAX_SPEED * Math.min(1, (y - (rect.bottom - EDGE_ZONE)) / EDGE_ZONE);
+        autoScrollSpeed = speed;
+        if (speed !== 0 && autoScrollRAF == null) autoScrollRAF = requestAnimationFrame(autoScrollStep);
+    }
+
+    function autoScrollStep() {
+        autoScrollRAF = null;
+        if (!dragActive || autoScrollSpeed === 0) return;
+        const before = scrollContainer.scrollTop;
+        scrollContainer.scrollTop += autoScrollSpeed;
+        if (scrollContainer.scrollTop !== before) {
+            captureRects();
+            updateTargetFromY(lastPointerY);
+        }
+        if (dragActive && autoScrollSpeed !== 0) autoScrollRAF = requestAnimationFrame(autoScrollStep);
+    }
+
+    function onMove(e) {
+        if (!dragActive) return;
+        e.preventDefault();
+        const y = getY(e);
+        lastPointerY = y;
+        if (Math.abs(y - dragStartY) > 2) hasMoved = true;
+        if (dragClone) dragClone.style.top = (y - dragOffsetY) + 'px';
+        updateTargetFromY(y);
+        updateAutoScroll(y);
+    }
+
     function onUp() {
         if (!dragActive) return;
         document.body.style.userSelect = '';
         document.body.style.webkitUserSelect = '';
+        autoScrollSpeed = 0;
+        if (autoScrollRAF) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
         if (hasMoved && dragOriginalIndex !== -1 && dragTargetIndex !== -1) {
             let finalIdx = dragTargetIndex > dragOriginalIndex ? dragTargetIndex - 1 : dragTargetIndex;
             if (finalIdx !== dragOriginalIndex) {
+                pushSongEditUndoSnapshot();
                 const [moved] = editingModulations.splice(dragOriginalIndex, 1);
                 editingModulations.splice(finalIdx, 0, moved);
                 songFormDirty = true;
@@ -8205,7 +8253,7 @@ function setupModulationDrag() {
     }
 
     function cleanup() {
-        Array.from(list.children).forEach(r => { r.style.transform = ''; r.style.opacity = ''; });
+        Array.from(list.children).forEach(r => { r.style.transform = ''; r.style.opacity = ''; r.classList.remove('mod-row-shifting'); });
         if (dragClone) { dragClone.remove(); dragClone = null; }
         dragActive = false;
         hasMoved = false;
