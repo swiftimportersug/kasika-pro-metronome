@@ -1097,6 +1097,12 @@ tailwind.config = {
         </div>
         <form id="songForm" class="flex flex-col gap-4" style="flex:1; overflow-y:auto; padding: 0 28px;">
             <input type="hidden" id="songEditId">
+            <div id="songDraftRecoveryBanner" class="hidden items-center gap-2 flex-wrap bg-[#F472B6]/10 border border-[#F472B6]/30 rounded-lg px-3 py-2.5">
+                <i class="fas fa-clock-rotate-left text-[#F472B6] text-xs flex-shrink-0"></i>
+                <span class="text-[11px] text-zinc-300 flex-1 min-w-[140px]">Found unsaved changes from a previous session that didn't get saved.</span>
+                <button type="button" id="songDraftRestoreBtn" class="px-2.5 py-1.5 rounded-md bg-[#F472B6]/20 text-[#F472B6] text-xs font-semibold border border-[#F472B6]/40 hover:bg-[#F472B6]/30 transition-colors flex-shrink-0">Restore</button>
+                <button type="button" id="songDraftDismissBtn" class="px-2.5 py-1.5 rounded-md bg-s3 text-zinc-500 text-xs border border-brd hover:text-zinc-300 transition-colors flex-shrink-0">Dismiss</button>
+            </div>
             <div>
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Song Name</label>
                 <input type="text" id="songNameInput" class="modal-input" placeholder="e.g. Midnight Blues" required autocomplete="off">
@@ -1213,7 +1219,7 @@ tailwind.config = {
         </form>
         <div class="flex gap-3 flex-shrink-0" style="padding: 14px 28px 20px; box-shadow: 0 -8px 12px -4px rgba(0,0,0,0.3); background:#17171b; border-radius:0 0 14px 14px;">
             <button type="submit" form="songForm" class="flex-1 py-2.5 rounded-xl bg-gold text-surface font-semibold text-sm hover:bg-gold-bright transition-colors">Save</button>
-            <button type="button" onclick="stopLoopPreview(); closeSongModal()" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            <button type="button" onclick="stopLoopPreview(); requestCloseSongModal()" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
         </div>
     </div>
 </div>
@@ -3309,6 +3315,8 @@ function onMeasureComplete() {
         const sl = getActiveSetlist();
         const song = sl?.songs.find(s => s.id === state.activeSongId);
         if (song) startLoopTrack(song, state.nextNoteTime);
+    } else {
+        checkLoopDrift();
     }
     if (state.practice.active) {
         state.practice.barsElapsed++;
@@ -4082,6 +4090,15 @@ function closeSongModal() {
     }
 }
 
+// Every way of attempting to close the editor (Cancel, tapping the backdrop, Escape, or the
+// back button) should route through here — previously only the back button actually checked
+// for unsaved changes, so Cancel/backdrop/Escape could silently discard edits with no warning
+// at all.
+function requestCloseSongModal() {
+    if (songFormDirty) showModal('songUnsavedChangesModal');
+    else closeSongModal();
+}
+
 function openSongModalTracked() {
     songFormDirty = false;
     showModal('songModal');
@@ -4095,6 +4112,7 @@ function finalizeSongSave(eid, d, applyEverywhere, originalName, excludeSetlistI
         const n = applySongUpdateEverywhere(originalName, excludeSetlistId, d);
         if (n) { saveData(); renderSongs(); showToast(`Updated here and in ${n} other place${n === 1 ? '' : 's'}`); }
     }
+    clearSongDraft(eid);
     document.getElementById('songNameSuggestions').classList.add('hidden');
     document.getElementById('songNameSuggestions').innerHTML = '';
     closeSongModal();
@@ -4455,6 +4473,22 @@ function openSongEditModal(id) {
     document.getElementById('modulationLoopInput').checked = !!song.modulationLoop;
     renderModulationRows();
     openSongModalTracked();
+    offerSongDraftRecovery(song.id);
+}
+
+// If a draft was auto-saved from a session that ended unexpectedly (e.g. a back-navigation
+// race that slipped past the usual confirmation), offer to bring those changes back rather
+// than silently losing them.
+function offerSongDraftRecovery(editId) {
+    const banner = document.getElementById('songDraftRecoveryBanner');
+    if (!banner) return;
+    const draft = loadSongDraft(editId);
+    if (!draft || !draft.snapshot) {
+        banner.classList.add('hidden'); banner.classList.remove('flex');
+        return;
+    }
+    banner.classList.remove('hidden'); banner.classList.add('flex');
+    banner.dataset.editId = editId || '';
 }
 
 // ===== VOICE CUE BANK UI =====
@@ -6617,14 +6651,39 @@ function resetSongEditUndoStack() {
     updateSongEditUndoBtnUI();
 }
 
-function updateSongEditUndoBtnUI() {
-    const btn = document.getElementById('songEditUndoBtn');
-    if (btn) btn.disabled = songEditUndoStack.length === 0;
+// A safety net that doesn't depend on perfectly catching every possible way the editor could
+// close unexpectedly (a double back-press racing the browser's own navigation queue can't be
+// fully prevented from JS alone) — instead, changes are quietly mirrored to localStorage as
+// they happen, so even if the modal does vanish unexpectedly, the work is recoverable.
+let songDraftAutosaveTimer = null;
+function draftKeyFor(editId) { return 'kasika-song-draft-' + (editId || '__new__'); }
+
+function scheduleDraftAutosave() {
+    clearTimeout(songDraftAutosaveTimer);
+    songDraftAutosaveTimer = setTimeout(() => {
+        if (!songFormDirty) return;
+        const editId = document.getElementById('songEditId').value;
+        try {
+            localStorage.setItem(draftKeyFor(editId), JSON.stringify({ snapshot: captureSongEditSnapshot(), timestamp: Date.now() }));
+        } catch (err) {}
+    }, 700);
 }
 
-function undoSongEdit() {
-    if (!songEditUndoStack.length) return;
-    const snap = songEditUndoStack.pop();
+function clearSongDraft(editId) {
+    clearTimeout(songDraftAutosaveTimer);
+    try { localStorage.removeItem(draftKeyFor(editId)); } catch (err) {}
+}
+
+function loadSongDraft(editId) {
+    try {
+        const raw = localStorage.getItem(draftKeyFor(editId));
+        return raw ? JSON.parse(raw) : null;
+    } catch (err) { return null; }
+}
+
+// Applies a recovered snapshot to the form/editing-state — shared with undoSongEdit()'s own
+// restore logic, since "recover a draft" and "undo to a prior state" apply state the same way.
+function applySongEditSnapshot(snap) {
     document.getElementById('songNameInput').value = snap.name;
     document.getElementById('songBpmInput').value = snap.bpm;
     document.getElementById('songTimeSigInput').textContent = snap.timeSig;
@@ -6643,6 +6702,17 @@ function undoSongEdit() {
     renderIntroCueUI();
     renderLoopTrackUI();
     updateSongLinkedNoteLabel();
+}
+
+function updateSongEditUndoBtnUI() {
+    const btn = document.getElementById('songEditUndoBtn');
+    if (btn) btn.disabled = songEditUndoStack.length === 0;
+}
+
+function undoSongEdit() {
+    if (!songEditUndoStack.length) return;
+    const snap = songEditUndoStack.pop();
+    applySongEditSnapshot(snap);
     updateSongEditUndoBtnUI();
     songFormDirty = true;
     showToast('Undone');
@@ -7079,14 +7149,22 @@ async function startLoopTrack(song, stageStartTime) {
     const houseStartTime = stageTimeToHouseTime(stageStartTime);
     const actualStart = Math.max(houseStartTime, c.currentTime);
     src.start(actualStart, trimStart);
+    let stopAtStageTime = null;
     if (song.loopTrack.stopAfterBars) {
         const beatsPerBar = parseInt(String(song.timeSig).split('/')[0], 10) || 4;
         const beatDur = 60 / (song.bpm || 120);
         const stopDurationSec = song.loopTrack.stopAfterBars * beatsPerBar * beatDur;
+        stopAtStageTime = stageStartTime + stopDurationSec;
         try { src.stop(actualStart + stopDurationSec); } catch (err) {}
     }
     src.onended = () => { if (state.activeLoopNodes && state.activeLoopNodes.src === src) state.activeLoopNodes = null; };
-    state.activeLoopNodes = { src, g, p };
+    // anchorStageTime/anchorHouseTime record the same real-world instant on each clock — the
+    // reference point periodic drift-checking measures against, since the two contexts run
+    // on genuinely independent clocks that can drift apart over time.
+    state.activeLoopNodes = {
+        src, g, p, song, trimStart, trimEnd,
+        anchorStageTime: stageStartTime, anchorHouseTime: actualStart, stopAtStageTime,
+    };
 }
 
 function stopLoopTrack() {
@@ -7094,6 +7172,84 @@ function stopLoopTrack() {
     try { state.activeLoopNodes.src.stop(); } catch (err) {}
     try { state.activeLoopNodes.src.disconnect(); state.activeLoopNodes.g.disconnect(); state.activeLoopNodes.p.disconnect(); } catch (err) {}
     state.activeLoopNodes = null;
+}
+
+// The house and stage AudioContexts run on genuinely independent clocks, which can drift
+// apart over time even after starting perfectly in sync — especially once each is routed to
+// a different output device. This periodically re-measures the loop's actual position
+// (governed by the house clock) against where it should be (governed by the stage clock,
+// the source of truth for the song's timing) and corrects it with a short crossfade if
+// they've drifted apart, rather than letting the mismatch grow for the rest of the song.
+const LOOP_DRIFT_THRESHOLD_SEC = 0.015; // 15ms — small enough to be inaudible as a correction, large enough to avoid correcting on normal float jitter
+const LOOP_RESYNC_FADE_SEC = 0.02;
+
+function checkLoopDrift() {
+    const node = state.activeLoopNodes;
+    if (!node || !node.song || !state.isPlaying) return;
+    const stageC = state.audioCtx, houseC = state.houseAudioCtx;
+    if (!stageC || !houseC) return;
+    if (node.stopAtStageTime != null && stageC.currentTime >= node.stopAtStageTime - 0.5) return; // about to stop anyway — not worth resyncing
+
+    const loopDur = Math.max(0.05, node.trimEnd - node.trimStart);
+    const elapsedStage = stageC.currentTime - node.anchorStageTime;
+    const expectedPosInLoop = node.trimStart + (((elapsedStage % loopDur) + loopDur) % loopDur);
+    const elapsedHouse = houseC.currentTime - node.anchorHouseTime;
+    const actualPosInLoop = node.trimStart + (((elapsedHouse % loopDur) + loopDur) % loopDur);
+
+    let drift = actualPosInLoop - expectedPosInLoop;
+    if (drift > loopDur / 2) drift -= loopDur; // shortest path around the loop, not a false near-full-cycle reading
+    else if (drift < -loopDur / 2) drift += loopDur;
+
+    if (Math.abs(drift) > LOOP_DRIFT_THRESHOLD_SEC) resyncLoopTrack(expectedPosInLoop);
+}
+
+async function resyncLoopTrack(targetPosInLoop) {
+    const oldNode = state.activeLoopNodes;
+    if (!oldNode || !oldNode.song) return;
+    const song = oldNode.song;
+    const c = state.houseAudioCtx;
+    const buf = await loadCueBuffer(song.loopTrack.key, song.loopTrack.url).catch(() => null);
+    if (!buf || !state.isPlaying || state.activeLoopNodes !== oldNode) return; // playback stopped or another resync already happened while awaiting
+
+    const now = c.currentTime;
+    const startAt = now + LOOP_RESYNC_FADE_SEC;
+
+    // Crossfade out the drifted source rather than a hard stop, so the correction itself is
+    // inaudible as a click.
+    try {
+        oldNode.g.gain.cancelScheduledValues(now);
+        oldNode.g.gain.setValueAtTime(oldNode.g.gain.value, now);
+        oldNode.g.gain.linearRampToValueAtTime(0, startAt);
+        oldNode.src.stop(startAt + 0.01);
+    } catch (err) {}
+
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.loopStart = oldNode.trimStart;
+    src.loopEnd = Math.max(oldNode.trimStart + 0.05, oldNode.trimEnd);
+    const targetVol = Math.max(0, Math.min(1, (song.loopTrack.volume != null ? song.loopTrack.volume : 100) / 100));
+    const g = c.createGain();
+    g.gain.value = 0;
+    const p = c.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, song.loopTrack.pan || 0));
+    src.connect(g); g.connect(p); p.connect(state.houseBus || c.destination);
+    src.start(startAt, targetPosInLoop);
+    g.gain.setValueAtTime(0, startAt);
+    g.gain.linearRampToValueAtTime(targetVol, startAt + LOOP_RESYNC_FADE_SEC);
+
+    if (oldNode.stopAtStageTime != null) {
+        const houseStopTime = stageTimeToHouseTime(oldNode.stopAtStageTime);
+        try { src.stop(Math.max(houseStopTime, startAt)); } catch (err) {}
+    }
+
+    src.onended = () => { if (state.activeLoopNodes && state.activeLoopNodes.src === src) state.activeLoopNodes = null; };
+    // Re-anchor against this instant, freshly measured, for the next drift check.
+    state.activeLoopNodes = {
+        src, g, p, song, trimStart: oldNode.trimStart, trimEnd: oldNode.trimEnd,
+        anchorStageTime: state.audioCtx.currentTime + (startAt - c.currentTime),
+        anchorHouseTime: startAt, stopAtStageTime: oldNode.stopAtStageTime,
+    };
 }
 
 const SECTION_COLORS = ['#D4A853', '#2dd4bf', '#F472B6', '#60A5FA', '#A78BFA', '#FB923C', '#34D399', '#F87171', '#FBBF24', '#818CF8'];
@@ -9153,6 +9309,7 @@ function setupEvents() {
         document.getElementById('modulationLoopInput').checked = false;
         renderModulationRows();
         openSongModalTracked();
+        offerSongDraftRecovery('');
         setTimeout(() => document.getElementById('songNameInput').focus(), 200);
     });
 
@@ -9242,6 +9399,21 @@ function setupEvents() {
         }
     });
 
+    document.getElementById('songDraftRestoreBtn').addEventListener('click', () => {
+        const banner = document.getElementById('songDraftRecoveryBanner');
+        const editId = banner.dataset.editId || '';
+        const draft = loadSongDraft(editId);
+        banner.classList.add('hidden'); banner.classList.remove('flex');
+        if (!draft || !draft.snapshot) return;
+        applySongEditSnapshot(draft.snapshot);
+        songFormDirty = true;
+        showToast('Draft restored');
+    });
+    document.getElementById('songDraftDismissBtn').addEventListener('click', () => {
+        const banner = document.getElementById('songDraftRecoveryBanner');
+        clearSongDraft(banner.dataset.editId || '');
+        banner.classList.add('hidden'); banner.classList.remove('flex');
+    });
     document.getElementById('songEditUndoBtn').addEventListener('click', undoSongEdit);
     document.getElementById('confirmDeleteSectionCancelBtn').addEventListener('click', () => {
         pendingDeleteModIdx = null;
@@ -9269,6 +9441,7 @@ function setupEvents() {
     });
     document.getElementById('songUnsavedDiscardBtn').addEventListener('click', () => {
         hideModal('songUnsavedChangesModal');
+        clearSongDraft(document.getElementById('songEditId').value);
         stopLoopPreview();
         closeSongModal();
     });
@@ -9281,8 +9454,9 @@ function setupEvents() {
             const idx = parseInt(e.target.dataset.pageIdx, 10);
             editingSongPageTurnBars[idx] = Math.max(1, parseInt(e.target.value, 10) || 1);
         }
+        scheduleDraftAutosave();
     });
-    document.getElementById('songForm').addEventListener('change', () => { songFormDirty = true; });
+    document.getElementById('songForm').addEventListener('change', () => { songFormDirty = true; scheduleDraftAutosave(); });
     document.getElementById('songForm').addEventListener('focusin', e => {
         if (!e.target.matches('input, textarea, select')) return;
         const snap = captureSongEditSnapshot();
@@ -9295,7 +9469,7 @@ function setupEvents() {
     });
     document.getElementById('songForm').addEventListener('click', e => {
         const btn = e.target.closest('button');
-        if (btn && btn.type === 'button') songFormDirty = true; // covers add/remove/color-pick/etc — excludes the Save (submit) button
+        if (btn && btn.type === 'button') { songFormDirty = true; scheduleDraftAutosave(); } // covers add/remove/color-pick/etc — excludes the Save (submit) button
     });
     document.getElementById('songForm').addEventListener('submit', e => {
         e.preventDefault();
@@ -9529,7 +9703,7 @@ function setupEvents() {
     document.querySelectorAll('.modal-overlay').forEach(o => {
         o.addEventListener('click', e => {
             if (e.target !== o) return;
-            if (o.id === 'songModal') { stopLoopPreview(); closeSongModal(); return; }
+            if (o.id === 'songModal') { stopLoopPreview(); requestCloseSongModal(); return; }
             hideModal(o.id);
             if (o.id === 'songConflictModal' && currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
         });
@@ -9537,7 +9711,7 @@ function setupEvents() {
     document.addEventListener('keydown', e => {
         if (e.code !== 'Escape') return;
         document.querySelectorAll('.modal-overlay.active').forEach(m => {
-            if (m.id === 'songModal') { stopLoopPreview(); closeSongModal(); return; }
+            if (m.id === 'songModal') { stopLoopPreview(); requestCloseSongModal(); return; }
             hideModal(m.id);
             if (m.id === 'songConflictModal' && currentConflictResolve) { currentConflictResolve('skip'); currentConflictResolve = null; }
         });
