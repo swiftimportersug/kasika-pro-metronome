@@ -166,6 +166,12 @@ tailwind.config = {
     .edit-btn-move:disabled { opacity: 0.15; cursor: default; background: none; }
     .edit-btn-del { color: #52525b; }
     .edit-btn-lg { width: 34px; height: 34px; font-size: 13px; }
+    .mod-action-btn {
+        background: linear-gradient(180deg, #2f2f36, #232328);
+        border: 1px solid rgba(255,255,255,0.06);
+        box-shadow: 0 2px 0 rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+    .mod-action-btn:active { box-shadow: 0 0 0 rgba(0,0,0,0.35), inset 0 1px 3px rgba(0,0,0,0.5); transform: translateY(1px); }
     #headerIconRow::-webkit-scrollbar { display: none; }
     .song-notes-scroll { overflow: hidden; white-space: nowrap; position: relative; }
     .song-notes-marquee-text { display: inline-block; }
@@ -1078,7 +1084,12 @@ tailwind.config = {
 
 <div class="modal-overlay" id="songModal">
     <div class="modal-box" style="max-width:460px; display:flex; flex-direction:column; padding:0; height:90dvh; max-height:90dvh;">
-        <h3 class="font-display font-semibold text-lg text-zinc-100 flex-shrink-0" style="padding: 28px 28px 20px 28px; margin:0;" id="songModalTitle">Add Song</h3>
+        <div class="flex items-center flex-shrink-0" style="padding: 28px 28px 20px 28px;">
+            <h3 class="font-display font-semibold text-lg text-zinc-100 flex-1" style="margin:0;" id="songModalTitle">Add Song</h3>
+            <button type="button" id="songEditUndoBtn" class="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-s3 border border-brd text-zinc-500 hover:text-zinc-200 hover:border-zinc-500 transition-all disabled:opacity-30 disabled:pointer-events-none" title="Undo last change" disabled>
+                <i class="fas fa-rotate-left text-sm"></i>
+            </button>
+        </div>
         <form id="songForm" class="flex flex-col gap-4" style="flex:1; overflow-y:auto; padding: 0 28px;">
             <input type="hidden" id="songEditId">
             <div>
@@ -1208,6 +1219,17 @@ tailwind.config = {
         <p class="text-xs text-zinc-500 mb-4">Choose a note, drawing, image, or PDF to view alongside this song's metronome.</p>
         <div id="songLinkedNoteList" class="flex flex-col gap-1.5 max-h-72 overflow-y-auto mb-4"></div>
         <button type="button" onclick="hideModal('songLinkedNoteModal')" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+    </div>
+</div>
+
+<div class="modal-overlay" id="confirmDeleteSectionModal">
+    <div class="modal-box" style="max-width:340px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-2">Delete this section?</h3>
+        <p class="text-sm text-zinc-400 mb-5">Its bar count, cue, and settings will be removed. You can bring it right back with the Undo button if this was a mistake.</p>
+        <div class="flex gap-3">
+            <button type="button" id="confirmDeleteSectionCancelBtn" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            <button type="button" id="confirmDeleteSectionConfirmBtn" class="flex-1 py-2.5 rounded-xl bg-red-500/20 border border-red-500/40 text-red-400 font-semibold text-sm hover:bg-red-500/30 transition-colors">Delete</button>
+        </div>
     </div>
 </div>
 
@@ -4373,6 +4395,7 @@ function openSongEditModal(id) {
     const sl = getActiveSetlist();
     const song = sl?.songs.find(s => s.id === id);
     if (!song) return;
+    resetSongEditUndoStack();
     document.getElementById('songModalTitle').textContent = 'Edit Song';
     document.getElementById('songEditId').value = song.id;
     document.getElementById('songNameInput').value = song.name;
@@ -6488,6 +6511,72 @@ function renderIntroCueUI() {
 let editingLoopTrack = null;
 let editingSongLinkedNoteId = null;
 
+// ===== Song editor undo — snapshots the full editable state so any change (a field edit, a
+// section added/removed/reordered, a cue tweak) can be stepped back, not just the last
+// keystroke =====
+let songEditUndoStack = [];
+let pendingDeleteModIdx = null;
+
+function captureSongEditSnapshot() {
+    return {
+        name: document.getElementById('songNameInput').value,
+        bpm: document.getElementById('songBpmInput').value,
+        timeSig: document.getElementById('songTimeSigInput').textContent,
+        notes: document.getElementById('songNotesInput').value,
+        introBars: document.getElementById('songIntroBarsInput').value,
+        introExtraBeats: document.getElementById('songIntroExtraBeatsInput').value,
+        modulationLoop: document.getElementById('modulationLoopInput').checked,
+        editingModulations: JSON.parse(JSON.stringify(editingModulations)),
+        editingSongBeatTones: editingSongBeatTones.slice(),
+        editingIntroCue: JSON.parse(JSON.stringify(editingIntroCue)),
+        editingLoopTrack: editingLoopTrack ? JSON.parse(JSON.stringify(editingLoopTrack)) : null,
+        editingSongLinkedNoteId,
+        editingSongPageTurnBars: editingSongPageTurnBars.slice(),
+    };
+}
+
+function pushSongEditUndoSnapshot() {
+    songEditUndoStack.push(captureSongEditSnapshot());
+    if (songEditUndoStack.length > 30) songEditUndoStack.shift();
+    updateSongEditUndoBtnUI();
+}
+
+function resetSongEditUndoStack() {
+    songEditUndoStack = [];
+    updateSongEditUndoBtnUI();
+}
+
+function updateSongEditUndoBtnUI() {
+    const btn = document.getElementById('songEditUndoBtn');
+    if (btn) btn.disabled = songEditUndoStack.length === 0;
+}
+
+function undoSongEdit() {
+    if (!songEditUndoStack.length) return;
+    const snap = songEditUndoStack.pop();
+    document.getElementById('songNameInput').value = snap.name;
+    document.getElementById('songBpmInput').value = snap.bpm;
+    document.getElementById('songTimeSigInput').textContent = snap.timeSig;
+    document.getElementById('songNotesInput').value = snap.notes;
+    document.getElementById('songIntroBarsInput').value = snap.introBars;
+    document.getElementById('songIntroExtraBeatsInput').value = snap.introExtraBeats;
+    document.getElementById('modulationLoopInput').checked = snap.modulationLoop;
+    editingModulations = snap.editingModulations;
+    editingSongBeatTones = snap.editingSongBeatTones;
+    editingIntroCue = snap.editingIntroCue;
+    editingLoopTrack = snap.editingLoopTrack;
+    editingSongLinkedNoteId = snap.editingSongLinkedNoteId;
+    editingSongPageTurnBars = snap.editingSongPageTurnBars;
+    renderModulationRows();
+    renderSongBeatTonesBlocks();
+    renderIntroCueUI();
+    renderLoopTrackUI();
+    updateSongLinkedNoteLabel();
+    updateSongEditUndoBtnUI();
+    songFormDirty = true;
+    showToast('Undone');
+}
+
 function renderLoopTrackHtml() {
     const lt = editingLoopTrack;
     const hasFile = lt && lt.key;
@@ -7115,7 +7204,7 @@ function renderModulationRows() {
         const isLastRow = i === editingModulations.length - 1;
         const colorOptions = SECTION_COLORS.map(c => `<button type="button" class="mod-color-option w-6 h-6 rounded-full flex-shrink-0" style="background:${c}; border:2px solid ${m.color === c ? '#fafafa' : 'transparent'};" data-mod-idx="${i}" data-color="${c}"></button>`).join('');
         return `
-        <div class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2" style="border-left: 3px solid ${m.color};" data-mod-idx="${i}">
+        <div class="flex flex-col gap-2 bg-s3/50 rounded-lg px-2.5 py-2" style="border: 1px solid color-mix(in srgb, ${m.color} 35%, transparent); border-left: 3px solid ${m.color}; box-shadow: inset 10px 0 18px -14px ${m.color};" data-mod-idx="${i}">
             <div class="flex items-center gap-1.5 flex-wrap">
                 <div class="drag-handle flex-shrink-0 w-6 h-6 rounded-md bg-s2/80 border border-brd/40 flex items-center justify-center" data-mod-grip="${i}" title="Drag to reorder — insert this section between others">
                     <i class="fas fa-grip-vertical text-[11px]"></i>
@@ -7134,14 +7223,14 @@ function renderModulationRows() {
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">beats @</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
-                <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-tones-toggle flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
+                <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-tones-toggle mod-action-btn flex-shrink-0" data-mod-idx="${i}" title="Beat tones for this section" style="${expandedModTones.has(i) ? 'color:#2dd4bf;' : ''}">
                     <i class="fas fa-drum"></i>
                 </button>
-                <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-cue-toggle flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
+                <button type="button" class="edit-btn edit-btn-lg edit-btn-move mod-cue-toggle mod-action-btn flex-shrink-0" data-mod-idx="${i}" title="Voice cue for this change" style="${expandedModCues.has(i) || hasCue ? 'color:#F472B6;' : ''}">
                     <i class="fas fa-microphone"></i>
                 </button>
-                <button type="button" class="edit-btn edit-btn-lg mod-test-play flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — starts a short pre-roll before it, so you hear the cue fire naturally without waiting through the whole preceding section"><i class="fas fa-play"></i></button>
-                <button type="button" class="edit-btn edit-btn-lg edit-btn-del mod-remove flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
+                <button type="button" class="edit-btn edit-btn-lg mod-test-play mod-action-btn flex-shrink-0" data-mod-idx="${i}" title="Test this section's cue — starts a short pre-roll before it, so you hear the cue fire naturally without waiting through the whole preceding section"><i class="fas fa-play"></i></button>
+                <button type="button" class="edit-btn edit-btn-lg edit-btn-del mod-remove mod-action-btn flex-shrink-0" data-mod-idx="${i}" title="Remove this change">
                     <i class="fas fa-trash-can"></i>
                 </button>
             </div>
@@ -7161,6 +7250,7 @@ function addModulationRow() {
     const baseBpm = last ? last.bpm : parseInt(document.getElementById('songBpmInput').value, 10) || state.bpm;
     const baseTimeSig = last ? last.timeSig : document.getElementById('songTimeSigInput').textContent;
     const baseTones = last ? (last.beatTones || defaultBeatTonesArray()).slice() : editingSongBeatTones.slice();
+    pushSongEditUndoSnapshot();
     editingModulations.push({ bars: 8, extraBeats: 0, bpm: Math.max(MIN_BPM, Math.min(MAX_BPM, baseBpm)), timeSig: baseTimeSig, beatTones: baseTones, color: nextSectionColor(editingModulations.length), cue: { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan } });
     renderModulationRows();
     requestAnimationFrame(() => {
@@ -7215,12 +7305,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const removeBtn = e.target.closest('.mod-remove');
         if (removeBtn) {
-            const idx = parseInt(removeBtn.dataset.modIdx, 10);
-            editingModulations.splice(idx, 1);
-            expandedModTones = new Set(Array.from(expandedModTones).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
-            expandedModCues = new Set(Array.from(expandedModCues).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
-            expandedCountInSettings = new Set(Array.from(expandedCountInSettings).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
-            renderModulationRows();
+            pendingDeleteModIdx = parseInt(removeBtn.dataset.modIdx, 10);
+            showModal('confirmDeleteSectionModal');
             return;
         }
         const tonesToggle = e.target.closest('.mod-tones-toggle');
@@ -8885,6 +8971,7 @@ function setupEvents() {
         document.getElementById('songNameSuggestions').classList.add('hidden');
         document.getElementById('songNameSuggestions').innerHTML = '';
         editingModulations = [];
+        resetSongEditUndoStack();
         document.getElementById('songIntroBarsInput').value = 8;
         document.getElementById('songIntroExtraBeatsInput').value = 0;
         expandedModTones = new Set();
@@ -8989,6 +9076,24 @@ function setupEvents() {
         }
     });
 
+    document.getElementById('songEditUndoBtn').addEventListener('click', undoSongEdit);
+    document.getElementById('confirmDeleteSectionCancelBtn').addEventListener('click', () => {
+        pendingDeleteModIdx = null;
+        hideModal('confirmDeleteSectionModal');
+    });
+    document.getElementById('confirmDeleteSectionConfirmBtn').addEventListener('click', () => {
+        if (pendingDeleteModIdx === null) return;
+        const idx = pendingDeleteModIdx;
+        pushSongEditUndoSnapshot();
+        editingModulations.splice(idx, 1);
+        expandedModTones = new Set(Array.from(expandedModTones).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
+        expandedModCues = new Set(Array.from(expandedModCues).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
+        expandedCountInSettings = new Set(Array.from(expandedCountInSettings).filter(x => x !== idx).map(x => x > idx ? x - 1 : x));
+        renderModulationRows();
+        songFormDirty = true;
+        pendingDeleteModIdx = null;
+        hideModal('confirmDeleteSectionModal');
+    });
     document.getElementById('songUnsavedSaveBtn').addEventListener('click', () => {
         hideModal('songUnsavedChangesModal');
         // songModalHistoryActive stays true — the save flow's own closeSongModal() call
@@ -9012,6 +9117,16 @@ function setupEvents() {
         }
     });
     document.getElementById('songForm').addEventListener('change', () => { songFormDirty = true; });
+    document.getElementById('songForm').addEventListener('focusin', e => {
+        if (!e.target.matches('input, textarea, select')) return;
+        const snap = captureSongEditSnapshot();
+        const lastSnap = songEditUndoStack[songEditUndoStack.length - 1];
+        if (!lastSnap || JSON.stringify(lastSnap) !== JSON.stringify(snap)) {
+            songEditUndoStack.push(snap);
+            if (songEditUndoStack.length > 30) songEditUndoStack.shift();
+            updateSongEditUndoBtnUI();
+        }
+    });
     document.getElementById('songForm').addEventListener('click', e => {
         const btn = e.target.closest('button');
         if (btn && btn.type === 'button') songFormDirty = true; // covers add/remove/color-pick/etc — excludes the Save (submit) button
