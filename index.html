@@ -42,6 +42,7 @@ tailwind.config = {
 </script>
 <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { background: #09090b; }
     body {
         font-family: 'Space Grotesk', sans-serif;
         background: #09090b;
@@ -507,7 +508,7 @@ tailwind.config = {
         </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto" id="songListContainer">
+    <div class="flex-1 overflow-y-auto" id="songListContainer" style="background:#09090b;">
         <div id="songList"></div>
         <div id="emptyState" class="hidden p-8 text-center">
             <i class="fas fa-music text-zinc-700 text-3xl mb-3"></i>
@@ -1112,13 +1113,6 @@ tailwind.config = {
                 </div>
             </div>
             <div id="baseRehearsalPauseMarkerSlot"></div>
-            <div id="songIntroLengthRow" class="hidden items-center gap-1.5 flex-wrap bg-s3/40 border border-brd/30 rounded-lg px-2.5 py-2">
-                <span class="text-[11px] text-zinc-400 flex-shrink-0">This section (before the first change) lasts</span>
-                <input type="number" id="songIntroBarsInput" class="edit-input" style="width:48px" min="0" max="999" title="Whole bars">
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
-                <input type="number" id="songIntroExtraBeatsInput" class="edit-input" style="width:40px" min="0" max="15" title="Extra beats, for fractional bars">
-                <span class="text-[10px] text-zinc-600 flex-shrink-0">beats</span>
-            </div>
             <div>
                 <label class="text-xs text-zinc-500 uppercase tracking-wider mb-1.5 block">Subdivision</label>
                 <select id="songSubdivInput" class="custom-select w-full">
@@ -1185,6 +1179,13 @@ tailwind.config = {
             <div class="border-t border-brd/50 pt-4">
                 <label class="text-xs text-[#F472B6] uppercase tracking-wider font-semibold block mb-1">Song Intro / Pre-roll</label>
                 <p class="text-[11px] text-zinc-600 mb-2.5">Optional lead-in before the song's actual beat 1 — a reminder phrase, a count-in, or both, each on an exact beat.</p>
+                <div id="songIntroLengthRow" class="hidden items-center gap-1.5 flex-wrap bg-s3/40 border border-brd/30 rounded-lg px-2.5 py-2 mb-2.5">
+                    <span class="text-[11px] text-zinc-400 flex-shrink-0">This section (before the first change) lasts</span>
+                    <input type="number" id="songIntroBarsInput" class="edit-input" style="width:48px" min="0" max="999" title="Whole bars">
+                    <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
+                    <input type="number" id="songIntroExtraBeatsInput" class="edit-input" style="width:40px" min="0" max="15" title="Extra beats, for fractional bars">
+                    <span class="text-[10px] text-zinc-600 flex-shrink-0">beats</span>
+                </div>
                 <div id="introCueContainer" class="flex flex-col gap-2 bg-s3/50 border border-brd/40 rounded-lg px-2.5 py-2.5"></div>
             </div>
 
@@ -4272,10 +4273,21 @@ async function togglePlayback() {
             const reminderBeats = intro.reminderId ? Math.max(1, intro.reminderLeadBeats || 2) : 0;
             const countInBeats = intro.countIn ? Math.max(1, intro.countInLength != null ? intro.countInLength : beatsPerBar) : 0;
             const totalBeats = reminderBeats + countInBeats;
+            const preRollStart = delayedStart;
             delayedStart += totalBeats * beatDur;
             const introForFiring = { bpm: state.bpm, timeSig: state.timeSig, cue: { ...intro, reminderLeadBeats: intro.reminderId ? reminderBeats : null } };
             fireVoiceCue(introForFiring, delayedStart);
-            state.cueDuck = null; // nothing was already playing before the intro — nothing to duck
+            if (intro.metronomeDuringPreRoll) {
+                // Duck (not mute) these clicks under the voice, same as a section-transition
+                // cue already does to the regular metronome — keeps the reminder clearly
+                // audible while still giving a steady beat to hold onto under pressure.
+                state.cueDuck = { start: preRollStart, end: delayedStart + 0.1 };
+                for (let i = 0; i < totalBeats; i++) {
+                    playClick('main', preRollStart + i * beatDur, (i % beatsPerBar) + 1);
+                }
+            } else {
+                state.cueDuck = null; // nothing else is playing before the intro — nothing to duck
+            }
         }
         if (song.loopTrack && song.loopTrack.key) {
             if (song.loopTrack.startMode === 'atBar' && (song.loopTrack.startBar || 1) > 1) {
@@ -4432,6 +4444,7 @@ function openSongEditModal(id) {
         countInStart: song.introCue.countInStart != null ? song.introCue.countInStart : 1,
         countInVolume: song.introCue.countInVolume != null ? song.introCue.countInVolume : state.cueVolume,
         countInPan: song.introCue.countInPan != null ? song.introCue.countInPan : state.cuePan,
+        metronomeDuringPreRoll: song.introCue.metronomeDuringPreRoll != null ? song.introCue.metronomeDuringPreRoll : true,
     } : defaultIntroCue();
     renderIntroCueUI();
     editingLoopTrack = song.loopTrack ? { ...song.loopTrack } : null;
@@ -6360,7 +6373,7 @@ function renderSongSuggestions(query) {
 // ===== SONG MODULATION EDITOR (in Add/Edit Song modal) =====
 let editingModulations = [];
 let editingIntroCue = { reminderId: null, reminderLeadBeats: 2, reminderVolume: 100, reminderPan: 0, countIn: false, countInLength: null, countInStart: 1, countInVolume: 100, countInPan: 0 };
-function defaultIntroCue() { return { reminderId: null, reminderName: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan }; }
+function defaultIntroCue() { return { reminderId: null, reminderName: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan, metronomeDuringPreRoll: true }; }
 let editingSongBeatTones = [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2];
 
 function renderSongBeatTonesBlocks() {
@@ -6529,6 +6542,10 @@ function renderIntroCueHtml() {
             <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0">
                 <input type="checkbox" class="intro-cue-countin" ${ic.countIn ? 'checked' : ''} style="accent-color:#F472B6;">
                 Count-in
+            </label>
+            <label class="flex items-center gap-1.5 text-[11px] text-zinc-500 select-none flex-shrink-0" title="Keeps the beat audible under the reminder/count-in — handy under pressure on stage, when you don't want to lose the tempo while it plays">
+                <input type="checkbox" class="intro-cue-metronome" ${ic.metronomeDuringPreRoll ? 'checked' : ''} style="accent-color:#F472B6;">
+                Metronome during pre-roll
             </label>
             <div class="intro-cue-countin-detail flex items-end gap-3 flex-wrap ${ic.countIn ? 'flex' : 'hidden'}">
                 <div>
@@ -7542,6 +7559,11 @@ document.addEventListener('DOMContentLoaded', () => {
             renderIntroCueUI();
             return;
         }
+        const metronomeBox = e.target.closest('.intro-cue-metronome');
+        if (metronomeBox) {
+            editingIntroCue.metronomeDuringPreRoll = metronomeBox.checked;
+            return;
+        }
         const lengthInput = e.target.closest('.intro-cue-length');
         if (lengthInput) {
             editingIntroCue.countInLength = Math.max(1, Math.min(16, parseInt(lengthInput.value, 10) || 1));
@@ -8021,9 +8043,12 @@ function showToast(msg) {
 // ===== CUSTOM DRAG AND DROP =====
 function setupCustomDrag() {
     const list = document.getElementById('songList');
+    const scrollContainer = document.getElementById('songListContainer');
     let dragClone = null, dragOffsetY = 0, dragStartY = 0, hasMoved = false;
     let dragOriginalRects = []; // snapshot of {id, top, height} taken at drag start, used for stable hit-testing
     let dragOriginalIndex = -1, dragTargetIndex = -1;
+    let lastPointerY = 0;
+    let autoScrollSpeed = 0, autoScrollRAF = null;
 
     function getGrip(e) {
         const target = e.target.closest('[data-grip]');
@@ -8052,6 +8077,16 @@ function setupCustomDrag() {
         return clone;
     }
 
+    // Row positions are viewport-relative, so they go stale the moment the list scrolls
+    // (whether from auto-scroll or otherwise) — re-measure whenever that happens.
+    function captureRects() {
+        const rows = Array.from(list.querySelectorAll('.edit-row'));
+        dragOriginalRects = rows.map(r => {
+            const rr = r.getBoundingClientRect();
+            return { id: r.dataset.songId, top: rr.top, height: rr.height };
+        });
+    }
+
     function onDown(e) {
         const row = getGrip(e);
         if (!row) return;
@@ -8061,17 +8096,18 @@ function setupCustomDrag() {
         state.customDragId = row.dataset.songId;
         dragOffsetY = y - rect.top;
         dragStartY = y;
+        lastPointerY = y;
         hasMoved = false;
         row.classList.add('dragging-row');
         dragClone = makeClone(row);
 
-        const rows = Array.from(list.querySelectorAll('.edit-row'));
-        dragOriginalRects = rows.map(r => {
-            const rr = r.getBoundingClientRect();
-            return { id: r.dataset.songId, top: rr.top, height: rr.height };
-        });
+        captureRects();
         dragOriginalIndex = dragOriginalRects.findIndex(r => r.id === state.customDragId);
         dragTargetIndex = dragOriginalIndex;
+
+        // The dragged row's own clone follows the finger directly with no lag — only the
+        // OTHER rows, as they shift to make room, get an animated transition.
+        list.querySelectorAll('.edit-row').forEach(r => { if (r.dataset.songId !== state.customDragId) r.classList.add('mod-row-shifting'); });
 
         document.body.style.userSelect = 'none';
         document.body.style.webkitUserSelect = 'none';
@@ -8091,17 +8127,7 @@ function setupCustomDrag() {
         });
     }
 
-    function onMove(e) {
-        if (!state.customDragId) return;
-        e.preventDefault();
-        const y = getY(e);
-        if (Math.abs(y - dragStartY) > 2) hasMoved = true;
-        if (dragClone) dragClone.style.top = (y - dragOffsetY) + 'px';
-
-        const listRect = list.getBoundingClientRect();
-        if (y < listRect.top + 12) list.scrollTop -= 8;
-        else if (y > listRect.bottom - 12) list.scrollTop += 8;
-
+    function updateTargetFromY(y) {
         // Find target index using the ORIGINAL (pre-drag) row positions, not live/shifted
         // ones — hit-testing against already-transformed rows would create feedback loops.
         let targetIndex = dragOriginalRects.length;
@@ -8115,10 +8141,49 @@ function setupCustomDrag() {
         }
     }
 
+    // Auto-scrolls the song list when dragging near its top/bottom edge, so a drop target
+    // that's currently off-screen can still be reached by just holding there — this keeps
+    // running every frame via requestAnimationFrame, rather than only updating on new
+    // pointermove events, which is what fixed it stalling out when holding still at the edge.
+    function updateAutoScroll(y) {
+        const rect = scrollContainer.getBoundingClientRect();
+        const EDGE_ZONE = 70, MAX_SPEED = 16;
+        let speed = 0;
+        if (y < rect.top + EDGE_ZONE) speed = -MAX_SPEED * Math.min(1, (rect.top + EDGE_ZONE - y) / EDGE_ZONE);
+        else if (y > rect.bottom - EDGE_ZONE) speed = MAX_SPEED * Math.min(1, (y - (rect.bottom - EDGE_ZONE)) / EDGE_ZONE);
+        autoScrollSpeed = speed;
+        if (speed !== 0 && autoScrollRAF == null) autoScrollRAF = requestAnimationFrame(autoScrollStep);
+    }
+
+    function autoScrollStep() {
+        autoScrollRAF = null;
+        if (!state.customDragId || autoScrollSpeed === 0) return;
+        const before = scrollContainer.scrollTop;
+        scrollContainer.scrollTop += autoScrollSpeed;
+        if (scrollContainer.scrollTop !== before) {
+            captureRects();
+            updateTargetFromY(lastPointerY);
+        }
+        if (state.customDragId && autoScrollSpeed !== 0) autoScrollRAF = requestAnimationFrame(autoScrollStep);
+    }
+
+    function onMove(e) {
+        if (!state.customDragId) return;
+        e.preventDefault();
+        const y = getY(e);
+        lastPointerY = y;
+        if (Math.abs(y - dragStartY) > 2) hasMoved = true;
+        if (dragClone) dragClone.style.top = (y - dragOffsetY) + 'px';
+        updateTargetFromY(y);
+        updateAutoScroll(y);
+    }
+
     function onUp() {
         if (!state.customDragId) return;
         document.body.style.userSelect = '';
         document.body.style.webkitUserSelect = '';
+        autoScrollSpeed = 0;
+        if (autoScrollRAF) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
 
         const sl = getActiveSetlist();
         if (sl && hasMoved && dragOriginalIndex !== -1 && dragTargetIndex !== -1) {
@@ -8135,7 +8200,7 @@ function setupCustomDrag() {
     }
 
     function cleanup() {
-        list.querySelectorAll('.edit-row').forEach(r => { r.style.transform = ''; r.classList.remove('dragging-row'); });
+        list.querySelectorAll('.edit-row').forEach(r => { r.style.transform = ''; r.classList.remove('dragging-row', 'mod-row-shifting'); });
         if (dragClone) { dragClone.remove(); dragClone = null; }
         state.customDragId = null;
         hasMoved = false;
@@ -9261,6 +9326,7 @@ function setupEvents() {
                 countInStart: editingIntroCue.countInStart,
                 countInVolume: editingIntroCue.countInVolume,
                 countInPan: editingIntroCue.countInPan,
+                metronomeDuringPreRoll: !!editingIntroCue.metronomeDuringPreRoll,
             },
             loopTrack: (editingLoopTrack && editingLoopTrack.key) ? {
                 key: editingLoopTrack.key,
