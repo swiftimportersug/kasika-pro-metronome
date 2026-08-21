@@ -7161,10 +7161,16 @@ async function startLoopTrack(song, stageStartTime) {
     // anchorStageTime/anchorHouseTime record the same real-world instant on each clock — the
     // reference point periodic drift-checking measures against, since the two contexts run
     // on genuinely independent clocks that can drift apart over time.
-    state.activeLoopNodes = {
+    const thisNode = {
         src, g, p, song, trimStart, trimEnd,
         anchorStageTime: stageStartTime, anchorHouseTime: actualStart, stopAtStageTime,
     };
+    state.activeLoopNodes = thisNode;
+    // The initial stageTimeToHouseTime conversion itself has some inherent imprecision (two
+    // separate currentTime reads are never perfectly simultaneous) — waiting for the first
+    // per-bar check to catch that could be a couple of seconds on a slower song, so also
+    // check shortly after starting, once the source has actually had a moment to settle.
+    setTimeout(() => { if (state.activeLoopNodes === thisNode) checkLoopDrift(); }, 250);
 }
 
 function stopLoopTrack() {
@@ -7200,19 +7206,31 @@ function checkLoopDrift() {
     if (drift > loopDur / 2) drift -= loopDur; // shortest path around the loop, not a false near-full-cycle reading
     else if (drift < -loopDur / 2) drift += loopDur;
 
-    if (Math.abs(drift) > LOOP_DRIFT_THRESHOLD_SEC) resyncLoopTrack(expectedPosInLoop);
+    if (Math.abs(drift) > LOOP_DRIFT_THRESHOLD_SEC) resyncLoopTrack();
 }
 
-async function resyncLoopTrack(targetPosInLoop) {
+async function resyncLoopTrack() {
     const oldNode = state.activeLoopNodes;
     if (!oldNode || !oldNode.song) return;
     const song = oldNode.song;
     const c = state.houseAudioCtx;
+    const stageC = state.audioCtx;
     const buf = await loadCueBuffer(song.loopTrack.key, song.loopTrack.url).catch(() => null);
     if (!buf || !state.isPlaying || state.activeLoopNodes !== oldNode) return; // playback stopped or another resync already happened while awaiting
 
     const now = c.currentTime;
     const startAt = now + LOOP_RESYNC_FADE_SEC;
+
+    // The critical fix: compute where the loop should be at the moment the NEW source will
+    // actually start playing (startAt, ~20ms in the future for the crossfade) — not at this
+    // instant. Using a position computed now but played 20ms later was silently reintroducing
+    // an error close in size to the drift threshold on every single correction, which is why
+    // the drift never actually settled — it just kept re-triggering.
+    const houseOffsetNow = c.currentTime - stageC.currentTime; // freshly measured, not the stale offset from whenever the loop originally started
+    const startAtStageTime = startAt - houseOffsetNow;
+    const loopDur = Math.max(0.05, oldNode.trimEnd - oldNode.trimStart);
+    const elapsedStageAtStart = startAtStageTime - oldNode.anchorStageTime;
+    const targetPosInLoop = oldNode.trimStart + (((elapsedStageAtStart % loopDur) + loopDur) % loopDur);
 
     // Crossfade out the drifted source rather than a hard stop, so the correction itself is
     // inaudible as a click.
@@ -7247,10 +7265,11 @@ async function resyncLoopTrack(targetPosInLoop) {
     // Re-anchor against this instant, freshly measured, for the next drift check.
     state.activeLoopNodes = {
         src, g, p, song, trimStart: oldNode.trimStart, trimEnd: oldNode.trimEnd,
-        anchorStageTime: state.audioCtx.currentTime + (startAt - c.currentTime),
+        anchorStageTime: startAtStageTime,
         anchorHouseTime: startAt, stopAtStageTime: oldNode.stopAtStageTime,
     };
 }
+
 
 const SECTION_COLORS = ['#D4A853', '#2dd4bf', '#F472B6', '#60A5FA', '#A78BFA', '#FB923C', '#34D399', '#F87171', '#FBBF24', '#818CF8'];
 function nextSectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.length]; }
