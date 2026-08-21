@@ -157,6 +157,12 @@ tailwind.config = {
     .drag-handle:hover { color: #71717a; }
     .drag-handle:active { cursor: grabbing; }
     .mod-row-shifting { transition: transform 0.18s cubic-bezier(0.2, 0, 0.2, 1); }
+    .mod-row-active {
+        background: linear-gradient(180deg, rgba(245,158,11,0.14), rgba(245,158,11,0.04)) !important;
+        box-shadow: 0 6px 16px -6px rgba(245,158,11,0.5), inset 0 1px 0 rgba(255,255,255,0.08), 0 0 0 1px rgba(245,158,11,0.55) !important;
+        transform: translateY(-1px);
+        transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
     .edit-btn {
         width: 24px; height: 24px; border-radius: 5px; display: flex;
         align-items: center; justify-content: center; transition: all 0.15s;
@@ -497,9 +503,6 @@ tailwind.config = {
         <div class="p-3 border-b border-brd/50 hidden flex-col gap-2" id="addSongArea">
             <button id="addSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
                 <i class="fas fa-plus mr-2 text-xs"></i>Add New Song
-            </button>
-            <button id="findExistingSongBtn" class="w-full py-2.5 rounded-xl bg-s3/80 border border-dashed border-brd text-zinc-500 text-sm font-medium hover:border-gold/40 hover:text-gold transition-all">
-                <i class="fas fa-magnifying-glass mr-2 text-xs"></i>Find Existing Song
             </button>
         </div>
     </div>
@@ -3590,6 +3593,8 @@ function updateModTestPlayButtons() {
         btn.title = isActive
             ? 'Currently playing this section — tap to stop'
             : "Test this section's cue — starts a short pre-roll before it, so you hear the cue fire naturally without waiting through the whole preceding section";
+        const row = document.querySelector(`#modulationList > [data-mod-idx="${idx}"]`);
+        if (row) row.classList.toggle('mod-row-active', isActive);
     });
 }
 
@@ -5154,6 +5159,7 @@ function closeAttachmentViewer() { history.back(); }
 // ===== IMAGE EDITOR (pencil annotation + eraser + text layers + crop) =====
 let imageEditorState = { noteId: null, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
 let imageEditorPencilThickness = 4, imageEditorEraserThickness = 20;
+let imageEditorPhotoChangedThisSession = false;
 let imageEditorTextBold = true;
 let imageEditorTextLayers = []; // {id, text, x, y, color, fontSize} — baked into pixels only on Save
 let imageEditorSelectedTextId = null;
@@ -5161,8 +5167,13 @@ let imageEditorSelectedTextId = null;
 async function openImageEditor(noteId) {
     const note = state.notes.find(n => n.id === noteId);
     if (!note || note.fileType !== 'image') { showToast('Editing is currently supported for images only'); return; }
-    const blob = await cueDbGet(note.fileKey).catch(() => null);
+    // Load the pristine original (never has drawings baked into it) if one exists from a
+    // previous editing session — falls back to the main file for a genuinely first-ever
+    // edit, when the photo is still pristine there too.
+    const photoKey = note.originalPhotoFileKey || note.fileKey;
+    const blob = await cueDbGet(photoKey).catch(() => null);
     if (!blob) { showToast('Could not load this image'); return; }
+    const drawingBlob = note.drawingLayerFileKey ? await cueDbGet(note.drawingLayerFileKey).catch(() => null) : null;
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
@@ -5203,14 +5214,23 @@ async function openImageEditor(noteId) {
 
         // Pencil/eraser strokes live entirely on this separate, transparent layer — never
         // touching the photo's own pixels — which is what makes the eraser only remove
-        // drawings rather than punching a hole through the photo underneath.
+        // drawings rather than punching a hole through the photo underneath. Restoring a
+        // previously-saved drawing layer here (rather than always starting blank) is what
+        // makes the eraser able to reach drawings from earlier sessions, not just this one.
         drawingLayerCanvas.width = w; drawingLayerCanvas.height = h;
         drawingLayerCanvas.style.width = ''; drawingLayerCanvas.style.height = ''; drawingLayerCanvas.style.maxWidth = '100%';
+        if (drawingBlob) {
+            const dImg = new Image();
+            dImg.onload = () => { drawingLayerCanvas.getContext('2d').drawImage(dImg, 0, 0, w, h); URL.revokeObjectURL(dUrl); };
+            const dUrl = URL.createObjectURL(drawingBlob);
+            dImg.src = dUrl;
+        }
 
         imageEditorState = { noteId, tool: 'pencil', drawColor: '#D4A853', undoStack: [], cropRect: null };
         imageEditorTextLayers = [];
         imageEditorSelectedTextId = null;
         imageEditorPendingTextCommit = null;
+        imageEditorPhotoChangedThisSession = !note.originalPhotoFileKey; // first-ever edit needs its baseline saved
         resetImageEditorZoomPan();
         setImageEditorTool('pencil');
         setupImageEditorGestures();
@@ -5731,6 +5751,7 @@ function applyImageCrop() {
     const rect = imageEditorState.cropRect;
     if (!rect || rect.w < 5 || rect.h < 5) { showToast('Drag to select an area to crop first'); return; }
     saveImageEditorUndoSnapshot();
+    imageEditorPhotoChangedThisSession = true;
     const canvas = document.getElementById('imageEditorCanvas');
     const ctx = canvas.getContext('2d');
     const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
@@ -5773,6 +5794,7 @@ function undoImageEdit() {
     const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
     const dctx = drawingLayerCanvas.getContext('2d');
     if (canvas.width !== snapshot.w || canvas.height !== snapshot.h) {
+        imageEditorPhotoChangedThisSession = true;
         canvas.width = snapshot.w; canvas.height = snapshot.h;
         canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
         drawingLayerCanvas.width = snapshot.w; drawingLayerCanvas.height = snapshot.h;
@@ -5789,35 +5811,66 @@ function undoImageEdit() {
 async function saveImageEdit() {
     const note = state.notes.find(n => n.id === imageEditorState.noteId);
     if (!note) return;
-    const canvas = document.getElementById('imageEditorCanvas');
-    const ctx = canvas.getContext('2d');
-    // Bake the drawing layer (pencil/eraser) and any remaining text layers permanently into
-    // the photo's pixels at save time — they stay independently editable/erasable right up
-    // until this point, kept as separate layers precisely so erasing never touches the photo.
+    const canvas = document.getElementById('imageEditorCanvas'); // stays pristine (photo only) throughout
     const drawingLayerCanvas = document.getElementById('imageEditorDrawingLayerCanvas');
-    ctx.drawImage(drawingLayerCanvas, 0, 0);
+    const dctx = drawingLayerCanvas.getContext('2d');
+
+    // Bake any remaining text layers onto the DRAWING layer, not the photo — keeps them
+    // erasable/re-editable alongside pencil strokes in future sessions too, rather than
+    // permanently fusing them into the photo's own pixels.
     deselectImageEditorText();
     for (const layer of imageEditorTextLayers) {
-        ctx.font = textLayerFont(layer);
-        ctx.fillStyle = layer.color;
-        ctx.textBaseline = 'top';
-        ctx.fillText(layer.text, layer.x, layer.y);
+        dctx.font = textLayerFont(layer);
+        dctx.fillStyle = layer.color;
+        dctx.textBaseline = 'top';
+        dctx.fillText(layer.text, layer.x, layer.y);
     }
     imageEditorTextLayers = [];
+
+    showToast('Saving…');
     const outputType = note.mimeType && note.mimeType.startsWith('image/') ? note.mimeType : 'image/png';
-    canvas.toBlob(async blob => {
-        if (!blob) { showToast('Could not save this edit'); return; }
-        try {
-            await cueDbPut(note.fileKey, blob);
-            note.updatedAt = Date.now();
-            saveData();
-            showToast('Image saved');
-            closeImageEditor(true);
-        } catch (err) {
-            console.warn('Could not save image edit:', err);
-            showToast('Could not save this edit');
+
+    // Composite photo + drawing onto a separate, temporary canvas for the displayed file —
+    // keeps the actual photo canvas untouched, since it's still needed below as the pristine
+    // "original" on sessions where the photo itself changed (e.g. a crop).
+    const compositeCanvas = document.createElement('canvas');
+    compositeCanvas.width = canvas.width; compositeCanvas.height = canvas.height;
+    const cctx = compositeCanvas.getContext('2d');
+    cctx.drawImage(canvas, 0, 0);
+    cctx.drawImage(drawingLayerCanvas, 0, 0);
+
+    try {
+        const jobs = [
+            new Promise(resolve => drawingLayerCanvas.toBlob(resolve, 'image/png')),
+            new Promise(resolve => compositeCanvas.toBlob(resolve, outputType)),
+        ];
+        // Re-encoding and re-saving the full-resolution photo is the most expensive part of
+        // this whole operation — skip it entirely unless the photo itself actually changed
+        // this session (a crop, or genuinely the first time this image has ever been
+        // edited). On the common "draw a bit more, save again" path, this is skipped, which
+        // is what actually makes repeat saves fast.
+        if (imageEditorPhotoChangedThisSession) jobs.push(new Promise(resolve => canvas.toBlob(resolve, outputType)));
+
+        const [drawingBlob, mainBlob, photoBlob] = await Promise.all(jobs);
+        if (!mainBlob) { showToast('Could not save this edit'); return; }
+
+        const drawingLayerKey = note.drawingLayerFileKey || (note.fileKey + '_drawing');
+        const savePromises = [cueDbPut(drawingLayerKey, drawingBlob), cueDbPut(note.fileKey, mainBlob)];
+        if (photoBlob) {
+            const originalPhotoKey = note.originalPhotoFileKey || (note.fileKey + '_original');
+            savePromises.push(cueDbPut(originalPhotoKey, photoBlob).then(() => { note.originalPhotoFileKey = originalPhotoKey; }));
         }
-    }, outputType);
+        await Promise.all(savePromises);
+        note.drawingLayerFileKey = drawingLayerKey;
+        imageEditorPhotoChangedThisSession = false;
+        note.updatedAt = Date.now();
+        saveData();
+        showToast('Image saved');
+        closeImageEditor(true);
+    } catch (err) {
+        console.warn('Could not save image edit:', err);
+        showToast('Could not save this edit');
+    }
 }
 
 function closeImageEditor(didSave) {
@@ -7686,8 +7739,8 @@ function renderEditMode(container, sl) {
         return `
         <div class="edit-row flex flex-col gap-2 px-3 py-2.5 border-b border-brd/20 ${isActive ? 'edit-row-active' : ''}" data-song-id="${song.id}">
             <div class="flex items-center gap-2">
-                <div class="drag-handle flex-shrink-0" data-grip="${song.id}" title="Drag to reorder">
-                    <i class="fas fa-grip-vertical text-[10px]"></i>
+                <div class="drag-handle flex-shrink-0 w-10 h-10 rounded-md bg-s2/80 border border-brd/40 flex items-center justify-center" data-grip="${song.id}" title="Drag to reorder">
+                    <i class="fas fa-grip-vertical text-sm"></i>
                 </div>
                 <span class="text-[11px] font-mono text-zinc-600 flex-shrink-0 w-5 text-center">${String(idx + 1).padStart(2, '0')}</span>
                 <input type="text" class="edit-input flex-1 min-w-0" value="${escHtml(song.name)}" data-field="name" data-song-id="${song.id}" placeholder="Song name">
@@ -7699,12 +7752,12 @@ function renderEditMode(container, sl) {
                 </button>
             </div>
             <div class="items-center gap-2 pl-7 ${isExpanded ? 'flex' : 'hidden'}">
-                <input type="number" class="edit-input edit-input-bpm" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
-                <button type="button" class="edit-select ts-inline-btn flex-shrink-0" data-song-id="${song.id}" style="width:44px;">${song.timeSig}</button>
-                <select class="edit-select" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
+                <input type="number" class="edit-input edit-input-bpm mod-action-btn" value="${song.bpm}" min="40" max="400" data-field="bpm" data-song-id="${song.id}">
+                <button type="button" class="edit-select ts-inline-btn mod-action-btn flex-shrink-0" data-song-id="${song.id}" style="width:44px;">${song.timeSig}</button>
+                <select class="edit-select mod-action-btn" data-field="subdivision" data-song-id="${song.id}" style="width:60px">
                     ${subOpts.replace(`value="${song.subdivision || 'quarter'}"`, `value="${song.subdivision || 'quarter'}" selected`)}
                 </select>
-                <button class="edit-btn edit-btn-move flex-shrink-0" data-action="edit-advanced" data-song-id="${song.id}" title="Tempo / time-sig modulation &amp; notes" style="${song.modulations && song.modulations.length ? 'color:#2dd4bf;' : ''}">
+                <button class="edit-btn edit-btn-move mod-action-btn flex-shrink-0" data-action="edit-advanced" data-song-id="${song.id}" title="Tempo / time-sig modulation &amp; notes" style="${song.modulations && song.modulations.length ? 'color:#2dd4bf;' : ''}">
                     <i class="fas fa-wave-square"></i>
                 </button>
                 <div class="move-updown-group flex flex-col gap-0.5 flex-shrink-0 ml-auto">
@@ -9357,7 +9410,6 @@ function setupEvents() {
 
     // ---- Search ----
     document.getElementById('searchBtn').addEventListener('click', openSearchModal);
-    document.getElementById('findExistingSongBtn').addEventListener('click', openSearchModal);
     document.getElementById('searchInput').addEventListener('input', e => renderSearchResults(e.target.value));
     document.getElementById('searchResults').addEventListener('click', e => {
         const gotoEl = e.target.closest('[data-goto-setlist]');
