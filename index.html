@@ -7128,9 +7128,9 @@ function renderModulationRows() {
                 </div>
                 <span class="text-[11px] text-zinc-200 font-semibold flex-shrink-0" title="${assignedReminder ? 'Named from this section\'s reminder phrase' : 'No reminder assigned yet — add one to name this section'}">${sectionLabel}</span>
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">${isLastRow ? '(plays until stopped) ·' : '—'}</span>
-                <input type="number" class="edit-input mod-bars" style="width:40px" ${isLastRow ? 'disabled' : ''} min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="${isLastRow ? 'The final section is always open-ended, so it has no set length' : 'Whole bars this section lasts'}">
+                <input type="number" class="edit-input mod-bars" style="width:40px" min="0" max="999" value="${m.bars}" data-mod-field="bars" data-mod-idx="${i}" title="${isLastRow ? 'Takes effect once you add another section after this one — until then, this section plays until stopped' : 'Whole bars this section lasts'}">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">bars +</span>
-                <input type="number" class="edit-input mod-extra-beats" style="width:36px" ${isLastRow ? 'disabled' : ''} min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
+                <input type="number" class="edit-input mod-extra-beats" style="width:36px" min="0" max="15" value="${m.extraBeats || 0}" data-mod-field="extraBeats" data-mod-idx="${i}" title="Extra beats, for fractional bars like 9 bars + 2 beats">
                 <span class="text-[10px] text-zinc-600 flex-shrink-0">beats @</span>
                 <input type="number" class="edit-input mod-bpm" style="width:52px" min="${MIN_BPM}" max="${MAX_BPM}" value="${m.bpm}" data-mod-field="bpm" data-mod-idx="${i}">
                 <button type="button" class="edit-select mod-timesig-btn flex-shrink-0" data-mod-idx="${i}" style="width:44px;">${m.timeSig}</button>
