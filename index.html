@@ -4984,20 +4984,39 @@ async function pushMissingAttachmentsToCloud() {
     const attachmentNotes = state.notes.filter(n => n.type === 'attachment' && n.fileKey);
     for (const note of attachmentNotes) {
         const blob = await cueDbGet(note.fileKey).catch(() => null);
-        if (!blob) continue; // don't have it locally either — nothing to push from this device
-        await pushAttachmentToCloud(note.fileKey, blob, note.mimeType);
+        if (blob) await pushAttachmentToCloud(note.fileKey, blob, note.mimeType);
+        if (note.drawingLayerFileKey) {
+            const drawingBlob = await cueDbGet(note.drawingLayerFileKey).catch(() => null);
+            if (drawingBlob) await pushAttachmentToCloud(note.drawingLayerFileKey, drawingBlob, 'image/png');
+        }
+        if (note.originalPhotoFileKey) {
+            const photoBlob = await cueDbGet(note.originalPhotoFileKey).catch(() => null);
+            if (photoBlob) await pushAttachmentToCloud(note.originalPhotoFileKey, photoBlob, note.mimeType);
+        }
     }
+}
+
+// Tracks, per file key, the fileUpdatedAt this device's local copy actually reflects — kept
+// in localStorage since it's device-specific, not something to sync. Without this, the
+// pull-side check below could only ask "do I have SOMETHING at this key", never "is what I
+// have current" — and since fileKey never changes across edits, a device would cache it once
+// and then never notice a newer version existed, even after the push side uploaded one.
+function getFileSyncStamp(fileKey) {
+    try { return parseInt(localStorage.getItem('kasika-file-sync-' + fileKey) || '0', 10); } catch (err) { return 0; }
+}
+function setFileSyncStamp(fileKey, ts) {
+    try { localStorage.setItem('kasika-file-sync-' + fileKey, String(ts || Date.now())); } catch (err) {}
 }
 
 async function syncMissingAttachments() {
     if (!fbAuth || !fbAuth.currentUser) return;
     const attachmentNotes = state.notes.filter(n => n.type === 'attachment' && n.fileKey);
     for (const note of attachmentNotes) {
-        const existing = await cueDbGet(note.fileKey).catch(() => null);
-        if (existing) continue;
-        const blob = await fetchAttachmentFromCloud(note.fileKey);
-        if (!blob) continue;
-        await cueDbPut(note.fileKey, blob).catch(() => {});
+        let anyFetched = false;
+        if (await syncOneAttachmentFile(note.fileKey, note.fileUpdatedAt)) anyFetched = true;
+        if (note.drawingLayerFileKey && await syncOneAttachmentFile(note.drawingLayerFileKey, note.fileUpdatedAt)) anyFetched = true;
+        if (note.originalPhotoFileKey && await syncOneAttachmentFile(note.originalPhotoFileKey, note.fileUpdatedAt)) anyFetched = true;
+        if (!anyFetched) continue;
         if (currentAppView === 'notes') renderNotesList(document.getElementById('notesSearchInput').value);
         if (currentAppView === 'attachment-viewer' && state.activeNoteId) {
             const activeNote = state.notes.find(n => n.id === state.activeNoteId);
@@ -5006,6 +5025,19 @@ async function syncMissingAttachments() {
             }
         }
     }
+}
+
+// Fetches one file key from the cloud if this device either doesn't have it at all, or its
+// local copy predates fileUpdatedAt (the dedicated stamp for image-byte changes specifically).
+// Returns true if a fetch happened, so the caller knows to refresh anything currently showing it.
+async function syncOneAttachmentFile(fileKey, fileUpdatedAt) {
+    const existing = await cueDbGet(fileKey).catch(() => null);
+    if (existing && getFileSyncStamp(fileKey) >= (fileUpdatedAt || 0)) return false; // already current
+    const blob = await fetchAttachmentFromCloud(fileKey);
+    if (!blob) return false;
+    await cueDbPut(fileKey, blob).catch(() => {});
+    setFileSyncStamp(fileKey, fileUpdatedAt);
+    return true;
 }
 
 // high quality setting, stepping down only as much as needed. PDFs are left untouched —
@@ -5911,7 +5943,23 @@ async function saveImageEdit() {
         note.drawingLayerFileKey = drawingLayerKey;
         imageEditorPhotoChangedThisSession = false;
         note.updatedAt = Date.now();
+        note.fileUpdatedAt = note.updatedAt; // dedicated stamp for the image bytes specifically — kept separate from updatedAt, which also bumps for unrelated edits like the title
         saveData();
+        // Saving locally via cueDbPut only writes to this device's IndexedDB — the note's
+        // metadata (title, and the fileKey/drawingLayerFileKey/originalPhotoFileKey STRING
+        // references themselves) syncs to other devices through the normal note sync, but the
+        // actual image BYTES behind those keys need an explicit push to the separate
+        // attachments collection. This was missing entirely for pencil/drawing edits, which is
+        // why a title edit would sync but a drawing edit wouldn't — the other device already
+        // had a fileKey reference, just never received the updated bytes it points to.
+        pushAttachmentToCloud(note.fileKey, mainBlob, outputType);
+        pushAttachmentToCloud(drawingLayerKey, drawingBlob, 'image/png');
+        if (photoBlob) pushAttachmentToCloud(note.originalPhotoFileKey, photoBlob, outputType);
+        // This device already has the very bytes it just saved — record that so the pull-side
+        // staleness check below doesn't turn around and needlessly re-fetch its own save.
+        setFileSyncStamp(note.fileKey, note.fileUpdatedAt);
+        setFileSyncStamp(drawingLayerKey, note.fileUpdatedAt);
+        if (photoBlob) setFileSyncStamp(note.originalPhotoFileKey, note.fileUpdatedAt);
         showToast('Image saved');
         closeImageEditor(true);
     } catch (err) {
