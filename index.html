@@ -1244,6 +1244,17 @@ tailwind.config = {
     </div>
 </div>
 
+<div class="modal-overlay" id="confirmDeleteCueModal">
+    <div class="modal-box" style="max-width:340px;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-2" id="confirmDeleteCueTitle">Delete this?</h3>
+        <p class="text-sm text-zinc-400 mb-5" id="confirmDeleteCueBody"></p>
+        <div class="flex gap-3">
+            <button type="button" id="confirmDeleteCueCancelBtn" class="flex-1 py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors">Cancel</button>
+            <button type="button" id="confirmDeleteCueConfirmBtn" class="flex-1 py-2.5 rounded-xl bg-red-500/20 border border-red-500/40 text-red-400 font-semibold text-sm hover:bg-red-500/30 transition-colors">Delete</button>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay" id="songUnsavedChangesModal">
     <div class="modal-box" style="max-width:380px;">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Unsaved Changes</h3>
@@ -4580,6 +4591,43 @@ async function handleCueReminderImport(file) {
     saveData();
     renderCueBankUI();
     showToast(`"${entry.name}" added`);
+}
+
+let pendingDeleteCueNumberSlot = null;
+let pendingDeleteCueReminderId = null;
+
+// A reminder can be referenced by multiple sections across multiple songs, unlike a section
+// delete which only ever affects the one song being edited — worth surfacing before deleting.
+function countReminderUsage(reminderId) {
+    let count = 0;
+    (state.setlists || []).forEach(sl => (sl.songs || []).forEach(song => {
+        if (song.introCue && song.introCue.reminderId === reminderId) count++;
+        (song.modulations || []).forEach(m => { if (m.cue && m.cue.reminderId === reminderId) count++; });
+    }));
+    return count;
+}
+
+function requestDeleteCueNumber(slot) {
+    const entry = state.cueBank.numbers[slot];
+    if (!entry) return;
+    pendingDeleteCueNumberSlot = slot;
+    pendingDeleteCueReminderId = null;
+    document.getElementById('confirmDeleteCueTitle').textContent = 'Delete this count-in number?';
+    document.getElementById('confirmDeleteCueBody').textContent = 'This removes the recording from your count-in bank. Any section currently counting in with it will lose that audio.';
+    showModal('confirmDeleteCueModal');
+}
+
+function requestDeleteCueReminder(id) {
+    const entry = state.cueBank.reminders.find(r => r.id === id);
+    if (!entry) return;
+    pendingDeleteCueReminderId = id;
+    pendingDeleteCueNumberSlot = null;
+    const usage = countReminderUsage(id);
+    document.getElementById('confirmDeleteCueTitle').textContent = 'Delete this reminder?';
+    document.getElementById('confirmDeleteCueBody').textContent = usage > 0
+        ? `This removes "${entry.name || 'this reminder'}" from your cue bank. It's currently used in ${usage} section${usage === 1 ? '' : 's'} across your songs — those cues will no longer play a reminder.`
+        : `This removes "${entry.name || 'this reminder'}" from your cue bank.`;
+    showModal('confirmDeleteCueModal');
 }
 
 function removeCueNumber(slot) {
@@ -8936,7 +8984,7 @@ function setupEvents() {
         const playBtn = e.target.closest('.cue-play-number');
         if (playBtn) { previewCueEntry(state.cueBank.numbers[parseInt(playBtn.dataset.slot, 10)]); return; }
         const removeBtn = e.target.closest('.cue-remove-number');
-        if (removeBtn) { removeCueNumber(parseInt(removeBtn.dataset.slot, 10)); return; }
+        if (removeBtn) { requestDeleteCueNumber(parseInt(removeBtn.dataset.slot, 10)); return; }
     });
     document.getElementById('cueNumberFileInput').addEventListener('change', e => {
         const file = e.target.files[0];
@@ -8954,7 +9002,7 @@ function setupEvents() {
         const playBtn = e.target.closest('.cue-play-reminder');
         if (playBtn) { previewCueEntry(state.cueBank.reminders.find(r => r.id === playBtn.dataset.reminderId)); return; }
         const removeBtn = e.target.closest('.cue-remove-reminder');
-        if (removeBtn) { removeCueReminder(removeBtn.dataset.reminderId); return; }
+        if (removeBtn) { requestDeleteCueReminder(removeBtn.dataset.reminderId); return; }
     });
 
     document.getElementById('cueVolumeInput').addEventListener('input', e => {
@@ -9498,6 +9546,18 @@ function setupEvents() {
         songFormDirty = true;
         pendingDeleteModIdx = null;
         hideModal('confirmDeleteSectionModal');
+    });
+    document.getElementById('confirmDeleteCueCancelBtn').addEventListener('click', () => {
+        pendingDeleteCueNumberSlot = null;
+        pendingDeleteCueReminderId = null;
+        hideModal('confirmDeleteCueModal');
+    });
+    document.getElementById('confirmDeleteCueConfirmBtn').addEventListener('click', () => {
+        if (pendingDeleteCueNumberSlot !== null) removeCueNumber(pendingDeleteCueNumberSlot);
+        if (pendingDeleteCueReminderId !== null) removeCueReminder(pendingDeleteCueReminderId);
+        pendingDeleteCueNumberSlot = null;
+        pendingDeleteCueReminderId = null;
+        hideModal('confirmDeleteCueModal');
     });
     document.getElementById('songUnsavedSaveBtn').addEventListener('click', () => {
         hideModal('songUnsavedChangesModal');
