@@ -4415,6 +4415,9 @@ function renderSearchResults(query) {
                     <button class="play-existing-btn w-8 h-8 flex-shrink-0 rounded-lg bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 transition-colors flex items-center justify-center" title="Play now">
                         <i class="fas fa-play text-[11px] ml-0.5"></i>
                     </button>
+                    ${song.linkedNoteId ? `<button class="search-view-notes-btn w-8 h-8 flex-shrink-0 rounded-lg bg-s3 border border-brd/50 text-[#60A5FA] hover:border-[#60A5FA]/50 transition-colors flex items-center justify-center" title="Open linked notes/sheet music">
+                        <i class="fas fa-image text-[11px]"></i>
+                    </button>` : ''}
                     <select class="edit-select add-target-select flex-1" style="width:auto;">${opts}</select>
                     <button class="add-target-btn text-xs px-3 py-1.5 rounded-lg bg-gold/15 text-gold border border-gold/25 hover:bg-gold/25 transition-colors flex-shrink-0">
                         <i class="fas fa-plus mr-1"></i>Add
@@ -9894,6 +9897,17 @@ function setupEvents() {
             if (!song) return;
             hideModal('searchModal');
             loadAndPlaySong(song);
+            return;
+        }
+        const viewNotesBtn = e.target.closest('.search-view-notes-btn');
+        if (viewNotesBtn) {
+            const row = viewNotesBtn.closest('.search-song-row');
+            const songId = row.dataset.songId, sourceId = row.dataset.sourceSetlist;
+            const sourceSl = state.setlists.find(s => s.id === sourceId);
+            const song = sourceSl?.songs.find(s => s.id === songId);
+            if (!song) return;
+            hideModal('searchModal');
+            openSongWithNotes(song);
             return;
         }
         const btn = e.target.closest('.add-target-btn');
