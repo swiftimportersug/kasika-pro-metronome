@@ -4308,7 +4308,7 @@ async function togglePlayback() {
     if (song) {
         initSongModulation(song);
         const intro = song.introCue;
-        if (intro && (intro.reminderId || intro.countIn)) {
+        if (intro && intro.enabled && (intro.reminderId || intro.countIn)) {
             const beatDur = 60 / state.bpm;
             const beatsPerBar = getBeatsPerMeasure();
             const reminderBeats = intro.reminderId ? Math.max(1, intro.reminderLeadBeats || 2) : 0;
@@ -4486,6 +4486,7 @@ function openSongEditModal(id) {
         countInVolume: song.introCue.countInVolume != null ? song.introCue.countInVolume : state.cueVolume,
         countInPan: song.introCue.countInPan != null ? song.introCue.countInPan : state.cuePan,
         metronomeDuringPreRoll: song.introCue.metronomeDuringPreRoll != null ? song.introCue.metronomeDuringPreRoll : true,
+        enabled: song.introCue.enabled != null ? song.introCue.enabled : !!(song.introCue.reminderId || song.introCue.countIn),
     } : defaultIntroCue();
     renderIntroCueUI();
     editingLoopTrack = song.loopTrack ? { ...song.loopTrack } : null;
@@ -6515,7 +6516,7 @@ function renderSongSuggestions(query) {
 // ===== SONG MODULATION EDITOR (in Add/Edit Song modal) =====
 let editingModulations = [];
 let editingIntroCue = { reminderId: null, reminderLeadBeats: 2, reminderVolume: 100, reminderPan: 0, countIn: false, countInLength: null, countInStart: 1, countInVolume: 100, countInPan: 0 };
-function defaultIntroCue() { return { reminderId: null, reminderName: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan, metronomeDuringPreRoll: true }; }
+function defaultIntroCue() { return { enabled: false, reminderId: null, reminderName: null, reminderLeadBeats: 2, reminderVolume: state.cueVolume, reminderPan: state.cuePan, countIn: false, countInLength: null, countInStart: 1, countInVolume: state.cueVolume, countInPan: state.cuePan, metronomeDuringPreRoll: true }; }
 let editingSongBeatTones = [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2];
 
 function renderSongBeatTonesBlocks() {
@@ -6720,6 +6721,11 @@ function renderIntroCueHtml() {
     const countInBeats = ic.countIn ? Math.max(1, length) : 0;
     const totalBeats = reminderBeats + countInBeats;
     return `
+        <label class="flex items-center gap-2 w-full pb-2 mb-1 border-b border-brd/30 select-none cursor-pointer">
+            <input type="checkbox" class="intro-cue-enabled" ${ic.enabled ? 'checked' : ''} style="accent-color:#F472B6; width:16px; height:16px;">
+            <span class="text-[12px] font-semibold text-zinc-200">Enable pre-roll for this song</span>
+        </label>
+        <div class="intro-cue-body w-full flex flex-col gap-2 ${ic.enabled ? '' : 'opacity-40 pointer-events-none'}">
         <div class="flex-1 min-w-[140px]">
             <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
             <div class="flex items-center gap-1.5">
@@ -6778,7 +6784,8 @@ function renderIntroCueHtml() {
             <span class="text-[9px] text-zinc-600 w-3 text-right flex-shrink-0">R</span>
             <span class="text-[10px] text-zinc-500 w-14 text-right flex-shrink-0 intro-cue-countin-pan-label">${formatPanLabel(ic.countInPan)}</span>
         </div>
-        ${totalBeats > 0 ? `<p class="text-[10px] text-zinc-700 w-full pt-1">${totalBeats}-beat pre-roll before the song's actual beat 1.</p>` : ''}`;
+        ${totalBeats > 0 ? `<p class="text-[10px] text-zinc-700 w-full pt-1">${totalBeats}-beat pre-roll before the song's actual beat 1.</p>` : ''}
+        </div>`;
 }
 
 function renderIntroCueUI() {
@@ -7910,6 +7917,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const metronomeBox = e.target.closest('.intro-cue-metronome');
         if (metronomeBox) {
             editingIntroCue.metronomeDuringPreRoll = metronomeBox.checked;
+            return;
+        }
+        const enabledBox = e.target.closest('.intro-cue-enabled');
+        if (enabledBox) {
+            editingIntroCue.enabled = enabledBox.checked;
+            renderIntroCueUI();
             return;
         }
         const lengthInput = e.target.closest('.intro-cue-length');
@@ -9714,6 +9727,7 @@ function setupEvents() {
                 countInVolume: editingIntroCue.countInVolume,
                 countInPan: editingIntroCue.countInPan,
                 metronomeDuringPreRoll: !!editingIntroCue.metronomeDuringPreRoll,
+                enabled: !!editingIntroCue.enabled,
             },
             loopTrack: (editingLoopTrack && editingLoopTrack.key) ? {
                 key: editingLoopTrack.key,
