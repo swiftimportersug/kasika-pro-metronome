@@ -1255,6 +1255,18 @@ tailwind.config = {
     </div>
 </div>
 
+<div class="modal-overlay" id="reminderSearchModal">
+    <div class="modal-box" style="max-width:400px; max-height:80vh; display:flex; flex-direction:column;">
+        <h3 class="font-display font-semibold text-lg text-zinc-100 mb-3 flex-shrink-0">Search Reminders</h3>
+        <div class="relative mb-3 flex-shrink-0">
+            <i class="fas fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 text-xs"></i>
+            <input type="text" id="reminderSearchInput" class="modal-input pl-8" placeholder="Type to filter…" autocomplete="off">
+        </div>
+        <div id="reminderSearchResults" class="flex flex-col gap-1 overflow-y-auto" style="flex:1;"></div>
+        <button type="button" id="reminderSearchCancelBtn" class="w-full py-2.5 rounded-xl bg-s3 border border-brd text-zinc-400 text-sm hover:text-zinc-200 transition-colors mt-3 flex-shrink-0">Cancel</button>
+    </div>
+</div>
+
 <div class="modal-overlay" id="songUnsavedChangesModal">
     <div class="modal-box" style="max-width:380px;">
         <h3 class="font-display font-semibold text-lg text-zinc-100 mb-1">Unsaved Changes</h3>
@@ -6571,7 +6583,10 @@ function renderModCueHtml(i) {
     return `
         <div class="flex-1 min-w-[140px]">
             <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
-            <select class="edit-select mod-cue-reminder w-full" data-mod-idx="${i}" style="width:100%;">${opts}</select>
+            <div class="flex items-center gap-1.5">
+                <select class="edit-select mod-cue-reminder w-full" data-mod-idx="${i}" style="width:100%;">${opts}</select>
+                <button type="button" class="edit-btn edit-btn-lg mod-action-btn reminder-search-open-btn flex-shrink-0" data-target-type="mod" data-mod-idx="${i}" title="Search reminders"><i class="fas fa-magnifying-glass text-xs"></i></button>
+            </div>
             ${matchedByNameOnly ? `<p class="text-[10px] text-[#2dd4bf] mt-1"><i class="fas fa-check mr-1"></i>Matched locally by name: "${escHtml(matchedReminder.name)}"</p>` : ''}
         </div>
         <div class="mod-cue-reminder-vol w-full flex items-center gap-2 ${matchedReminder ? 'flex' : 'hidden'}" data-mod-idx="${i}">
@@ -6631,6 +6646,66 @@ function renderModCueHtml(i) {
         </div>`;
 }
 
+let pendingReminderSearchTarget = null; // {type:'mod', idx} | {type:'intro'}
+
+function openReminderSearchModal(target) {
+    pendingReminderSearchTarget = target;
+    document.getElementById('reminderSearchInput').value = '';
+    renderReminderSearchResults('');
+    showModal('reminderSearchModal');
+    setTimeout(() => document.getElementById('reminderSearchInput').focus(), 150);
+}
+
+function renderReminderSearchResults(query) {
+    const list = document.getElementById('reminderSearchResults');
+    const q = query.trim().toLowerCase();
+    const matches = state.cueBank.reminders.filter(r => !q || r.name.toLowerCase().includes(q));
+    const noneOption = `<button type="button" class="reminder-search-result text-left px-3 py-2.5 rounded-lg hover:bg-s3 text-sm text-zinc-500 flex items-center gap-2 flex-shrink-0" data-reminder-id=""><i class="fas fa-ban text-xs w-4 flex-shrink-0"></i>No reminder</button>`;
+    if (!state.cueBank.reminders.length) {
+        list.innerHTML = noneOption + `<p class="text-xs text-zinc-600 text-center py-4">No reminders in your cue bank yet.</p>`;
+        return;
+    }
+    if (!matches.length) {
+        list.innerHTML = noneOption + `<p class="text-xs text-zinc-600 text-center py-4">No reminders match "${escHtml(query)}"</p>`;
+        return;
+    }
+    list.innerHTML = noneOption + matches.map(r => `
+        <button type="button" class="reminder-search-result text-left px-3 py-2.5 rounded-lg hover:bg-s3 text-sm text-zinc-200 flex items-center gap-2 flex-shrink-0" data-reminder-id="${r.id}">
+            <i class="fas fa-comment-dots text-xs w-4 flex-shrink-0 text-[#F472B6]"></i>${escHtml(r.name)}
+        </button>
+    `).join('');
+}
+
+// Shared with the plain <select> change handlers below, so picking a reminder via search
+// behaves identically to picking it from the dropdown — same defaults applied either way.
+function applyReminderToModCue(idx, reminderId) {
+    const m = editingModulations[idx];
+    if (!m) return;
+    if (!m.cue) m.cue = { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
+    m.cue.reminderId = reminderId || null;
+    m.cue.reminderName = m.cue.reminderId ? (state.cueBank.reminders.find(r => r.id === m.cue.reminderId) || {}).name || null : null;
+    if (m.cue.reminderId && m.cue.reminderVolume == null) m.cue.reminderVolume = state.cueVolume;
+    if (m.cue.reminderId && m.cue.reminderPan == null) m.cue.reminderPan = state.cuePan;
+    renderModulationRows();
+}
+
+function applyReminderToIntroCue(reminderId) {
+    editingIntroCue.reminderId = reminderId || null;
+    editingIntroCue.reminderName = editingIntroCue.reminderId ? (state.cueBank.reminders.find(r => r.id === editingIntroCue.reminderId) || {}).name || null : null;
+    if (editingIntroCue.reminderId && editingIntroCue.reminderLeadBeats == null) editingIntroCue.reminderLeadBeats = 2;
+    renderIntroCueUI();
+}
+
+function applyReminderSearchSelection(reminderId) {
+    if (!pendingReminderSearchTarget) return;
+    if (pendingReminderSearchTarget.type === 'mod') applyReminderToModCue(pendingReminderSearchTarget.idx, reminderId);
+    else if (pendingReminderSearchTarget.type === 'intro') applyReminderToIntroCue(reminderId);
+    songFormDirty = true;
+    scheduleDraftAutosave();
+    pendingReminderSearchTarget = null;
+    hideModal('reminderSearchModal');
+}
+
 function renderIntroCueHtml() {
     const ic = editingIntroCue;
     const matchedReminder = findReminderForCue(ic);
@@ -6647,7 +6722,10 @@ function renderIntroCueHtml() {
     return `
         <div class="flex-1 min-w-[140px]">
             <label class="text-[10px] text-zinc-600 block mb-1">Reminder phrase</label>
-            <select class="edit-select intro-cue-reminder w-full" style="width:100%;">${opts}</select>
+            <div class="flex items-center gap-1.5">
+                <select class="edit-select intro-cue-reminder w-full" style="width:100%;">${opts}</select>
+                <button type="button" class="edit-btn edit-btn-lg mod-action-btn reminder-search-open-btn flex-shrink-0" data-target-type="intro" title="Search reminders"><i class="fas fa-magnifying-glass text-xs"></i></button>
+            </div>
             ${matchedByNameOnly ? `<p class="text-[10px] text-[#2dd4bf] mt-1"><i class="fas fa-check mr-1"></i>Matched locally by name: "${escHtml(matchedReminder.name)}"</p>` : ''}
         </div>
         <div class="intro-cue-reminder-detail w-full flex flex-col gap-2 ${matchedReminder || ic.reminderId ? 'flex' : 'hidden'}">
@@ -7613,6 +7691,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (marker) resumeFromRehearsalPause(parseInt(marker.dataset.modIdx, 10));
     });
     document.getElementById('modulationList').addEventListener('click', e => {
+        const reminderSearchBtn = e.target.closest('.reminder-search-open-btn');
+        if (reminderSearchBtn) {
+            openReminderSearchModal({ type: 'mod', idx: parseInt(reminderSearchBtn.dataset.modIdx, 10) });
+            return;
+        }
         const testBtn = e.target.closest('.mod-test-play');
         if (testBtn) {
             const idx = parseInt(testBtn.dataset.modIdx, 10);
@@ -7708,14 +7791,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const reminderSel = e.target.closest('.mod-cue-reminder');
         if (reminderSel) {
             const idx = parseInt(reminderSel.dataset.modIdx, 10);
-            if (!editingModulations[idx]) return;
-            if (!editingModulations[idx].cue) editingModulations[idx].cue = { reminderId: null, reminderName: null, countIn: false, countInLength: null, countInStart: 1, reminderVolume: state.cueVolume, countInVolume: state.cueVolume, reminderPan: state.cuePan, countInPan: state.cuePan };
-            const cue = editingModulations[idx].cue;
-            cue.reminderId = reminderSel.value || null;
-            cue.reminderName = cue.reminderId ? (state.cueBank.reminders.find(r => r.id === cue.reminderId) || {}).name || null : null;
-            if (cue.reminderId && cue.reminderVolume == null) cue.reminderVolume = state.cueVolume;
-            if (cue.reminderId && cue.reminderPan == null) cue.reminderPan = state.cuePan;
-            renderModulationRows();
+            applyReminderToModCue(idx, reminderSel.value);
             return;
         }
         const countInBox = e.target.closest('.mod-cue-countin');
@@ -7810,13 +7886,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ---- Song Intro / Pre-roll ----
+    document.getElementById('introCueContainer').addEventListener('click', e => {
+        const reminderSearchBtn = e.target.closest('.reminder-search-open-btn');
+        if (reminderSearchBtn) openReminderSearchModal({ type: 'intro' });
+    });
     document.getElementById('introCueContainer').addEventListener('change', e => {
         const reminderSel = e.target.closest('.intro-cue-reminder');
         if (reminderSel) {
-            editingIntroCue.reminderId = reminderSel.value || null;
-            editingIntroCue.reminderName = editingIntroCue.reminderId ? (state.cueBank.reminders.find(r => r.id === editingIntroCue.reminderId) || {}).name || null : null;
-            if (editingIntroCue.reminderId && editingIntroCue.reminderLeadBeats == null) editingIntroCue.reminderLeadBeats = 2;
-            renderIntroCueUI();
+            applyReminderToIntroCue(reminderSel.value);
             return;
         }
         const countInBox = e.target.closest('.intro-cue-countin');
@@ -9558,6 +9635,15 @@ function setupEvents() {
         pendingDeleteCueNumberSlot = null;
         pendingDeleteCueReminderId = null;
         hideModal('confirmDeleteCueModal');
+    });
+    document.getElementById('reminderSearchInput').addEventListener('input', e => renderReminderSearchResults(e.target.value));
+    document.getElementById('reminderSearchResults').addEventListener('click', e => {
+        const btn = e.target.closest('.reminder-search-result');
+        if (btn) applyReminderSearchSelection(btn.dataset.reminderId);
+    });
+    document.getElementById('reminderSearchCancelBtn').addEventListener('click', () => {
+        pendingReminderSearchTarget = null;
+        hideModal('reminderSearchModal');
     });
     document.getElementById('songUnsavedSaveBtn').addEventListener('click', () => {
         hideModal('songUnsavedChangesModal');
