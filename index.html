@@ -5296,11 +5296,33 @@ function updateAttachmentImgMaxHeight() {
     const headerH = viewerHeader ? viewerHeader.offsetHeight : 56;
     const miniPlayer = document.getElementById('miniPlayerBar');
     const miniPlayerH = (miniPlayer && !miniPlayer.classList.contains('hidden')) ? miniPlayer.offsetHeight : 0;
-    const available = Math.max(200, window.innerHeight - headerH - miniPlayerH - 16);
+    const viewportH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const available = Math.max(200, viewportH - headerH - miniPlayerH - 24);
     content.style.setProperty('--attachment-img-max-h', available + 'px');
 }
 window.addEventListener('resize', updateAttachmentImgMaxHeight);
 window.addEventListener('orientationchange', () => setTimeout(updateAttachmentImgMaxHeight, 200));
+
+// Firefox for Android in particular has long-standing bugs where a position:fixed element
+// visibly jumps/lags during scroll of a sibling scrollable area, tied to how it handles the
+// dynamic browser toolbar — CSS compositing hints alone (translateZ etc.) don't reliably fix
+// this on Firefox the way they do on Chromium. Actively tracking the real visual viewport and
+// setting the bar's position explicitly works across both engines.
+function repositionMiniPlayerForViewport() {
+    const bar = document.getElementById('miniPlayerBar');
+    if (!bar || bar.classList.contains('hidden')) return;
+    if (!window.visualViewport) { bar.style.bottom = '0px'; return; }
+    const vv = window.visualViewport;
+    // The gap between the bottom of the layout viewport and the bottom of the actually-visible
+    // (visual) viewport — this is exactly what a plain CSS `bottom:0` can't always account for
+    // correctly while a mobile browser's toolbar is transitioning.
+    const offsetBottom = window.innerHeight - (vv.height + vv.offsetTop);
+    bar.style.bottom = Math.max(0, offsetBottom) + 'px';
+}
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', repositionMiniPlayerForViewport);
+    window.visualViewport.addEventListener('scroll', repositionMiniPlayerForViewport);
+}
 
 async function openAttachmentViewer(id) {
     const note = state.notes.find(n => n.id === id);
@@ -5309,10 +5331,13 @@ async function openAttachmentViewer(id) {
     document.getElementById('attachmentViewerTitle').textContent = note.title || 'Untitled';
     document.getElementById('attachmentViewerContent').innerHTML = '<div class="p-8 text-center text-zinc-600 text-sm">Loading…</div>';
     updateAttachmentHeaderControlsVisibility();
-    updateAttachmentImgMaxHeight();
     await refreshAttachmentViewerContent(id);
     pushView('attachment-viewer');
     applyViewState('attachment-viewer');
+    // Measuring the header's height only works once the view is actually visible —
+    // offsetHeight reads as 0 while an ancestor is still display:none, which was silently
+    // overestimating the available space by exactly the header's height.
+    updateAttachmentImgMaxHeight();
 }
 
 function closeAttachmentViewer() { history.back(); }
@@ -8255,6 +8280,7 @@ function showMiniPlayer(song) {
     document.getElementById('songNotesViewerContent').style.paddingBottom = '84px';
     updateAttachmentHeaderControlsVisibility();
     updateAttachmentImgMaxHeight();
+    repositionMiniPlayerForViewport();
     updateMiniPlayerPlayState();
     // Render/scroll after the bar is actually visible and laid out — scrollIntoView on a
     // still-hidden (display:none) element can't compute a meaningful position.
