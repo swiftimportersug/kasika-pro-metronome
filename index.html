@@ -1439,6 +1439,35 @@ function initFirebase() {
     }
 }
 
+// Reflects actual network status in the sync indicator, and reacts immediately to changes —
+// previously there was no visible sign of being offline at all, which is exactly how changes
+// can go un-synced without anyone noticing until it's too late.
+function updateConnectivityUI() {
+    const statusLabel = document.getElementById('syncStatusLabel');
+    const cloudDot = document.getElementById('cloudSyncedDot');
+    if (!statusLabel) return;
+    const signedIn = fbAuth && fbAuth.currentUser;
+    if (!signedIn) return;
+    if (navigator.onLine) {
+        statusLabel.textContent = 'Synced';
+        if (cloudDot) { cloudDot.classList.remove('hidden'); cloudDot.style.background = '#2dd4bf'; }
+    } else {
+        statusLabel.textContent = 'Offline — saved on this device';
+        if (cloudDot) { cloudDot.classList.remove('hidden'); cloudDot.style.background = '#F59E0B'; }
+    }
+}
+window.addEventListener('offline', () => {
+    updateConnectivityUI();
+    showToast("You're offline — your work is still being saved on this device, and will sync once you're back online.");
+});
+window.addEventListener('online', () => {
+    updateConnectivityUI();
+    if (fbAuth && fbAuth.currentUser) {
+        showToast('Back online — syncing your changes…');
+        pushToCloud();
+    }
+});
+
 function updateSyncUI(signedIn, label) {
     const signInBtn = document.getElementById('syncSignInBtn');
     const statusEl = document.getElementById('syncStatus');
@@ -1450,9 +1479,9 @@ function updateSyncUI(signedIn, label) {
         signInBtn.classList.add('hidden');
         statusEl.classList.remove('hidden'); statusEl.classList.add('flex');
         statusEl.title = label || '';
-        if (statusLabel) statusLabel.textContent = 'Synced';
         if (emailEl) emailEl.textContent = label || '';
         if (cloudDot) cloudDot.classList.remove('hidden');
+        updateConnectivityUI(); // sets the label to "Synced" or "Offline" as appropriate, rather than hardcoding "Synced" here
     } else {
         signInBtn.classList.remove('hidden');
         statusEl.classList.add('hidden'); statusEl.classList.remove('flex');
@@ -1473,12 +1502,27 @@ function startRemoteSync(uid) {
                 setlists: state.setlists, activeSetlistId: state.activeSetlistId,
                 soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
                 cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
+                lastSavedAt: state.lastSavedAt,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
             return;
         }
         if (snap.metadata.hasPendingWrites) return; // this is an echo of our own write, ignore
         const d = snap.data();
+
+        // Guards against a stale cloud snapshot clobbering newer local data — specifically the
+        // scenario where a device was offline, made edits (saved locally just fine), then came
+        // back online or reloaded the page before its own newer data had a chance to push.
+        // Without this check, an older snapshot arriving first would silently overwrite those
+        // newer local edits with the older cloud version — exactly what "I refreshed and
+        // everything vanished" looks like from the outside. d.lastSavedAt is only absent on
+        // documents written before this check existed, so this stays backward compatible.
+        if (d.lastSavedAt != null && state.lastSavedAt && d.lastSavedAt < state.lastSavedAt) {
+            console.warn('Ignoring a stale cloud snapshot — local data is newer; re-pushing to correct the cloud copy.');
+            pushToCloud();
+            return;
+        }
+
         applyingRemoteUpdate = true;
         if (d.setlists && !suppressRemoteSetlistApply) { state.setlists = d.setlists; migrateAllSongsSectionData(state.setlists); }
         if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
@@ -1493,7 +1537,13 @@ function startRemoteSync(uid) {
         if (d.cueBank) { state.cueBank = d.cueBank; syncMissingCueAudio(); }
         if (d.cueVolume != null) state.cueVolume = d.cueVolume;
         if (d.cuePan != null) state.cuePan = d.cuePan;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan }));
+        if (d.lastSavedAt != null) state.lastSavedAt = d.lastSavedAt;
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt }));
+        } catch (err) {
+            console.error('Failed to persist synced data locally:', err);
+            showToast("Synced from the cloud, but couldn't save it to this device — your storage may be full.");
+        }
         renderSetlistSelect(); renderSongs();
         document.getElementById('soundKitSelect').value = state.soundKit;
         renderBeatBlocks();
@@ -1507,6 +1557,7 @@ function stopRemoteSync() {
     if (fbUnsub) { fbUnsub(); fbUnsub = null; }
 }
 
+let lastSyncFailureToastAt = 0;
 function pushToCloud() {
     if (!syncEnabled || !fbAuth || !fbAuth.currentUser || applyingRemoteUpdate) return;
     clearTimeout(saveDebounceTimer);
@@ -1515,8 +1566,23 @@ function pushToCloud() {
             setlists: state.setlists, activeSetlistId: state.activeSetlistId,
             soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
             cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
+            lastSavedAt: state.lastSavedAt,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true }).catch(err => console.warn('Cloud save failed:', err));
+        }, { merge: true }).catch(err => {
+            // Previously only logged — a repeated, silent sync failure (e.g. the whole
+            // setlists+notes collection growing past Firestore's 1MB per-document limit as
+            // more songs/notes accumulate over time) would mean changes never reach other
+            // devices with no indication anything was wrong. Throttled so a stretch of being
+            // offline doesn't produce a toast on every single debounced save attempt.
+            console.warn('Cloud save failed:', err);
+            const now = Date.now();
+            if (now - lastSyncFailureToastAt < 20000) return;
+            lastSyncFailureToastAt = now;
+            const tooLarge = (err && err.message || '').toLowerCase().includes('exceeds') || (err && err.message || '').toLowerCase().includes('too large');
+            showToast(tooLarge
+                ? "Couldn't sync — your saved data has grown too large for cloud sync. Consider removing some old songs, notes, or pictures."
+                : "Couldn't sync to the cloud right now — changes are saved on this device and will sync once the connection is back.");
+        });
     }, 600);
 }
 
@@ -1582,7 +1648,7 @@ const state = {
     bpm: 120, timeSig: '4/4', subdivision: 'quarter',
     isPlaying: false, visualClick: -1, volume: 0.8,
     timerRunning: false, timerSeconds: 0, timerInterval: null,
-    setlists: [], activeSetlistId: null, activeSongId: null,
+    setlists: [], activeSetlistId: null, activeSongId: null, lastSavedAt: 0,
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
     audioCtx: null, masterBus: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
     wallClockAnchorTime: null, wallClockAnchorClick: 0, wallClockAnchorBpm: null,
@@ -4043,6 +4109,7 @@ function loadData() {
             if (d.cueBank) state.cueBank = d.cueBank;
             if (d.cueVolume != null) state.cueVolume = d.cueVolume;
             if (d.cuePan != null) state.cuePan = d.cuePan;
+            state.lastSavedAt = d.lastSavedAt || 0;
             // Migrate old songs missing subdivision, or using the old 'triplet' key
             state.setlists.forEach(sl => sl.songs.forEach(song => {
                 if (!song.subdivision) song.subdivision = 'quarter';
@@ -4057,7 +4124,20 @@ function loadData() {
 }
 
 function saveData() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan }));
+    state.lastSavedAt = Date.now();
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt }));
+    } catch (err) {
+        // Previously uncaught — this would silently abort the function entirely, meaning
+        // pushToCloud() below never even ran. A failure here (most commonly the device's
+        // storage being full) was making BOTH local save and cloud sync disappear together
+        // with zero indication anything went wrong.
+        console.error('Local save failed:', err);
+        const isQuota = err.name === 'QuotaExceededError' || err.code === 22;
+        showToast(isQuota
+            ? "Couldn't save — your device's storage is full. Try removing some unused pictures or notes."
+            : "Couldn't save locally — see the browser console for details.");
+    }
     pushToCloud();
 }
 function getActiveSetlist() { return state.setlists.find(s => s.id === state.activeSetlistId) || null; }
