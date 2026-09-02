@@ -6433,6 +6433,29 @@ function closeNoteEditor() { history.back(); }
 
 function getActiveNote() { return state.notes.find(n => n.id === state.activeNoteId) || null; }
 
+// Typing in a note debounces the actual save by 500ms (saveActiveNote below) so it isn't
+// hammering localStorage on every keystroke — but a reload within that window destroys the
+// pending timer before it ever fires, meaning the edit was never actually written anywhere
+// despite being visible on screen right up until the reload. Flushing here closes that gap.
+window.addEventListener('beforeunload', () => {
+    if (state.noteSaveTimer) {
+        clearTimeout(state.noteSaveTimer);
+        saveActiveNote(true);
+    }
+});
+// Covers the same gap for backgrounding/switching apps on mobile, where beforeunload often
+// doesn't fire at all — pagehide and visibilitychange are what mobile browsers actually rely
+// on for "the user is leaving," and a save here costs nothing if nothing was pending.
+window.addEventListener('pagehide', () => {
+    if (state.noteSaveTimer) { clearTimeout(state.noteSaveTimer); saveActiveNote(true); }
+});
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && state.noteSaveTimer) {
+        clearTimeout(state.noteSaveTimer);
+        saveActiveNote(true);
+    }
+});
+
 function saveActiveNote(immediate) {
     const note = getActiveNote();
     if (!note) return;
