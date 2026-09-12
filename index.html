@@ -1491,66 +1491,249 @@ function updateSyncUI(signedIn, label) {
     }
 }
 
+// Shared by every sync-receive path below, so the local persistence + error handling logic
+// lives in exactly one place rather than being duplicated across multiple listeners.
+function persistLocalStateSnapshot() {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, lastSyncedSetlistIds: state.lastSyncedSetlistIds, lastSyncedNoteIds: state.lastSyncedNoteIds, lastSyncedSongIdsBySetlist: state.lastSyncedSongIdsBySetlist }));
+    } catch (err) {
+        console.error('Failed to persist synced data locally:', err);
+        showToast("Synced from the cloud, but couldn't save it to this device — your storage may be full.");
+    }
+}
+
 function startRemoteSync(uid) {
     if (!fbDb) return;
     if (fbUnsub) fbUnsub();
-    const docRef = fbDb.collection('kasikaUsers').doc(uid);
-    fbUnsub = docRef.onSnapshot(snap => {
+
+    // Seed the song index from whatever's already loaded locally, before any cloud listener
+    // has had a chance to fire — otherwise rebuildSetlistSongs would momentarily treat a
+    // setlist's songs as empty the instant its metadata doc arrives, since the per-setlist
+    // songs listener that actually populates them hasn't necessarily fired yet.
+    state.setlists.forEach(sl => (sl.songs || []).forEach(song => { state.songsById[song.id] = song; }));
+
+    const userDocRef = fbDb.collection('kasikaUsers').doc(uid);
+    const setlistsCol = userDocRef.collection('setlists');
+    const notesCol = userDocRef.collection('notes');
+    const unsubscribers = [];
+    const songListenersBySetlist = {}; // setlistId -> unsubscribe, one dynamic listener per setlist's own songs subcollection
+    const songOrderBySetlist = {}; // setlistId -> [songId, ...] from each setlist's own doc
+
+    // Rebuilds a setlist's in-memory `songs` array from its songOrder plus whatever's currently
+    // known in state.songsById — called whenever either the setlist's own doc or its songs
+    // subcollection changes. The rest of the app keeps working with a plain `songs` array
+    // exactly as before; only this sync layer needs to know songs live in separate documents.
+    function rebuildSetlistSongs(setlistId) {
+        const sl = state.setlists.find(s => s.id === setlistId);
+        if (!sl) return;
+        const order = songOrderBySetlist[setlistId] || [];
+        sl.songs = order.map(id => state.songsById[id]).filter(Boolean);
+    }
+
+    // Main document: only the small fields (active selection, sound kit, cue bank, etc). Each
+    // setlist and note lives in its own document in a subcollection instead of as one giant
+    // array field here — that's what actually fixes the "data too large to sync" problem,
+    // since no single document's size depends on how many songs or notes exist overall.
+    unsubscribers.push(userDocRef.onSnapshot(async snap => {
         if (!snap.exists) {
-            // First time this account has synced: push whatever is currently local up to the cloud.
-            docRef.set({
-                setlists: state.setlists, activeSetlistId: state.activeSetlistId,
-                soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
+            userDocRef.set({
+                activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones,
                 cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
-                lastSavedAt: state.lastSavedAt,
+                lastSavedAt: state.lastSavedAt, migratedToSubcollections: true,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
+            const songSyncedIds = {};
+            await Promise.all([
+                ...state.setlists.map(sl => {
+                    const { songs, ...slMeta } = sl;
+                    const songList = songs || [];
+                    songSyncedIds[sl.id] = songList.map(s => s.id);
+                    const songsCol = setlistsCol.doc(sl.id).collection('songs');
+                    return Promise.all([
+                        setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id), updatedAt: state.lastSavedAt || Date.now() }),
+                        ...songList.map(song => songsCol.doc(song.id).set({ ...song, updatedAt: song.updatedAt || state.lastSavedAt || Date.now() })),
+                    ]);
+                }),
+                ...state.notes.map(n => notesCol.doc(n.id).set({ ...n, updatedAt: n.updatedAt || state.lastSavedAt || Date.now() })),
+            ]).catch(err => console.warn('Initial subcollection push failed:', err));
+            state.lastSyncedSetlistIds = state.setlists.map(s => s.id);
+            state.lastSyncedNoteIds = state.notes.map(n => n.id);
+            state.lastSyncedSongIdsBySetlist = songSyncedIds;
             return;
         }
-        if (snap.metadata.hasPendingWrites) return; // this is an echo of our own write, ignore
         const d = snap.data();
 
-        // Guards against a stale cloud snapshot clobbering newer local data — specifically the
-        // scenario where a device was offline, made edits (saved locally just fine), then came
-        // back online or reloaded the page before its own newer data had a chance to push.
-        // Without this check, an older snapshot arriving first would silently overwrite those
-        // newer local edits with the older cloud version — exactly what "I refreshed and
-        // everything vanished" looks like from the outside. d.lastSavedAt is only absent on
-        // documents written before this check existed, so this stays backward compatible.
+        // One-time migration for accounts synced before subcollections existed: their
+        // setlists/notes still sit as array fields on this document. Move each item into its
+        // own document, then strip the array fields so this document stays small going
+        // forward. The subcollection listeners below pick up the migrated data naturally once
+        // this completes, so nothing further is needed here.
+        if (!d.migratedToSubcollections && (Array.isArray(d.setlists) || Array.isArray(d.notes))) {
+            const oldSetlists = Array.isArray(d.setlists) ? d.setlists : [];
+            const oldNotes = Array.isArray(d.notes) ? d.notes : [];
+            try {
+                await Promise.all([
+                    ...oldSetlists.map(sl => {
+                        const { songs, ...slMeta } = sl;
+                        const songList = songs || [];
+                        const songsCol = setlistsCol.doc(sl.id).collection('songs');
+                        return Promise.all([
+                            setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id), updatedAt: d.lastSavedAt || Date.now() }),
+                            ...songList.map(song => songsCol.doc(song.id).set({ ...song, updatedAt: song.updatedAt || d.lastSavedAt || Date.now() })),
+                        ]);
+                    }),
+                    ...oldNotes.map(n => notesCol.doc(n.id).set({ ...n, updatedAt: n.updatedAt || d.lastSavedAt || Date.now() })),
+                ]);
+                await userDocRef.set({
+                    setlists: firebase.firestore.FieldValue.delete(),
+                    notes: firebase.firestore.FieldValue.delete(),
+                    migratedToSubcollections: true,
+                }, { merge: true });
+            } catch (err) {
+                console.warn('Migration to per-item cloud documents failed, will retry on next sync:', err);
+            }
+            return;
+        }
+
+        if (snap.metadata.hasPendingWrites) return; // echo of our own write
+
+        // Guards against a stale cloud snapshot clobbering newer local data — see pushToCloud
+        // for the full explanation. d.lastSavedAt is only absent on documents written before
+        // this check existed, so this stays backward compatible.
         if (d.lastSavedAt != null && state.lastSavedAt && d.lastSavedAt < state.lastSavedAt) {
-            console.warn('Ignoring a stale cloud snapshot — local data is newer; re-pushing to correct the cloud copy.');
+            console.warn('Ignoring a stale cloud snapshot for the main doc — local data is newer; re-pushing.');
             pushToCloud();
             return;
         }
 
         applyingRemoteUpdate = true;
-        if (d.setlists && !suppressRemoteSetlistApply) { state.setlists = d.setlists; migrateAllSongsSectionData(state.setlists); }
         if (d.activeSetlistId) state.activeSetlistId = d.activeSetlistId;
         if (d.soundKit) state.soundKit = d.soundKit;
         if (Array.isArray(d.beatTones) && d.beatTones.length === 16) state.beatTones = d.beatTones;
-        if (Array.isArray(d.notes)) { state.notes = d.notes; syncMissingAttachments(); }
-        // Cue Bank now syncs the same way note attachments do — metadata (names/keys) here,
-        // with the actual audio bytes synced separately as base64 text in Firestore (see
-        // pushCueAudioToCloud / syncMissingCueAudio below). Now that the audio itself follows
-        // the metadata, one device's keys no longer risk pointing at bytes another device
-        // doesn't have.
+        // Cue Bank syncs the same way note attachments do — metadata (names/keys) here, with
+        // the actual audio bytes synced separately as base64 text in Firestore (see
+        // pushCueAudioToCloud / syncMissingCueAudio below).
         if (d.cueBank) { state.cueBank = d.cueBank; syncMissingCueAudio(); }
         if (d.cueVolume != null) state.cueVolume = d.cueVolume;
         if (d.cuePan != null) state.cuePan = d.cuePan;
         if (d.lastSavedAt != null) state.lastSavedAt = d.lastSavedAt;
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt }));
-        } catch (err) {
-            console.error('Failed to persist synced data locally:', err);
-            showToast("Synced from the cloud, but couldn't save it to this device — your storage may be full.");
-        }
+        persistLocalStateSnapshot();
         renderSetlistSelect(); renderSongs();
         document.getElementById('soundKitSelect').value = state.soundKit;
         renderBeatBlocks();
-        renderNotesList();
         renderCueBankUI();
         applyingRemoteUpdate = false;
-    }, err => console.warn('Sync listener error:', err));
+    }, err => console.warn('Sync listener error (main doc):', err)));
+
+    // Setlists subcollection — incremental add/modify/remove, so a change to one setlist
+    // never requires touching (or re-downloading) any of the others. Each setlist's own songs
+    // live in a further subcollection (handled by rebuildSetlistSongs + the dynamic per-setlist
+    // listeners below), so this only ever sees setlist metadata plus a songOrder array.
+    unsubscribers.push(setlistsCol.onSnapshot(async snapshot => {
+        if (snapshot.metadata.hasPendingWrites || suppressRemoteSetlistApply) return;
+        let changed = false;
+        for (const change of snapshot.docChanges()) {
+            const sl = change.doc.data();
+            const setlistId = change.doc.id;
+            if (change.type === 'removed') {
+                const existingIdx = state.setlists.findIndex(s => s.id === setlistId);
+                if (existingIdx !== -1) { state.setlists.splice(existingIdx, 1); changed = true; }
+                if (songListenersBySetlist[setlistId]) { songListenersBySetlist[setlistId](); delete songListenersBySetlist[setlistId]; }
+                delete songOrderBySetlist[setlistId];
+                continue;
+            }
+
+            // Legacy shape: a setlist doc that still carries its songs embedded, from before
+            // song-splitting existed. Migrate it once — push each song to its own subcollection
+            // doc, then re-save the setlist doc without the embedded array. The re-save below
+            // triggers this same listener again, this time with the new shape.
+            if (Array.isArray(sl.songs) && !Array.isArray(sl.songOrder)) {
+                const songsCol = setlistsCol.doc(setlistId).collection('songs');
+                const songList = sl.songs;
+                try {
+                    await Promise.all([
+                        setlistsCol.doc(setlistId).set({ ...sl, songs: firebase.firestore.FieldValue.delete(), songOrder: songList.map(s => s.id) }, { merge: true }),
+                        ...songList.map(song => songsCol.doc(song.id).set({ ...song, updatedAt: song.updatedAt || sl.updatedAt || Date.now() })),
+                    ]);
+                } catch (err) {
+                    console.warn('Per-setlist song migration failed, will retry on next sync:', err);
+                }
+                continue;
+            }
+
+            const existingIdx = state.setlists.findIndex(s => s.id === setlistId);
+            const existing = existingIdx !== -1 ? state.setlists[existingIdx] : null;
+            if (existing && existing.updatedAt != null && sl.updatedAt != null && sl.updatedAt < existing.updatedAt) continue; // stale, keep local
+
+            songOrderBySetlist[setlistId] = Array.isArray(sl.songOrder) ? sl.songOrder : [];
+            const slForState = { ...sl };
+            delete slForState.songOrder;
+            if (existingIdx !== -1) state.setlists[existingIdx] = { ...state.setlists[existingIdx], ...slForState };
+            else state.setlists.push({ ...slForState, songs: [] });
+            rebuildSetlistSongs(setlistId);
+            changed = true;
+
+            // One dedicated listener per setlist for its own songs subcollection, set up the
+            // first time we see that setlist and left running for as long as it exists.
+            if (!songListenersBySetlist[setlistId]) {
+                songListenersBySetlist[setlistId] = setlistsCol.doc(setlistId).collection('songs').onSnapshot(songSnap => {
+                    if (songSnap.metadata.hasPendingWrites) return;
+                    songSnap.docChanges().forEach(songChange => {
+                        const songId = songChange.doc.id;
+                        if (songChange.type === 'removed') { delete state.songsById[songId]; return; }
+                        const songData = songChange.doc.data();
+                        const existingSong = state.songsById[songId];
+                        if (existingSong && existingSong.updatedAt != null && songData.updatedAt != null && songData.updatedAt < existingSong.updatedAt) return; // stale, keep local
+                        state.songsById[songId] = songData;
+                    });
+                    rebuildSetlistSongs(setlistId);
+                    applyingRemoteUpdate = true;
+                    persistLocalStateSnapshot();
+                    renderSetlistSelect(); renderSongs();
+                    applyingRemoteUpdate = false;
+                }, err => console.warn(`Sync listener error (songs for setlist ${setlistId}):`, err));
+            }
+        }
+        if (!changed) return;
+        migrateAllSongsSectionData(state.setlists);
+        if (!state.setlists.length) return; // never leave the app with zero setlists mid-sync
+        if (!state.setlists.find(s => s.id === state.activeSetlistId)) state.activeSetlistId = state.setlists[0].id;
+        state.lastSyncedSetlistIds = state.setlists.map(s => s.id);
+        applyingRemoteUpdate = true;
+        persistLocalStateSnapshot();
+        renderSetlistSelect(); renderSongs();
+        applyingRemoteUpdate = false;
+    }, err => console.warn('Sync listener error (setlists):', err)));
+
+    // Notes subcollection — same incremental pattern.
+    unsubscribers.push(notesCol.onSnapshot(snapshot => {
+        if (snapshot.metadata.hasPendingWrites) return;
+        let changed = false;
+        snapshot.docChanges().forEach(change => {
+            const n = change.doc.data();
+            const existingIdx = state.notes.findIndex(x => x.id === n.id);
+            if (change.type === 'removed') {
+                if (existingIdx !== -1) { state.notes.splice(existingIdx, 1); changed = true; }
+                return;
+            }
+            const existing = existingIdx !== -1 ? state.notes[existingIdx] : null;
+            if (existing && existing.updatedAt != null && n.updatedAt != null && n.updatedAt < existing.updatedAt) return;
+            if (existingIdx !== -1) state.notes[existingIdx] = n; else state.notes.push(n);
+            changed = true;
+        });
+        if (!changed) return;
+        state.lastSyncedNoteIds = state.notes.map(n => n.id);
+        applyingRemoteUpdate = true;
+        syncMissingAttachments();
+        persistLocalStateSnapshot();
+        renderNotesList();
+        applyingRemoteUpdate = false;
+    }, err => console.warn('Sync listener error (notes):', err)));
+
+    fbUnsub = () => {
+        unsubscribers.forEach(u => u());
+        Object.values(songListenersBySetlist).forEach(u => u());
+    };
 }
 
 function stopRemoteSync() {
@@ -1562,25 +1745,70 @@ function pushToCloud() {
     if (!syncEnabled || !fbAuth || !fbAuth.currentUser || applyingRemoteUpdate) return;
     clearTimeout(saveDebounceTimer);
     saveDebounceTimer = setTimeout(() => {
-        fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).set({
-            setlists: state.setlists, activeSetlistId: state.activeSetlistId,
-            soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes,
-            cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
-            lastSavedAt: state.lastSavedAt,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true }).catch(err => {
-            // Previously only logged — a repeated, silent sync failure (e.g. the whole
-            // setlists+notes collection growing past Firestore's 1MB per-document limit as
-            // more songs/notes accumulate over time) would mean changes never reach other
-            // devices with no indication anything was wrong. Throttled so a stretch of being
-            // offline doesn't produce a toast on every single debounced save attempt.
-            console.warn('Cloud save failed:', err);
+        const uid = fbAuth.currentUser.uid;
+        const userDocRef = fbDb.collection('kasikaUsers').doc(uid);
+        const setlistsCol = userDocRef.collection('setlists');
+        const notesCol = userDocRef.collection('notes');
+
+        const currentSetlistIds = state.setlists.map(s => s.id);
+        const currentNoteIds = state.notes.map(n => n.id);
+        // Anything that was synced before but is no longer present locally was deleted —
+        // removing an item from state.setlists/state.notes doesn't by itself tell Firestore
+        // to delete anything, so that has to be done explicitly.
+        const deletedSetlistIds = (state.lastSyncedSetlistIds || []).filter(id => !currentSetlistIds.includes(id));
+        const deletedNoteIds = (state.lastSyncedNoteIds || []).filter(id => !currentNoteIds.includes(id));
+
+        // Songs are split into their own per-setlist subcollection rather than an embedded
+        // array — a setlist document only ever holds its own metadata plus songOrder (just the
+        // IDs, for sequencing), so a setlist's document size no longer depends on how many
+        // songs it has or how much modulation/cue data each one carries.
+        const newLastSyncedSongIds = {};
+        const setlistJobs = [];
+        const songJobs = [];
+        const deletedSongJobs = [];
+        state.setlists.forEach(sl => {
+            const { songs, ...slMeta } = sl;
+            const songList = songs || [];
+            setlistJobs.push(setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id), updatedAt: state.lastSavedAt || Date.now() }));
+            const songsCol = setlistsCol.doc(sl.id).collection('songs');
+            songList.forEach(song => {
+                songJobs.push(songsCol.doc(song.id).set({ ...song, updatedAt: song.updatedAt || state.lastSavedAt || Date.now() }));
+            });
+            const currentSongIds = songList.map(s => s.id);
+            newLastSyncedSongIds[sl.id] = currentSongIds;
+            const prevSongIds = (state.lastSyncedSongIdsBySetlist || {})[sl.id] || [];
+            prevSongIds.filter(id => !currentSongIds.includes(id)).forEach(id => deletedSongJobs.push(songsCol.doc(id).delete()));
+        });
+
+        const jobs = [
+            userDocRef.set({
+                activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones,
+                cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
+                lastSavedAt: state.lastSavedAt, migratedToSubcollections: true,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true }),
+            ...setlistJobs, ...songJobs, ...deletedSongJobs,
+            ...state.notes.map(n => notesCol.doc(n.id).set({ ...n, updatedAt: n.updatedAt || state.lastSavedAt || Date.now() })),
+            ...deletedSetlistIds.map(id => setlistsCol.doc(id).delete()),
+            ...deletedNoteIds.map(id => notesCol.doc(id).delete()),
+        ];
+
+        Promise.allSettled(jobs).then(results => {
+            const failures = results.filter(r => r.status === 'rejected');
+            state.lastSyncedSetlistIds = currentSetlistIds;
+            state.lastSyncedNoteIds = currentNoteIds;
+            state.lastSyncedSongIdsBySetlist = newLastSyncedSongIds;
+            if (!failures.length) return;
+            // Using allSettled rather than all means one oversized item no longer blocks every
+            // other item in the same batch from syncing — previously a single failure aborted
+            // the whole Promise.all, so even small, successful writes never got marked synced.
+            console.warn('Some cloud writes failed:', failures.map(f => f.reason));
             const now = Date.now();
             if (now - lastSyncFailureToastAt < 20000) return;
             lastSyncFailureToastAt = now;
-            const tooLarge = (err && err.message || '').toLowerCase().includes('exceeds') || (err && err.message || '').toLowerCase().includes('too large');
-            showToast(tooLarge
-                ? "Couldn't sync — your saved data has grown too large for cloud sync. Consider removing some old songs, notes, or pictures."
+            const anyTooLarge = failures.some(f => ((f.reason && f.reason.message) || '').toLowerCase().match(/exceeds|too large/));
+            showToast(anyTooLarge
+                ? "Couldn't sync one item — it may have an unusually large picture or amount of text. Everything else still synced."
                 : "Couldn't sync to the cloud right now — changes are saved on this device and will sync once the connection is back.");
         });
     }, 600);
@@ -1649,6 +1877,7 @@ const state = {
     isPlaying: false, visualClick: -1, volume: 0.8,
     timerRunning: false, timerSeconds: 0, timerInterval: null,
     setlists: [], activeSetlistId: null, activeSongId: null, lastSavedAt: 0,
+    lastSyncedSetlistIds: [], lastSyncedNoteIds: [], lastSyncedSongIdsBySetlist: {}, songsById: {},
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
     audioCtx: null, masterBus: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
     wallClockAnchorTime: null, wallClockAnchorClick: 0, wallClockAnchorBpm: null,
@@ -4110,6 +4339,9 @@ function loadData() {
             if (d.cueVolume != null) state.cueVolume = d.cueVolume;
             if (d.cuePan != null) state.cuePan = d.cuePan;
             state.lastSavedAt = d.lastSavedAt || 0;
+            state.lastSyncedSetlistIds = Array.isArray(d.lastSyncedSetlistIds) ? d.lastSyncedSetlistIds : [];
+            state.lastSyncedNoteIds = Array.isArray(d.lastSyncedNoteIds) ? d.lastSyncedNoteIds : [];
+            state.lastSyncedSongIdsBySetlist = d.lastSyncedSongIdsBySetlist && typeof d.lastSyncedSongIdsBySetlist === 'object' ? d.lastSyncedSongIdsBySetlist : {};
             // Migrate old songs missing subdivision, or using the old 'triplet' key
             state.setlists.forEach(sl => sl.songs.forEach(song => {
                 if (!song.subdivision) song.subdivision = 'quarter';
@@ -4126,7 +4358,7 @@ function loadData() {
 function saveData() {
     state.lastSavedAt = Date.now();
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, lastSyncedSetlistIds: state.lastSyncedSetlistIds, lastSyncedNoteIds: state.lastSyncedNoteIds, lastSyncedSongIdsBySetlist: state.lastSyncedSongIdsBySetlist }));
     } catch (err) {
         // Previously uncaught — this would silently abort the function entirely, meaning
         // pushToCloud() below never even ran. A failure here (most commonly the device's
