@@ -1502,6 +1502,14 @@ function persistLocalStateSnapshot() {
     }
 }
 
+function reportSyncListenerError(label, err) {
+    console.warn(`Sync listener error (${label}):`, err);
+    if (err && err.code === 'permission-denied' && !firestorePermissionWarningShown) {
+        firestorePermissionWarningShown = true;
+        showToast('File sync is blocked by your Firestore security rules — see setup notes');
+    }
+}
+
 function startRemoteSync(uid) {
     if (!fbDb) return;
     if (fbUnsub) fbUnsub();
@@ -1623,7 +1631,7 @@ function startRemoteSync(uid) {
         renderBeatBlocks();
         renderCueBankUI();
         applyingRemoteUpdate = false;
-    }, err => console.warn('Sync listener error (main doc):', err)));
+    }, err => reportSyncListenerError('main doc', err)));
 
     // Setlists subcollection — incremental add/modify/remove, so a change to one setlist
     // never requires touching (or re-downloading) any of the others. Each setlist's own songs
@@ -1691,7 +1699,7 @@ function startRemoteSync(uid) {
                     persistLocalStateSnapshot();
                     renderSetlistSelect(); renderSongs();
                     applyingRemoteUpdate = false;
-                }, err => console.warn(`Sync listener error (songs for setlist ${setlistId}):`, err));
+                }, err => reportSyncListenerError(`songs for setlist ${setlistId}`, err));
             }
         }
         if (!changed) return;
@@ -1703,7 +1711,7 @@ function startRemoteSync(uid) {
         persistLocalStateSnapshot();
         renderSetlistSelect(); renderSongs();
         applyingRemoteUpdate = false;
-    }, err => console.warn('Sync listener error (setlists):', err)));
+    }, err => reportSyncListenerError('setlists', err)));
 
     // Notes subcollection — same incremental pattern.
     unsubscribers.push(notesCol.onSnapshot(snapshot => {
@@ -1728,7 +1736,7 @@ function startRemoteSync(uid) {
         persistLocalStateSnapshot();
         renderNotesList();
         applyingRemoteUpdate = false;
-    }, err => console.warn('Sync listener error (notes):', err)));
+    }, err => reportSyncListenerError('notes', err)));
 
     fbUnsub = () => {
         unsubscribers.forEach(u => u());
@@ -1804,6 +1812,12 @@ function pushToCloud() {
             // the whole Promise.all, so even small, successful writes never got marked synced.
             console.warn('Some cloud writes failed:', failures.map(f => f.reason));
             const now = Date.now();
+            const anyPermissionDenied = failures.some(f => f.reason && f.reason.code === 'permission-denied');
+            if (anyPermissionDenied && !firestorePermissionWarningShown) {
+                firestorePermissionWarningShown = true;
+                showToast('File sync is blocked by your Firestore security rules — see setup notes');
+                return;
+            }
             if (now - lastSyncFailureToastAt < 20000) return;
             lastSyncFailureToastAt = now;
             const anyTooLarge = failures.some(f => ((f.reason && f.reason.message) || '').toLowerCase().match(/exceeds|too large/));
