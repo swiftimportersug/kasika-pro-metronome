@@ -1562,11 +1562,11 @@ function startRemoteSync(uid) {
                     songSyncedIds[sl.id] = songList.map(s => s.id);
                     const songsCol = setlistsCol.doc(sl.id).collection('songs');
                     return Promise.all([
-                        setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id), updatedAt: state.lastSavedAt || Date.now() }),
-                        ...songList.map(song => songsCol.doc(song.id).set({ ...song, updatedAt: song.updatedAt || state.lastSavedAt || Date.now() })),
+                        setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id) }).then(() => { state.lastPushedUpdatedAt.setlists[sl.id] = sl.updatedAt; }),
+                        ...songList.map(song => songsCol.doc(song.id).set({ ...song }).then(() => { state.lastPushedUpdatedAt.songs[song.id] = song.updatedAt; })),
                     ]);
                 }),
-                ...state.notes.map(n => notesCol.doc(n.id).set({ ...n, updatedAt: n.updatedAt || state.lastSavedAt || Date.now() })),
+                ...state.notes.map(n => notesCol.doc(n.id).set({ ...n }).then(() => { state.lastPushedUpdatedAt.notes[n.id] = n.updatedAt; })),
             ]).catch(err => console.warn('Initial subcollection push failed:', err));
             state.lastSyncedSetlistIds = state.setlists.map(s => s.id);
             state.lastSyncedNoteIds = state.notes.map(n => n.id);
@@ -1680,7 +1680,7 @@ function startRemoteSync(uid) {
             songOrderBySetlist[setlistId] = Array.isArray(sl.songOrder) ? sl.songOrder : [];
             const slForState = { ...sl };
             delete slForState.songOrder;
-            if (existingIdx !== -1) state.setlists[existingIdx] = { ...state.setlists[existingIdx], ...slForState };
+            if (existingIdx !== -1) Object.assign(state.setlists[existingIdx], slForState);
             else state.setlists.push({ ...slForState, songs: [] });
             rebuildSetlistSongs(setlistId);
             changed = true;
@@ -1730,7 +1730,7 @@ function startRemoteSync(uid) {
             }
             const existing = existingIdx !== -1 ? state.notes[existingIdx] : null;
             if (existing && existing.updatedAt != null && n.updatedAt != null && n.updatedAt < existing.updatedAt) return;
-            if (existingIdx !== -1) state.notes[existingIdx] = n; else state.notes.push(n);
+            if (existingIdx !== -1) Object.assign(state.notes[existingIdx], n); else state.notes.push(n);
             changed = true;
         });
         if (!changed) return;
@@ -1755,6 +1755,7 @@ function stopRemoteSync() {
 let lastSyncFailureToastAt = 0;
 function pushToCloud() {
     if (!syncEnabled || !fbAuth || !fbAuth.currentUser || applyingRemoteUpdate) return;
+    state.lastPushedUpdatedAt = state.lastPushedUpdatedAt || { setlists: {}, songs: {}, notes: {} };
     clearTimeout(saveDebounceTimer);
     saveDebounceTimer = setTimeout(() => {
         const uid = fbAuth.currentUser.uid;
@@ -1775,37 +1776,57 @@ function pushToCloud() {
         // IDs, for sequencing), so a setlist's document size no longer depends on how many
         // songs it has or how much modulation/cue data each one carries.
         const newLastSyncedSongIds = {};
-        const setlistJobs = [];
-        const songJobs = [];
+        // jobs and jobMeta stay index-aligned, so a per-item result from Promise.allSettled
+        // below can be matched back to exactly which item it was — that's what lets only the
+        // items that actually succeeded get marked as pushed, while a failed one gets retried
+        // on the next save rather than being incorrectly marked done.
+        const jobs = [];
+        const jobMeta = [];
         const deletedSongJobs = [];
         state.setlists.forEach(sl => {
             const { songs, ...slMeta } = sl;
             const songList = songs || [];
-            setlistJobs.push(setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id), updatedAt: state.lastSavedAt || Date.now() }));
+            if (state.lastPushedUpdatedAt.setlists[sl.id] !== sl.updatedAt) {
+                jobs.push(setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id) }));
+                jobMeta.push({ type: 'setlist', id: sl.id, updatedAt: sl.updatedAt });
+            }
             const songsCol = setlistsCol.doc(sl.id).collection('songs');
             songList.forEach(song => {
-                songJobs.push(songsCol.doc(song.id).set({ ...song, updatedAt: song.updatedAt || state.lastSavedAt || Date.now() }));
+                if (state.lastPushedUpdatedAt.songs[song.id] !== song.updatedAt) {
+                    jobs.push(songsCol.doc(song.id).set({ ...song }));
+                    jobMeta.push({ type: 'song', id: song.id, updatedAt: song.updatedAt });
+                }
             });
             const currentSongIds = songList.map(s => s.id);
             newLastSyncedSongIds[sl.id] = currentSongIds;
             const prevSongIds = (state.lastSyncedSongIdsBySetlist || {})[sl.id] || [];
-            prevSongIds.filter(id => !currentSongIds.includes(id)).forEach(id => deletedSongJobs.push(songsCol.doc(id).delete()));
+            prevSongIds.filter(id => !currentSongIds.includes(id)).forEach(id => {
+                deletedSongJobs.push(songsCol.doc(id).delete());
+                delete state.lastPushedUpdatedAt.songs[id];
+            });
+        });
+        state.notes.forEach(n => {
+            if (state.lastPushedUpdatedAt.notes[n.id] !== n.updatedAt) {
+                jobs.push(notesCol.doc(n.id).set({ ...n }));
+                jobMeta.push({ type: 'note', id: n.id, updatedAt: n.updatedAt });
+            }
         });
 
-        const jobs = [
-            userDocRef.set({
-                activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones,
-                cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
-                lastSavedAt: state.lastSavedAt, migratedToSubcollections: true,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            }, { merge: true }),
-            ...setlistJobs, ...songJobs, ...deletedSongJobs,
-            ...state.notes.map(n => notesCol.doc(n.id).set({ ...n, updatedAt: n.updatedAt || state.lastSavedAt || Date.now() })),
+        const rootJob = userDocRef.set({
+            activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones,
+            cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
+            lastSavedAt: state.lastSavedAt, migratedToSubcollections: true,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        const allJobs = [rootJob, ...jobs, ...deletedSongJobs,
             ...deletedSetlistIds.map(id => setlistsCol.doc(id).delete()),
-            ...deletedNoteIds.map(id => notesCol.doc(id).delete()),
-        ];
+            ...deletedNoteIds.map(id => notesCol.doc(id).delete())];
 
-        Promise.allSettled(jobs).then(results => {
+        Promise.allSettled(allJobs).then(results => {
+            // results[0] is always the root job; jobs (and therefore jobMeta) start at index 1.
+            jobMeta.forEach((meta, i) => {
+                if (results[i + 1].status === 'fulfilled') state.lastPushedUpdatedAt[meta.type + 's'][meta.id] = meta.updatedAt;
+            });
             const failures = results.filter(r => r.status === 'rejected');
             state.lastSyncedSetlistIds = currentSetlistIds;
             state.lastSyncedNoteIds = currentNoteIds;
@@ -4373,18 +4394,47 @@ function loadData() {
     } catch { state.setlists = getDefaultData(); state.activeSetlistId = state.setlists[0]?.id; }
 }
 
+// Tracks each item's content (excluding its own updatedAt) as of the last save, purely
+// in-memory — resets each session, which just means the first save of a session re-confirms
+// everything once, which is fine. This is what lets saveData tell "genuinely changed" apart
+// from "touched during a save that had other actual changes in it".
+function contentSignature(obj) {
+    const { updatedAt, ...rest } = obj;
+    return JSON.stringify(rest);
+}
+
 function saveData() {
+    state.lastContentSignatures = state.lastContentSignatures || { setlists: {}, songs: {}, notes: {} };
     state.lastSavedAt = Date.now();
     // Every setlist and note needs its own reliable updatedAt for the sync-receive staleness
     // check to work at all — without this, a locally-made edit has no timestamp to defend
     // itself with, so an incomplete/stale cloud snapshot (e.g. one written before songs were
     // added to a setlist, if the debounced cloud push hadn't fired yet by the time of a
     // reload) would silently be treated as authoritative and wipe the newer local data.
+    // Critically, this only bumps the timestamp for items whose content actually changed —
+    // pushToCloud below relies on updatedAt being a genuine change signal to know which
+    // documents are actually worth re-uploading, rather than re-writing everything every time.
     state.setlists.forEach(sl => {
-        sl.updatedAt = state.lastSavedAt;
-        (sl.songs || []).forEach(song => { song.updatedAt = state.lastSavedAt; });
+        (sl.songs || []).forEach(song => {
+            const sig = contentSignature(song);
+            if (state.lastContentSignatures.songs[song.id] !== sig) {
+                song.updatedAt = state.lastSavedAt;
+                state.lastContentSignatures.songs[song.id] = sig;
+            }
+        });
+        const slSig = JSON.stringify({ id: sl.id, name: sl.name, songOrder: (sl.songs || []).map(s => s.id) });
+        if (state.lastContentSignatures.setlists[sl.id] !== slSig) {
+            sl.updatedAt = state.lastSavedAt;
+            state.lastContentSignatures.setlists[sl.id] = slSig;
+        }
     });
-    state.notes.forEach(n => { n.updatedAt = state.lastSavedAt; });
+    state.notes.forEach(n => {
+        const sig = contentSignature(n);
+        if (state.lastContentSignatures.notes[n.id] !== sig) {
+            n.updatedAt = state.lastSavedAt;
+            state.lastContentSignatures.notes[n.id] = sig;
+        }
+    });
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, lastSyncedSetlistIds: state.lastSyncedSetlistIds, lastSyncedNoteIds: state.lastSyncedNoteIds, lastSyncedSongIdsBySetlist: state.lastSyncedSongIdsBySetlist }));
     } catch (err) {
