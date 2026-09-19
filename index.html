@@ -3229,7 +3229,7 @@ async function uploadMissingCueAudio() {
     for (const entry of all) {
         try {
             const blob = await cueDbGet(entry.key);
-            if (blob) await pushAttachmentToCloud(entry.key, blob, blob.type);
+            if (blob) await withTimeout(pushAttachmentToCloud(entry.key, blob, blob.type), 20000).catch(() => {});
         } catch (err) {
             console.warn('Could not re-upload cue audio for', entry.name, err);
         }
@@ -5438,14 +5438,14 @@ async function pushMissingAttachmentsToCloud() {
     const attachmentNotes = state.notes.filter(n => n.type === 'attachment' && n.fileKey);
     for (const note of attachmentNotes) {
         const blob = await cueDbGet(note.fileKey).catch(() => null);
-        if (blob) await pushAttachmentToCloud(note.fileKey, blob, note.mimeType);
+        if (blob) await withTimeout(pushAttachmentToCloud(note.fileKey, blob, note.mimeType), 20000).catch(() => {});
         if (note.drawingLayerFileKey) {
             const drawingBlob = await cueDbGet(note.drawingLayerFileKey).catch(() => null);
-            if (drawingBlob) await pushAttachmentToCloud(note.drawingLayerFileKey, drawingBlob, 'image/png');
+            if (drawingBlob) await withTimeout(pushAttachmentToCloud(note.drawingLayerFileKey, drawingBlob, 'image/png'), 20000).catch(() => {});
         }
         if (note.originalPhotoFileKey) {
             const photoBlob = await cueDbGet(note.originalPhotoFileKey).catch(() => null);
-            if (photoBlob) await pushAttachmentToCloud(note.originalPhotoFileKey, photoBlob, note.mimeType);
+            if (photoBlob) await withTimeout(pushAttachmentToCloud(note.originalPhotoFileKey, photoBlob, note.mimeType), 20000).catch(() => {});
         }
     }
 }
@@ -5569,6 +5569,30 @@ function askForFileName(defaultName, subtitle) {
     });
 }
 
+// Wraps a promise with a hard time limit — Firestore's SDK can retry internally for a long
+// time on a flaky connection rather than failing fast, so without this, a slow connection
+// could leave a background sync attempt hanging far longer than makes sense to wait on.
+function withTimeout(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), ms)),
+    ]);
+}
+
+// Pushes an attachment to the cloud in the background, never blocking whatever called it —
+// local save (cueDbPut) is what actually matters for the file being safely kept, and needs no
+// internet at all. This runs after the fact and just reports back whether it eventually synced.
+function syncAttachmentInBackground(key, storedFile, title) {
+    if (!syncEnabled || !fbAuth || !fbAuth.currentUser) return;
+    withTimeout(pushAttachmentToCloud(key, storedFile, storedFile.type), 20000)
+        .then(synced => {
+            if (!synced) showToast(`"${title}" saved on this device, but is too large to sync across devices (${(storedFile.size / 1024).toFixed(0)}KB)`);
+        })
+        .catch(() => {
+            showToast(`"${title}" is saved on this device — still trying to sync it to the cloud in the background.`);
+        });
+}
+
 async function handleNoteFilesUpload(fileList) {
     const files = Array.from(fileList).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf') || f.type.startsWith('image/'));
     if (!files.length) { showToast('Please choose image or PDF files'); return; }
@@ -5602,10 +5626,7 @@ async function handleNoteFilesUpload(fileList) {
             showToast(`Could not store "${defaultName}" — it may be too large`);
             continue;
         }
-        if (syncEnabled && fbAuth && fbAuth.currentUser) {
-            const synced = await pushAttachmentToCloud(key, storedFile, storedFile.type);
-            if (!synced) showToast(`"${(name || defaultName).trim()}" saved on this device, but is too large to sync across devices (${(storedFile.size / 1024).toFixed(0)}KB)`);
-        }
+        syncAttachmentInBackground(key, storedFile, (name || defaultName).trim());
         newNotes.push({
             id: genId(), type: 'attachment',
             title: (name || defaultName).trim() || 'Untitled',
@@ -6486,10 +6507,7 @@ async function uploadAndLinkNewPage(file) {
         showToast('Could not store this file — it may be too large');
         return;
     }
-    if (syncEnabled && fbAuth && fbAuth.currentUser) {
-        const synced = await pushAttachmentToCloud(key, storedFile, storedFile.type);
-        if (!synced) showToast(`Saved on this device, but too large to sync across devices (${(storedFile.size / 1024).toFixed(0)}KB)`);
-    }
+    syncAttachmentInBackground(key, storedFile, note.title || 'this page');
     if (!note.groupId) note.groupId = 'grp_' + genId();
     const groupMembers = state.notes.filter(n => n.groupId === note.groupId);
     const newNote = {
