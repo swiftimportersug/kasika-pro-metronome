@@ -4371,6 +4371,16 @@ function loadData() {
 
 function saveData() {
     state.lastSavedAt = Date.now();
+    // Every setlist and note needs its own reliable updatedAt for the sync-receive staleness
+    // check to work at all — without this, a locally-made edit has no timestamp to defend
+    // itself with, so an incomplete/stale cloud snapshot (e.g. one written before songs were
+    // added to a setlist, if the debounced cloud push hadn't fired yet by the time of a
+    // reload) would silently be treated as authoritative and wipe the newer local data.
+    state.setlists.forEach(sl => {
+        sl.updatedAt = state.lastSavedAt;
+        (sl.songs || []).forEach(song => { song.updatedAt = state.lastSavedAt; });
+    });
+    state.notes.forEach(n => { n.updatedAt = state.lastSavedAt; });
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, lastSyncedSetlistIds: state.lastSyncedSetlistIds, lastSyncedNoteIds: state.lastSyncedNoteIds, lastSyncedSongIdsBySetlist: state.lastSyncedSongIdsBySetlist }));
     } catch (err) {
