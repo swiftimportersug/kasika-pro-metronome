@@ -1499,7 +1499,7 @@ function updateSyncUI(signedIn, label) {
 // lives in exactly one place rather than being duplicated across multiple listeners.
 function persistLocalStateSnapshot() {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, lastSyncedSetlistIds: state.lastSyncedSetlistIds, lastSyncedNoteIds: state.lastSyncedNoteIds, lastSyncedSongIdsBySetlist: state.lastSyncedSongIdsBySetlist }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, pendingDeletions: state.pendingDeletions }));
     } catch (err) {
         console.error('Failed to persist synced data locally:', err);
         showToast("Synced from the cloud, but couldn't save it to this device — your storage may be full.");
@@ -1517,6 +1517,16 @@ function reportSyncListenerError(label, err) {
 function startRemoteSync(uid) {
     if (!fbDb) return;
     if (fbUnsub) fbUnsub();
+
+    state.lastPushedUpdatedAt = state.lastPushedUpdatedAt || { setlists: {}, songs: {}, notes: {} };
+    state.pendingDeletions = state.pendingDeletions || { setlists: [], songs: [], notes: [] };
+    // Setlists already present locally when this session started need their songs subcollection
+    // to actually report in before their songOrder can be trusted enough to push — a setlist
+    // created fresh THIS session has nothing on the server yet to conflict with, so it's exempt.
+    // lastPushedUpdatedAt resets every session (it's in-memory only) so it can't reliably tell
+    // these apart on its own — right after a reload, every pre-existing setlist would otherwise
+    // look "brand new" to that check alone.
+    state.setlistIdsKnownAtSessionStart = new Set(state.setlists.map(sl => sl.id));
 
     // Seed the song index from whatever's already loaded locally, before any cloud listener
     // has had a chance to fire — otherwise rebuildSetlistSongs would momentarily treat a
@@ -1568,9 +1578,6 @@ function startRemoteSync(uid) {
                 }),
                 ...state.notes.map(n => notesCol.doc(n.id).set({ ...n }).then(() => { state.lastPushedUpdatedAt.notes[n.id] = n.updatedAt; })),
             ]).catch(err => console.warn('Initial subcollection push failed:', err));
-            state.lastSyncedSetlistIds = state.setlists.map(s => s.id);
-            state.lastSyncedNoteIds = state.notes.map(n => n.id);
-            state.lastSyncedSongIdsBySetlist = songSyncedIds;
             return;
         }
         const d = snap.data();
@@ -1690,6 +1697,7 @@ function startRemoteSync(uid) {
             if (!songListenersBySetlist[setlistId]) {
                 songListenersBySetlist[setlistId] = setlistsCol.doc(setlistId).collection('songs').onSnapshot(songSnap => {
                     if (songSnap.metadata.hasPendingWrites) return;
+                    state.songsLoadedForSetlist[setlistId] = true;
                     songSnap.docChanges().forEach(songChange => {
                         const songId = songChange.doc.id;
                         if (songChange.type === 'removed') { delete state.songsById[songId]; return; }
@@ -1710,7 +1718,6 @@ function startRemoteSync(uid) {
         migrateAllSongsSectionData(state.setlists);
         if (!state.setlists.length) return; // never leave the app with zero setlists mid-sync
         if (!state.setlists.find(s => s.id === state.activeSetlistId)) state.activeSetlistId = state.setlists[0].id;
-        state.lastSyncedSetlistIds = state.setlists.map(s => s.id);
         applyingRemoteUpdate = true;
         persistLocalStateSnapshot();
         renderSetlistSelect(); renderSongs();
@@ -1734,7 +1741,6 @@ function startRemoteSync(uid) {
             changed = true;
         });
         if (!changed) return;
-        state.lastSyncedNoteIds = state.notes.map(n => n.id);
         applyingRemoteUpdate = true;
         syncMissingAttachments();
         persistLocalStateSnapshot();
@@ -1763,30 +1769,24 @@ function pushToCloud() {
         const setlistsCol = userDocRef.collection('setlists');
         const notesCol = userDocRef.collection('notes');
 
-        const currentSetlistIds = state.setlists.map(s => s.id);
-        const currentNoteIds = state.notes.map(n => n.id);
-        // Anything that was synced before but is no longer present locally was deleted —
-        // removing an item from state.setlists/state.notes doesn't by itself tell Firestore
-        // to delete anything, so that has to be done explicitly.
-        const deletedSetlistIds = (state.lastSyncedSetlistIds || []).filter(id => !currentSetlistIds.includes(id));
-        const deletedNoteIds = (state.lastSyncedNoteIds || []).filter(id => !currentNoteIds.includes(id));
-
         // Songs are split into their own per-setlist subcollection rather than an embedded
         // array — a setlist document only ever holds its own metadata plus songOrder (just the
         // IDs, for sequencing), so a setlist's document size no longer depends on how many
         // songs it has or how much modulation/cue data each one carries.
-        const newLastSyncedSongIds = {};
+        //
         // jobs and jobMeta stay index-aligned, so a per-item result from Promise.allSettled
         // below can be matched back to exactly which item it was — that's what lets only the
-        // items that actually succeeded get marked as pushed, while a failed one gets retried
-        // on the next save rather than being incorrectly marked done.
+        // items that actually succeeded get marked done, while a failed one gets retried on
+        // the next save rather than being incorrectly marked done (or, for a deletion,
+        // incorrectly cleared from the pending list before it actually went through).
         const jobs = [];
         const jobMeta = [];
-        const deletedSongJobs = [];
         state.setlists.forEach(sl => {
             const { songs, ...slMeta } = sl;
             const songList = songs || [];
-            if (state.lastPushedUpdatedAt.setlists[sl.id] !== sl.updatedAt) {
+            const isNewThisSession = !(state.setlistIdsKnownAtSessionStart && state.setlistIdsKnownAtSessionStart.has(sl.id));
+            const songsViewTrustworthy = isNewThisSession || state.songsLoadedForSetlist[sl.id];
+            if (songsViewTrustworthy && state.lastPushedUpdatedAt.setlists[sl.id] !== sl.updatedAt) {
                 jobs.push(setlistsCol.doc(sl.id).set({ ...slMeta, songOrder: songList.map(s => s.id) }));
                 jobMeta.push({ type: 'setlist', id: sl.id, updatedAt: sl.updatedAt });
             }
@@ -1797,13 +1797,6 @@ function pushToCloud() {
                     jobMeta.push({ type: 'song', id: song.id, updatedAt: song.updatedAt });
                 }
             });
-            const currentSongIds = songList.map(s => s.id);
-            newLastSyncedSongIds[sl.id] = currentSongIds;
-            const prevSongIds = (state.lastSyncedSongIdsBySetlist || {})[sl.id] || [];
-            prevSongIds.filter(id => !currentSongIds.includes(id)).forEach(id => {
-                deletedSongJobs.push(songsCol.doc(id).delete());
-                delete state.lastPushedUpdatedAt.songs[id];
-            });
         });
         state.notes.forEach(n => {
             if (state.lastPushedUpdatedAt.notes[n.id] !== n.updatedAt) {
@@ -1812,25 +1805,54 @@ function pushToCloud() {
             }
         });
 
+        // Deletions come ONLY from state.pendingDeletions — recorded explicitly at the moment
+        // the user actually deletes something (see deleteSetlist/deleteSong/deleteAttachment/
+        // deleteActiveNote) — never inferred by comparing today's local list against some
+        // earlier snapshot of "what used to be synced". That comparison used to be exactly how
+        // a real setlist's songs could get permanently deleted from the cloud: if this device's
+        // local copy of a setlist was ever temporarily incomplete for any unrelated reason (a
+        // slow connection, a fresh sign-in, a race during startup) at the moment of a save, the
+        // old logic read that as "the user deleted everything" and issued real, permanent
+        // deletes. Explicit tracking can't be fooled that way, because it only ever contains
+        // things a person actually chose to delete.
+        const deleteJobs = [];
+        const deleteMeta = [];
+        state.pendingDeletions.setlists.forEach(id => {
+            deleteJobs.push(setlistsCol.doc(id).delete());
+            deleteMeta.push({ type: 'setlist', id });
+        });
+        state.pendingDeletions.songs.forEach(({ setlistId, songId }) => {
+            deleteJobs.push(setlistsCol.doc(setlistId).collection('songs').doc(songId).delete());
+            deleteMeta.push({ type: 'song', id: songId, setlistId });
+        });
+        state.pendingDeletions.notes.forEach(id => {
+            deleteJobs.push(notesCol.doc(id).delete());
+            deleteMeta.push({ type: 'note', id });
+        });
+
         const rootJob = userDocRef.set({
             activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones,
             cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan,
             lastSavedAt: state.lastSavedAt, migratedToSubcollections: true,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
-        const allJobs = [rootJob, ...jobs, ...deletedSongJobs,
-            ...deletedSetlistIds.map(id => setlistsCol.doc(id).delete()),
-            ...deletedNoteIds.map(id => notesCol.doc(id).delete())];
+        const allJobs = [rootJob, ...jobs, ...deleteJobs];
 
         Promise.allSettled(allJobs).then(results => {
-            // results[0] is always the root job; jobs (and therefore jobMeta) start at index 1.
+            // results[0] is always the root job; jobs/jobMeta and deleteJobs/deleteMeta start
+            // right after it, in that order.
             jobMeta.forEach((meta, i) => {
                 if (results[i + 1].status === 'fulfilled') state.lastPushedUpdatedAt[meta.type + 's'][meta.id] = meta.updatedAt;
             });
+            const deleteResultsOffset = 1 + jobs.length;
+            deleteMeta.forEach((meta, i) => {
+                if (results[deleteResultsOffset + i].status !== 'fulfilled') return; // leave it pending, retry next save
+                delete state.lastPushedUpdatedAt[meta.type + 's'][meta.id];
+                if (meta.type === 'setlist') state.pendingDeletions.setlists = state.pendingDeletions.setlists.filter(sid => sid !== meta.id);
+                else if (meta.type === 'song') state.pendingDeletions.songs = state.pendingDeletions.songs.filter(s => !(s.setlistId === meta.setlistId && s.songId === meta.id));
+                else if (meta.type === 'note') state.pendingDeletions.notes = state.pendingDeletions.notes.filter(nid => nid !== meta.id);
+            });
             const failures = results.filter(r => r.status === 'rejected');
-            state.lastSyncedSetlistIds = currentSetlistIds;
-            state.lastSyncedNoteIds = currentNoteIds;
-            state.lastSyncedSongIdsBySetlist = newLastSyncedSongIds;
             if (!failures.length) return;
             // Using allSettled rather than all means one oversized item no longer blocks every
             // other item in the same batch from syncing — previously a single failure aborted
@@ -1916,7 +1938,7 @@ const state = {
     isPlaying: false, visualClick: -1, volume: 0.8,
     timerRunning: false, timerSeconds: 0, timerInterval: null,
     setlists: [], activeSetlistId: null, activeSongId: null, lastSavedAt: 0,
-    lastSyncedSetlistIds: [], lastSyncedNoteIds: [], lastSyncedSongIdsBySetlist: {}, songsById: {},
+    pendingDeletions: { setlists: [], songs: [], notes: [] }, songsById: {}, songsLoadedForSetlist: {},
     editMode: false, isDragging: false, isHovering: false, hoverAngle: 0,
     audioCtx: null, masterBus: null, schedulerTimer: null, nextNoteTime: 0, currentClick: 0,
     wallClockAnchorTime: null, wallClockAnchorClick: 0, wallClockAnchorBpm: null,
@@ -4378,9 +4400,9 @@ function loadData() {
             if (d.cueVolume != null) state.cueVolume = d.cueVolume;
             if (d.cuePan != null) state.cuePan = d.cuePan;
             state.lastSavedAt = d.lastSavedAt || 0;
-            state.lastSyncedSetlistIds = Array.isArray(d.lastSyncedSetlistIds) ? d.lastSyncedSetlistIds : [];
-            state.lastSyncedNoteIds = Array.isArray(d.lastSyncedNoteIds) ? d.lastSyncedNoteIds : [];
-            state.lastSyncedSongIdsBySetlist = d.lastSyncedSongIdsBySetlist && typeof d.lastSyncedSongIdsBySetlist === 'object' ? d.lastSyncedSongIdsBySetlist : {};
+            state.pendingDeletions = d.pendingDeletions && typeof d.pendingDeletions === 'object'
+                ? { setlists: d.pendingDeletions.setlists || [], songs: d.pendingDeletions.songs || [], notes: d.pendingDeletions.notes || [] }
+                : { setlists: [], songs: [], notes: [] };
             // Migrate old songs missing subdivision, or using the old 'triplet' key
             state.setlists.forEach(sl => sl.songs.forEach(song => {
                 if (!song.subdivision) song.subdivision = 'quarter';
@@ -4422,10 +4444,14 @@ function saveData() {
                 state.lastContentSignatures.songs[song.id] = sig;
             }
         });
-        const slSig = JSON.stringify({ id: sl.id, name: sl.name, songOrder: (sl.songs || []).map(s => s.id) });
-        if (state.lastContentSignatures.setlists[sl.id] !== slSig) {
-            sl.updatedAt = state.lastSavedAt;
-            state.lastContentSignatures.setlists[sl.id] = slSig;
+        const preExisting = state.setlistIdsKnownAtSessionStart && state.setlistIdsKnownAtSessionStart.has(sl.id);
+        const songsViewTrustworthy = !preExisting || state.songsLoadedForSetlist[sl.id];
+        if (songsViewTrustworthy) {
+            const slSig = JSON.stringify({ id: sl.id, name: sl.name, songOrder: (sl.songs || []).map(s => s.id) });
+            if (state.lastContentSignatures.setlists[sl.id] !== slSig) {
+                sl.updatedAt = state.lastSavedAt;
+                state.lastContentSignatures.setlists[sl.id] = slSig;
+            }
         }
     });
     state.notes.forEach(n => {
@@ -4436,7 +4462,7 @@ function saveData() {
         }
     });
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, lastSyncedSetlistIds: state.lastSyncedSetlistIds, lastSyncedNoteIds: state.lastSyncedNoteIds, lastSyncedSongIdsBySetlist: state.lastSyncedSongIdsBySetlist }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ setlists: state.setlists, activeSetlistId: state.activeSetlistId, soundKit: state.soundKit, beatTones: state.beatTones, notes: state.notes, cueBank: state.cueBank, cueVolume: state.cueVolume, cuePan: state.cuePan, lastSavedAt: state.lastSavedAt, pendingDeletions: state.pendingDeletions }));
     } catch (err) {
         // Previously uncaught — this would silently abort the function entirely, meaning
         // pushToCloud() below never even ran. A failure here (most commonly the device's
@@ -4461,6 +4487,7 @@ function createSetlist(name) {
 function deleteSetlist(id) {
     if (state.setlists.length <= 1) { showToast('Cannot delete the last set-list'); return; }
     const sl = state.setlists.find(s => s.id === id);
+    state.pendingDeletions.setlists.push(id);
     state.setlists = state.setlists.filter(s => s.id !== id);
     if (state.activeSetlistId === id) state.activeSetlistId = state.setlists[0]?.id;
     saveData(); renderSetlistSelect(); renderSongs(); showToast(`"${sl?.name}" deleted`);
@@ -4546,6 +4573,7 @@ function updateSong(id, u) {
 function deleteSong(id) {
     const sl = getActiveSetlist(); if (!sl) return;
     const song = sl.songs.find(s => s.id === id);
+    state.pendingDeletions.songs.push({ setlistId: sl.id, songId: id });
     sl.songs = sl.songs.filter(s => s.id !== id);
     if (state.activeSongId === id) state.activeSongId = null;
     saveData(); renderSongs(); showToast(`"${song?.name}" removed`);
@@ -5366,7 +5394,8 @@ function createNewNote() {
 // document (not crammed into the main synced payload) specifically to stay under Firestore's
 // 1MB-per-document cap — base64 adds about 33% overhead, so this only works for files that
 // compress down small enough to survive that translation.
-const ATTACHMENT_SYNC_LIMIT_BYTES = 700 * 1024; // leaves margin under the 1MB cap once base64-encoded
+const ATTACHMENT_CHUNK_SIZE = 700 * 1024; // each chunk stays safely under Firestore's 1MB per-document limit
+const ATTACHMENT_MAX_TOTAL_BYTES = 15 * 1024 * 1024; // generous ceiling just to catch pathological cases, not realistic sheet music
 
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
@@ -5388,12 +5417,24 @@ let firestorePermissionWarningShown = false;
 
 async function pushAttachmentToCloud(fileKey, blob, mimeType) {
     if (!syncEnabled || !fbDb || !fbAuth || !fbAuth.currentUser) return false;
-    if (blob.size > ATTACHMENT_SYNC_LIMIT_BYTES) return false; // too large to fit as a Firestore document
+    if (blob.size > ATTACHMENT_MAX_TOTAL_BYTES) return false; // pathologically large, not a realistic sheet music file
     try {
         const base64 = await blobToBase64(blob);
-        await fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey).set({
-            data: base64, mimeType, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        });
+        const attachmentDoc = fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey);
+        const chunksCol = attachmentDoc.collection('chunks');
+
+        // Splitting into chunks that each safely fit under Firestore's 1MB per-document limit
+        // is what lets an attachment be any reasonable size, rather than capped at whatever
+        // fits in a single document — a real limitation that was cutting off larger scans
+        // (e.g. a medley with more notation) that easily exceeded the old single-document cap.
+        const chunks = [];
+        for (let i = 0; i < base64.length; i += ATTACHMENT_CHUNK_SIZE) chunks.push(base64.slice(i, i + ATTACHMENT_CHUNK_SIZE));
+
+        await Promise.all(chunks.map((chunk, i) => chunksCol.doc(String(i)).set({ data: chunk })));
+        await attachmentDoc.set({
+            mimeType, chunkCount: chunks.length, data: firebase.firestore.FieldValue.delete(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
         return true;
     } catch (err) {
         console.warn('Could not sync attachment to cloud:', err);
@@ -5408,10 +5449,20 @@ async function pushAttachmentToCloud(fileKey, blob, mimeType) {
 async function fetchAttachmentFromCloud(fileKey) {
     if (!fbDb || !fbAuth || !fbAuth.currentUser) return null;
     try {
-        const doc = await fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey).get();
+        const attachmentDoc = fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey);
+        const doc = await attachmentDoc.get();
         if (!doc.exists) return null;
         const d = doc.data();
-        return base64ToBlob(d.data, d.mimeType);
+        // Legacy shape: attachments synced before chunking existed stored their data inline on
+        // this one document — handled here so nothing already synced needs re-uploading.
+        if (d.data != null) return base64ToBlob(d.data, d.mimeType);
+        const chunkCount = d.chunkCount || 0;
+        if (!chunkCount) return null;
+        const chunksCol = attachmentDoc.collection('chunks');
+        const chunkDocs = await Promise.all(Array.from({ length: chunkCount }, (_, i) => chunksCol.doc(String(i)).get()));
+        if (chunkDocs.some(cd => !cd.exists)) return null; // incomplete — treat as not yet available rather than assembling garbage
+        const base64 = chunkDocs.map(cd => cd.data().data).join('');
+        return base64ToBlob(base64, d.mimeType);
     } catch (err) {
         console.warn('Could not fetch attachment from cloud:', err);
         if (err.code === 'permission-denied' && !firestorePermissionWarningShown) {
@@ -5424,7 +5475,13 @@ async function fetchAttachmentFromCloud(fileKey) {
 
 function deleteAttachmentFromCloud(fileKey) {
     if (!fbDb || !fbAuth || !fbAuth.currentUser) return;
-    fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey).delete().catch(() => {});
+    const attachmentDoc = fbDb.collection('kasikaUsers').doc(fbAuth.currentUser.uid).collection('attachments').doc(fileKey);
+    attachmentDoc.get().then(doc => {
+        const chunkCount = doc.exists ? (doc.data().chunkCount || 0) : 0;
+        if (!chunkCount) return;
+        const chunksCol = attachmentDoc.collection('chunks');
+        return Promise.all(Array.from({ length: chunkCount }, (_, i) => chunksCol.doc(String(i)).delete()));
+    }).catch(() => {}).then(() => attachmentDoc.delete().catch(() => {}));
 }
 
 // Runs after every incoming sync — pulls down any attachment file bytes this device doesn't
@@ -5586,7 +5643,7 @@ function syncAttachmentInBackground(key, storedFile, title) {
     if (!syncEnabled || !fbAuth || !fbAuth.currentUser) return;
     withTimeout(pushAttachmentToCloud(key, storedFile, storedFile.type), 20000)
         .then(synced => {
-            if (!synced) showToast(`"${title}" saved on this device, but is too large to sync across devices (${(storedFile.size / 1024).toFixed(0)}KB)`);
+            if (!synced) showToast(`"${title}" saved on this device, but couldn't sync to the cloud (${(storedFile.size / 1024).toFixed(0)}KB — very large files aren't supported for sync)`);
         })
         .catch(() => {
             showToast(`"${title}" is saved on this device — still trying to sync it to the cloud in the background.`);
@@ -5656,7 +5713,7 @@ async function renderAttachmentPage(note) {
         blob = await fetchAttachmentFromCloud(note.fileKey);
         if (blob) await cueDbPut(note.fileKey, blob).catch(() => {});
     }
-    if (!blob) return `<div class="p-8 text-center text-zinc-600 text-sm">Could not load "${escHtml(note.title)}" — it may still be syncing, or was too large to sync to this device</div>`;
+    if (!blob) return `<div class="p-8 text-center text-zinc-600 text-sm">Could not load "${escHtml(note.title)}" — it may still be syncing, or your browser may have cleared its local copy to free up space. Reconnect to the internet and reopen this page to re-download it.</div>`;
     const url = URL.createObjectURL(blob);
     if (note.fileType === 'pdf') {
         return `<div class="w-full" style="min-height:80vh;"><embed src="${url}" type="application/pdf" class="w-full" style="min-height:80vh; border:0;"></div>`;
@@ -6683,6 +6740,7 @@ function deleteAttachment() {
         cueDbDelete(note.fileKey).catch(() => {});
         deleteAttachmentFromCloud(note.fileKey);
         const groupId = note.groupId;
+        state.pendingDeletions.notes.push(note.id);
         state.notes = state.notes.filter(n => n.id !== note.id);
         if (groupId) {
             const remaining = state.notes.filter(n => n.groupId === groupId);
@@ -6815,6 +6873,7 @@ function deleteActiveNote() {
     document.getElementById('deleteTitle').textContent = `Delete "${note.title || 'Untitled note'}"?`;
     document.getElementById('deleteMessage').textContent = 'This note (and any drawing on it) will be permanently removed.';
     document.getElementById('deleteConfirmBtn').onclick = () => {
+        state.pendingDeletions.notes.push(note.id);
         state.notes = state.notes.filter(n => n.id !== note.id);
         state.activeNoteId = null;
         saveData();
@@ -10459,6 +10518,13 @@ function setupEvents() {
 
 // ===== INIT =====
 function init() {
+    // Without this, the browser is free to silently evict IndexedDB data (cached pictures,
+    // PDFs) under storage pressure or after a period of inactivity — especially for a web app
+    // that hasn't been "installed" to the home screen. This asks for that protection; browsers
+    // typically grant it automatically once there's been enough real usage, though it isn't
+    // guaranteed on every browser. It's a one-time, fire-and-forget request — nothing else here
+    // depends on its result.
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     loadData(); loadAudioRoutingPrefs(); loadBandSyncPrefs(); setupCanvas(); renderSetlistSelect(); renderSongs();
     updatePlayBtn(); updateEditBarUI(); updateTimerDisplay();
     document.getElementById('soundKitSelect').value = state.soundKit;
