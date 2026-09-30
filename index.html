@@ -5643,7 +5643,7 @@ function syncAttachmentInBackground(key, storedFile, title) {
     if (!syncEnabled || !fbAuth || !fbAuth.currentUser) return;
     withTimeout(pushAttachmentToCloud(key, storedFile, storedFile.type), 20000)
         .then(synced => {
-            if (!synced) showToast(`"${title}" saved on this device, but couldn't sync to the cloud (${(storedFile.size / 1024).toFixed(0)}KB — very large files aren't supported for sync)`);
+            if (!synced) showToast(`"${title}" saved on this device, but couldn't sync to the cloud right now (${(storedFile.size / 1024).toFixed(0)}KB) — it'll try again next time the app opens`);
         })
         .catch(() => {
             showToast(`"${title}" is saved on this device — still trying to sync it to the cloud in the background.`);
@@ -5825,9 +5825,22 @@ async function openImageEditor(noteId) {
     // previous editing session — falls back to the main file for a genuinely first-ever
     // edit, when the photo is still pristine there too.
     const photoKey = note.originalPhotoFileKey || note.fileKey;
-    const blob = await cueDbGet(photoKey).catch(() => null);
-    if (!blob) { showToast('Could not load this image'); return; }
-    const drawingBlob = note.drawingLayerFileKey ? await cueDbGet(note.drawingLayerFileKey).catch(() => null) : null;
+    let blob = await cueDbGet(photoKey).catch(() => null);
+    if (!blob) {
+        // Wasn't on this device — try the cloud before giving up. This is exactly what the
+        // viewer already does; editing was missing this fallback entirely, which is why some
+        // images could be viewed fine but refused to open for editing — any picture whose
+        // bytes simply weren't cached on this particular device (synced from another device,
+        // or cleared by the browser) hit this gap.
+        blob = await fetchAttachmentFromCloud(photoKey);
+        if (blob) await cueDbPut(photoKey, blob).catch(() => {});
+    }
+    if (!blob) { showToast('Could not load this image — it may still be syncing, or your browser may have cleared its local copy'); return; }
+    let drawingBlob = note.drawingLayerFileKey ? await cueDbGet(note.drawingLayerFileKey).catch(() => null) : null;
+    if (!drawingBlob && note.drawingLayerFileKey) {
+        drawingBlob = await fetchAttachmentFromCloud(note.drawingLayerFileKey);
+        if (drawingBlob) await cueDbPut(note.drawingLayerFileKey, drawingBlob).catch(() => {});
+    }
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
@@ -6527,9 +6540,15 @@ async function saveImageEdit() {
         // attachments collection. This was missing entirely for pencil/drawing edits, which is
         // why a title edit would sync but a drawing edit wouldn't — the other device already
         // had a fileKey reference, just never received the updated bytes it points to.
-        pushAttachmentToCloud(note.fileKey, mainBlob, outputType);
-        pushAttachmentToCloud(drawingLayerKey, drawingBlob, 'image/png');
-        if (photoBlob) pushAttachmentToCloud(note.originalPhotoFileKey, photoBlob, outputType);
+        // Using the same timeout-guarded helper as the initial upload flow, rather than a bare,
+        // silent push — this matters most for the original photo specifically, since (unlike
+        // the main display file, which gets re-saved on every edit) it's only ever saved once.
+        // A push that silently failed or got interrupted here had no natural retry path at
+        // all — the reference would permanently point at nothing, on every device, with no
+        // visible sign anything had gone wrong until someone tried to edit that image again.
+        syncAttachmentInBackground(note.fileKey, mainBlob, note.title || 'this image');
+        syncAttachmentInBackground(drawingLayerKey, drawingBlob, note.title || 'this image');
+        if (photoBlob) syncAttachmentInBackground(note.originalPhotoFileKey, photoBlob, note.title || 'this image');
         // This device already has the very bytes it just saved — record that so the pull-side
         // staleness check below doesn't turn around and needlessly re-fetch its own save.
         setFileSyncStamp(note.fileKey, note.fileUpdatedAt);
